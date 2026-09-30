@@ -2,118 +2,111 @@
   if (window.__CHATGPT_ARCHIVER_LOADED__) return;
   window.__CHATGPT_ARCHIVER_LOADED__ = true;
 
-  const TURN_SELECTORS = [
-    '[data-testid^="conversation-turn-"] [data-message-author-role="user"]',
-    '[data-testid^="conversation-turn-"] [data-message-author-role="assistant"]',
-    '[data-message-author-role="user"]',
-    '[data-message-author-role="assistant"]',
+  const TURN_SELECTOR = [
     'section[data-turn="user"]',
-    'section[data-turn="assistant"]'
-  ];
-  const TURN_SELECTOR = TURN_SELECTORS.join(',');
+    'section[data-turn="assistant"]',
+    'article[data-turn="user"]',
+    'article[data-turn="assistant"]',
+    '[data-testid^="conversation-turn-"]',
+    '[data-message-author-role="user"]',
+    '[data-message-author-role="assistant"]'
+  ].join(',');
+  const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = { running: false, jobId: null, cancel: false };
+  let lastProgressAt = 0;
 
-  function fnv1a(text) {
-    let hash = 0x811c9dc5;
+  function hashText(text) {
+    let hash = 2166136261;
     for (let i = 0; i < text.length; i++) {
       hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 0x01000193);
+      hash = Math.imul(hash, 16777619);
     }
-    return (hash >>> 0).toString(16).padStart(8, '0');
+    return (hash >>> 0).toString(16);
   }
 
-  function absoluteUrl(value) {
+  function absUrl(value) {
     try { return new URL(value, location.href).href; }
     catch (_) { return value || ''; }
   }
 
-  function visible(el) {
-    if (!el) return false;
-    const r = el.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden';
+  function getTurn(node) {
+    return node.closest('[data-testid^="conversation-turn-"]') ||
+      node.closest('section[data-turn]') ||
+      node.closest('article[data-turn]') ||
+      node.closest('article') || node;
   }
 
-  function getTurnNode(roleNode) {
-    const direct = roleNode.closest('[data-testid^="conversation-turn-"]');
-    if (direct) return direct;
-    const section = roleNode.closest('section[data-turn]');
-    if (section) return section;
-    const article = roleNode.closest('article');
-    if (article) return article;
-    return roleNode;
+  function orderedTurns() {
+    const result = [];
+    const seen = new Set();
+    document.querySelectorAll(TURN_SELECTOR).forEach(node => {
+      const turn = getTurn(node);
+      if (seen.has(turn)) return;
+      seen.add(turn);
+      result.push(turn);
+    });
+    return result.sort((a, b) => {
+      const pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+  }
+
+  function roleOf(turn) {
+    const roleNode = turn.matches(ROLE_SELECTOR) ? turn : turn.querySelector(ROLE_SELECTOR);
+    const role = roleNode && roleNode.getAttribute('data-message-author-role');
+    if (role === 'user' || role === 'assistant') return role;
+    const dataTurn = turn.getAttribute('data-turn');
+    return dataTurn === 'user' || dataTurn === 'assistant' ? dataTurn : null;
   }
 
   function findScrollContainer(turn) {
-    let el = turn?.parentElement;
+    let el = turn && turn.parentElement;
     while (el && el !== document.body && el !== document.documentElement) {
       const style = getComputedStyle(el);
-      const scrollable = /(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20;
-      if (scrollable) return el;
+      if (/(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20) return el;
       el = el.parentElement;
     }
-    const root = document.scrollingElement;
-    if (root && root.scrollHeight > root.clientHeight + 20) return root;
-    return document.documentElement;
+    return document.scrollingElement || document.documentElement;
   }
 
-  function findContentRoot(turn) {
-    const directRole = turn.matches?.('[data-message-author-role="user"], [data-message-author-role="assistant"]') ? turn : null;
-    const roleNode = directRole || turn.querySelector?.('[data-message-author-role="assistant"], [data-message-author-role="user"]');
-    const role = roleNode?.getAttribute('data-message-author-role');
-
-    if (role === 'user') {
-      // Keep the whole user message block so attached images/files are not lost.
-      return roleNode;
-    }
-    if (role === 'assistant') {
+  function contentRoot(turn, role) {
+    const roleNode = turn.matches(ROLE_SELECTOR) ? turn : turn.querySelector(ROLE_SELECTOR);
+    if (role === 'user' && roleNode) return roleNode;
+    if (role === 'assistant' && roleNode) {
       return roleNode.querySelector('.markdown') ||
         roleNode.querySelector('[class*="markdown"]') ||
         roleNode.querySelector('[class*="prose"]') ||
         roleNode.querySelector('[id^="textdoc-message-"] .ProseMirror') ||
         roleNode;
     }
-    return turn.querySelector?.('.markdown, [class*="markdown"], [class*="prose"], [id^="textdoc-message-"] .ProseMirror') || turn;
+    return turn.querySelector('.markdown, [class*="markdown"], [class*="prose"], [id^="textdoc-message-"] .ProseMirror') || turn;
   }
 
   function cleanClone(root) {
     const clone = root.cloneNode(true);
-    clone.querySelectorAll('script, style, button, textarea, form, [role="button"], [aria-hidden="true"]').forEach(node => node.remove());
+    clone.querySelectorAll('script, style, button, textarea, form, [role="button"], [aria-hidden="true"]')
+      .forEach(node => node.remove());
     clone.querySelectorAll('*').forEach(node => {
-      for (const attr of [...node.attributes]) {
-        if (/^on/i.test(attr.name)) node.removeAttribute(attr.name);
-      }
+      [...node.attributes].forEach(attr => { if (/^on/i.test(attr.name)) node.removeAttribute(attr.name); });
     });
-    clone.querySelectorAll('a[href]').forEach(a => a.setAttribute('href', absoluteUrl(a.getAttribute('href'))));
-    clone.querySelectorAll('img[src]').forEach((img, index) => {
-      img.setAttribute('src', absoluteUrl(img.getAttribute('src')));
+    clone.querySelectorAll('a[href]').forEach(a => a.setAttribute('href', absUrl(a.getAttribute('href'))));
+    clone.querySelectorAll('img').forEach((img, index) => {
+      const src = img.getAttribute('src') || img.currentSrc || '';
+      if (src) img.setAttribute('src', absUrl(src));
       img.setAttribute('data-archiver-image-index', String(index));
       img.removeAttribute('loading');
     });
     return clone;
   }
 
-  function findMessageId(turn, role, text) {
-    const direct = turn.getAttribute?.('data-message-id') || turn.getAttribute?.('data-turn-id') || turn.id;
-    if (direct) return direct;
-    const owner = turn.closest?.('[data-message-id], [data-turn-id]');
-    if (owner) return owner.getAttribute('data-message-id') || owner.getAttribute('data-turn-id') || owner.id;
-    return `fallback-${role}-${fnv1a(text)}`;
-  }
-
-  function roleOf(turn) {
-    const roleNode = turn.matches?.('[data-message-author-role]') ? turn : turn.querySelector?.('[data-message-author-role]');
-    const role = roleNode?.getAttribute('data-message-author-role');
-    if (role === 'user' || role === 'assistant') return role;
-    const dataTurn = turn.getAttribute?.('data-turn');
-    return dataTurn === 'user' || dataTurn === 'assistant' ? dataTurn : null;
-  }
-
-  function captureTurn(turn) {
+  function captureTurn(turn, ordinal) {
     const role = roleOf(turn);
     if (!role) return null;
-    const root = findContentRoot(turn);
+    const root = contentRoot(turn, role);
     const clone = cleanClone(root);
     const text = String(root.innerText || root.textContent || '').trim();
     const images = [...clone.querySelectorAll('img[src]')].map((img, index) => ({
@@ -124,8 +117,9 @@
       height: Number(img.getAttribute('height')) || null
     }));
     if (!text && !images.length) return null;
+    const explicitId = turn.getAttribute('data-message-id') || turn.getAttribute('data-turn-id');
     return {
-      id: findMessageId(turn, role, text),
+      id: explicitId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       role,
       text,
       html: clone.innerHTML,
@@ -133,77 +127,61 @@
     };
   }
 
-  function orderedTurns() {
-    const nodes = [];
-    const seen = new Set();
-    for (const node of document.querySelectorAll(TURN_SELECTOR)) {
-      const turn = getTurnNode(node);
-      if (seen.has(turn) continue;
-      seen.add(turn);
-      nodes.push(turn);
-    }
-    for (const node of document.querySelectorAll('section[data-turn="user"], section[data-turn="assistant"], article[data-turn]')) {
-      if (seen.has(node)) continue;
-      seen.add(node);
-      nodes.push(node);
-    }
-    return nodes.sort((a, b) => a.compareDocumentPosition(b) && Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
-  }
-
   async function expandVisible() {
     let clicks = 0;
     for (const turn of orderedTurns()) {
       for (const el of turn.querySelectorAll('button, [role="button"]')) {
-        const label = String(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '').replace(/\s+/g, ' ').trim();
-        if (!label || !EXPAND_RE.test(label) || !visible(el)) continue;
-        try { el.click(); clicks++; await sleep(80); } catch (_) {}
+        const label = String(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '')
+          .replace(/\s+/g, ' ').trim();
+        if (!label || !EXPAND_RE.test(label)) continue;
+        const rect = el.getBoundingClientRect();
+        if (!rect.width || !rect.height) continue;
+        try { el.click(); clicks++; await sleep(70); } catch (_) {}
       }
     }
     return clicks;
   }
 
   function collect(map, order) {
-    for (const turn of orderindTurns()) {
-      const msg = captureTurn(turn);
-      if (!msg) continue;
-      if (!map.has(msg.id)) order.push(msg.id);
-      map.set(msg.id, msg);
-    }
-  }
-
-  async function saveJob(job) {
-    await chrome.storage.local.set({ activeCaptureJob: jpb });
+    orderedTurns().forEach((turn, ordinal) => {
+      const message = captureTurn(turn, ordinal);
+      if (!message) return;
+      if (!map.has(message.id)) order.push(message.id);
+      map.set(message.id, message);
+    });
   }
 
   async function updateJob(patch) {
-    const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
-    const next = { ...current, ...patch, updatedAt: Date.now() };
-    await saveJob(next);
+    const data = await chrome.storage.local.get('activeCaptureJob');
+    const current = data.activeCaptureJob || {};
+    const next = Object.assign({}, current, patch, { updatedAt: Date.now() });
+    await chrome.storage.local.set({ activeCaptureJob: next });
     return next;
   }
 
-  async function progress(patch) {
-    await updateJob({ status: 'running', ...patch });
+  async function progress(message, count, extra) {
+    const now = Date.now();
+    if (now - lastProgressAt < 500 && !(extra && extra.force)) return;
+    lastProgressAt = now;
+    await updateJob(Object.assign({ status: 'running', message, count }, extra || {}));
   }
 
-  async function waitForPageSettled(scroller, timeout = 1600) {
-    const start = Date.now();
-    let lastSignature = `${scroller.scrollHeight}:${document.querySelectorAll(TURN_SELECTOR).length}`;
-    while (Date.now() - start < timeout) {
+  async function waitForDomQuiet(scroller, timeout) {
+    const started = Date.now();
+    let last = scroller.scrollHeight + ':' + document.querySelectorAll(TURN_SELECTOR).length;
+    while (Date.now() - started < timeout) {
       await sleep(180);
-      const signature = `${scroller.scrollHeight}:${document.querySelectorAll(TURN_SELECTOR).length}`;
-      if (signature === lastSignature) return;
-      lastSignature = signature;
+      const next = scroller.scrollHeight + ':' + document.querySelectorAll(TURN_SELECTOR).length;
+      if (next === last) return;
+      last = next;
     }
   }
 
-  async function reachAbsoluteTop(scroller, map, order) {
-    await progress('Отматываю переписку в самое начало…', map.Size);
+  async function reachTop(scroller, map, order, jobId) {
     let stable = 0;
     let previousHeight = -1;
     let previousCount = -1;
     let previousTop = -1;
-
     for (let i = 0; i < 160; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
       scroller.scrollTo({ top: 0, behavior: 'instant' });
@@ -213,7 +191,7 @@
       const top = Math.round(scroller.scrollTop);
       const height = scroller.scrollHeight;
       const count = document.querySelectorAll(TURN_SELECTOR).length;
-      await progress({ message: `$PСобираю переписку… ${map.size} сообщений`, count: map.Size, phase: 'top' });
+      await progress('Отматываю в начало и загружаю старые сообщения… ' + map.size, map.size, { phase: 'top' });
       if (top <= 2 && height === previousHeight && count === previousCount && previousTop <= 2) stable++;
       else stable = 0;
       previousHeight = height;
@@ -223,48 +201,46 @@
       scroller.scrollBy(0, 140);
       await sleep(130);
       scroller.scrollTo({ top: 0, behavior: 'instant' });
-      await waitForPageSettled(scroller, 1100);
+      await waitForDomQuiet(scroller, 1100);
     }
-    throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться или меняет структуру.');
+    throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться.');
   }
 
-  async function traverseDown(scroller, map, order) {
-    let stableBottom = 0;
-    let lastHeight = -1;
-    let lastCount = -1;
-    let guard = 0;
-    let lastScroll = -1;
-
-    while (stableBottom < 5 && guard++ < 1600) {
+  async function walkDown(scroller, map, order, jobId) {
+    let stable = 0;
+    let previousHeight = -1;
+    let previousCount = -1;
+    let previousTop = -1;
+    for (let i = 0; i < 1600 && stable < 5; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
       await expandVisible();
       collect(map, order);
       const viewport = scroller.clientHeight || innerHeight;
       const max = Math.max(0, scroller.scrollHeight - viewport);
       const current = Math.max(0, Math.round(scroller.scrollTop));
-      const step = Math.max(420, Math.floor(viewport * 0.68));
-      const next = Math.min(max, current + step);
+      const next = Math.min(max, current + Math.max(420, Math.floor(viewport * 0.68)));
       if (next >= max - 4) {
         await sleep(520);
         await expandVisible();
         collect(map, order);
         const height = scroller.scrollHeight;
         const count = document.querySelectorAll(TURN_SELECTOR).length;
-        if (height === lastHeigght && count === lastCount && current === lastScroll) stableBottom++;
-        else stableBottom = 0;
-        lastHeight = height;
-        lastCount = count;
-        lastScroll = current;
+        const top = Math.round(scroller.scrollTop);
+        if (height === previousHeight && count === previousCount && top === previousTop) stable++;
+        else stable = 0;
+        previousHeight = height;
+        previousCount = count;
+        previousTop = top;
         scroller.scrollTo({ top: height, behavior: 'instant' });
       } else {
-        stableBottom = 0;
+        stable = 0;
         scroller.scrollTo({ top: next, behavior: 'instant' });
-        await sleep240);
-        await waitForPageSettled(scroller, 1000);
+        await sleep(240);
+        await waitForDomQuiet(scroller, 1000);
       }
-      if (guard % 3 === 0) await progress({ message: `Собираю переписку… ${map.size} сообщений`, count: map.Size, phase: 'walk', position: Math.round(scroller.scrollTop) });
+      if (i % 3 === 0) await progress('Собираю переписку… ' + map.size + ' сообщений', map.size, { phase: 'walk', position: Math.round(scroller.scrollTop) });
     }
-    if (stableBottom < 5) throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться или меняет структуру.');
+    if (stable < 5) throw new Error('Не удалось надежно дойти до конца переписки.');
   }
 
   async function captureConversation(jobId) {
@@ -272,41 +248,36 @@
     state.running = true;
     state.jobId = jobId;
     state.cancel = false;
+    lastProgressAt = 0;
     const map = new Map();
     const order = [];
     let scroller = null;
     let originalScrollTop = 0;
     try {
-      await updateJob({ jobId, status: 'running', message: 'Начинаю сбор переписки…', count: 0, phase: 'starting' });
+      await progress('Подготовка фонового сбора…', 0, { phase: 'starting', force: true });
       const firstTurn = orderedTurns()[0];
-      if (!firstTurn) throw new Error('Не найден контейнер переписки. Возможно, страница еще не загрузилась.');
+      if (!firstTurn) throw new Error('Не найден контейнер переписки. Возможно, ChatGPT еще не загрузил сообщения.');
       scroller = findScrollContainer(firstTurn);
       originalScrollTop = scroller.scrollTop;
-
-      // Сначала физически уходим в самое начало. На этом этапе ChatGPT может догружать старые сообщения.
-      await reachAbsoluteTop(scroller, map, order);
-      // Затем идем вниз; виртуализированные элементы успеваем снять в map до их удаления из DOM.
-      await traverseDown(scroller, map, order);
+      await reachTop(scroller, map, order, jobId);
+      await walkDown(scroller, map, order, jobId);
       await expandVisible();
       collect(map, order);
-
       const messages = order.map(id => map.get(id)).filter(Boolean);
       if (!messages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
-
       const conversation = {
         title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
         sourceUrl: location.href,
         capturedAt: new Date().toISOString(),
         messages,
-        imageCount: messages.reduce((sum, item) => sum + (item.images?.length || 0), 0)
+        imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0)
       };
-      const archiveId = `${Date.now()}-${fnv1a(conversation.sourceUrl)}`;
+      const archiveId = String(Date.now()) + '-' + hashText(conversation.sourceUrl);
       const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
       await chrome.storage.local.set({
-        [`archive:${archiveId}`]: { ...conversation, id: archiveId },
+        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
         lastArchiveId: archiveId,
-        activeCaptureJob: {
-          ...currentJob,
+        activeCaptureJob: Object.assign({}, currentJob, {
           jobId,
           status: 'done',
           message: 'Переписка собрана.',
@@ -315,14 +286,14 @@
           archiveId,
           finishedAt: Date.now(),
           updatedAt: Date.now()
-        }
+        })
       });
       try { await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_COMPLETE', jobId, archiveId, count: messages.length }); } catch (_) {}
     } catch (error) {
-      const message = error?.message || String(error);
+      const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
       const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
-      await chrome.storage.local.set({ activeCaptureJob: { ...current, jobId, status, message, finishedAt: Date.now(), updatedAt: Date.now() } });
+      await chrome.storage.local.set({ activeCaptureJob: Object.assign({}, current, { jobId, status, message, finishedAt: Date.now(), updatedAt: Date.now() }) });
     } finally {
       state.running = false;
       state.jobId = null;
@@ -332,17 +303,16 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type === 'ARCHIVER_START_CAPTURE') {
+    if (message && message.type === 'ARCHIVER_START_CAPTURE') {
       if (state.running) {
         sendResponse({ ok: true, running: true, jobId: state.jobId });
         return false;
       }
-      const jobId = message.jobId;
-      captureConversation(jobId).catch(() => {});
-      sendResponse({ ok: true, running: true, jobId });
+      captureConversation(message.jobId).catch(() => {});
+      sendResponse({ ok: true, running: true, jobId: message.jobId });
       return false;
     }
-    if (message?.type === 'ARCHIVER_CANCEL_CAPTURE') {
+    if (message && message.type === 'ARCHIVER_CANCEL_CAPTURE') {
       if (state.running && (!message.jobId || message.jobId === state.jobId)) state.cancel = true;
       sendResponse({ ok: true });
       return false;
