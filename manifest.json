@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "ChatGPT Conversation Archiver",
+  "version": "0.1.0",
+  "description": "Archive complete ChatGPT conversations with rich formatting and export them to Google Docs.",
+  "permissions": [
+    "activeTab",
+    "tabs",
+    "storage",
+    "unlimitedStorage",
+    "scripting",
+    "debugger",
+    "offscreen",
+    "clipboardRead",
+    "clipboardWrite"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "https://chat.openai.com/*",
+    "https://docs.google.com/document/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "ChatGPT Conversation Archiver"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": ["content-chatgpt.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
