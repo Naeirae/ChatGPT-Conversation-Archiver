@@ -1,6 +1,7 @@
 (() => {
-  if (window.__CHATGPT_ARCHIVER_LOADED__) return;
-  window.__CHATGPT_ARCHIVER_LOADED__ = true;
+  const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+  if (window.__CHATGPT_ARCHIVER_LOADED__ === EXTENSION_VERSION) return;
+  window.__CHATGPT_ARCHIVER_LOADED__ = EXTENSION_VERSION;
 
   const TURN_SELECTOR = [
     'section[data-turn="user"]',
