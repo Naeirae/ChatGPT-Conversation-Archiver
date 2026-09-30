@@ -1,0 +1,13 @@
+:root { color-scheme: light dark; font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+body { margin: 0; width: 360px; background: Canvas; color: CanvasText; }
+main { padding: 16px; }
+h1 { margin: 0 0 4px; font-size: 20px; }
+.muted { opacity: .68; font-size: 12px; }
+button { width: 100%; margin-top: 10px; padding: 10px 12px; border: 1px solid color-mix(in srgb, CanvasText 20%, transparent); border-radius: 10px; background: ButtonFace; color: ButtonText; cursor: pointer; }
+button.primary { font-weight: 700; }
+button:disabled { opacity: .45; cursor: default; }
+.archive { margin-top: 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, CanvasText 15%, transparent); border-radius: 10px; }
+.hidden { display: none; }
+.status { min-height: 32px; margin: 12px 0 0; font-size: 13px; white-space: pre-wrap; }
+.status.error { color: #b3261e; }
+.note { margin: 12px 0 0; font-size: 11px; opacity: .58; line-height: 1.35; }
