@@ -1,77 +1,116 @@
 const $ = id => document.getElementById(id);
-let lastArchive = null;
+let pollTimer = null;
+let state = null;
 
 function setStatus(text, error = false) {
   $('status').textContent = text;
   $('status').classList.toggle('error', error);
 }
 
-function renderArchive(archive) {
-  lastArchive = archive || null;
-  const has = Boolean(archive?.id);
-  $('archive').classList.toggle('hidden', !has);
-  $('newDoc').disabled = !has;
-  $('activeDoc').disabled = !has;
-  if (!has) return;
-  $('archiveTitle').textContent = archive.title || 'ChatGPT conversation';
-  $('archiveMeta').textContent = `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений`;
+function render(data) {
+  state = data || {};
+  const job = state.job;
+  const archive = state.archive;
+  const running = job && ['starting', 'running', 'paused'].includes(job.status);
+  const done = job?.status === 'done' && archive;
+
+  $('capture').disabled = Boolean(running);
+  $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать текущий чат';
+  $('cancel').classList.toggle('hidden', !running);
+
+  if (done) {
+    $('archive').classList.remove('hidden');
+    $('archiveTitle').textContent = archive.title || 'Переписка ChatGPT';
+    $('archiveMeta').textContent = `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений`;
+    $('newDoc').disabled = false;
+    $('activeDoc').disabled = false;
+  } else {
+    $('archive').classList.toggle('hidden', !archive);
+    $('archiveTitle').textContent = archive?.title || '';
+    $('archiveMeta').textContent = archive ? `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` : '';
+    $('newDoc').disabled = true;
+    $('activeDoc').disabled = true;
+  }
+
+  if (running) {
+    setStatus(job.message || 'Сбор идет в фоне…');
+  } else if (job?.status === 'error') {
+    setStatus(job.message || 'Сбор не выполнен.', true);
+  } else if (job?.status === 'cancelled') {
+    setStatus('Сбор отменен.');
+  } else if (done) {
+    setStatus(`Готово: ${archive.messageCount || 0} сообщений, ${archive.imageCount || 0} изображений.`);
+  } else {
+    setStatus('Готово.');
+  }
 }
 
-async function ask(type) {
-  const result = await chrome.runtime.sendMessage({ type });
-  if (!result?.ok) throw new Error(result?.error || 'Операция не выполнена.');
+async function getState() {
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' });
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось получить состояние.');
+  render(result);
   return result;
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => getState().catch(() => {}), 650);
 }
 
 $('capture').onclick = async () => {
   $('capture').disabled = true;
-  setStatus('Собираю переписку…');
+  setStatus('Запускаю сбор в фоне…');
   try {
-    const result = await ask('ARCHIVER_CAPTURE_CURRENT');
-    renderArchive(result.archive);
-    setStatus(`Собрано: ${result.archive.messageCount} сообщений, ${result.archive.imageCount} изображений.`);
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_CURRENT' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
+    render({ job: result.job, archive: state?.archive || null });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('capture').disabled = false;
+  }
+};
+
+$('cancel').onclick = async () => {
+  $('cancel').disabled = true;
+  try {
+    await chrome.runtime.sendMessage({ type: 'ARCHIVER_CANCEL_CAPTURE', jobId: state?.job?.jobId });
+    await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
-    $('capture').disabled = false;
+    $('cancel').disabled = false;
   }
 };
 
 $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
-  setStatus('Открываю Google Docs и вставляю архив…');
+  setStatus('Открываю Google Docs и вставляю переписку…');
   try {
-    const result = await ask('ARCHIVER_EXPORT_NEW_DOC');
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_EXPORT_NEW_DOC' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить в Google Docs.');
     setStatus('Готово. Переписка вставлена в новый Google Doc.');
-    if (result.archive) renderArchive(result.archive);
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
-    $('newDoc').disabled = !lastArchive;
+    $('newDoc').disabled = false;
   }
 };
 
 $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
-  setStatus('Вставляю архив в открытый Google Doc…');
+  setStatus('Вставляю переписку в открытый Google Doc…');
   try {
-    const result = await ask('ARCHIVER_EXPORT_ACTIVE_DOC');
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_EXPORT_ACTIVE_DOC' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить в Google Docs.');
     setStatus('Готово. Переписка вставлена в открытый Google Doc.');
-    if (result.archive) renderArchive(result.archive);
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
-    $('activeDoc').disabled = !lastArchive;
+    $('activeDoc').disabled = false;
   }
 };
 
-chrome.runtime.onMessage.addListener(message => {
-  if (message?.type === 'ARCHIVER_CAPTURE_PROGRESS') setStatus(message.message || 'Собираю переписку…');
-});
-
-(async () => {
-  try {
-    const result = await ask('ARCHIVER_GET_LAST');
-    renderArchive(result.archive);
-  } catch (_) {}
-})();
+getState().then(result => {
+  if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
+}).catch(error => setStatus(error.message || String(error), true));
