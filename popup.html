@@ -3,15 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>ChatGPT Conversation Archiver</title>
+  <title>Архиватор переписок ChatGPT</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main>
-    <h1>ChatGPT Archiver</h1>
-    <p class="muted">Собрать переписку → сохранить в Google Docs</p>
+    <h1>Архиватор ChatGPT</h1>
+    <p class="muted">Собрать полную переписку → сохранить в Google Docs</p>
 
     <button id="capture" class="primary">Собрать текущий чат</button>
+    <button id="cancel" class="cancel hidden">Остановить сбор</button>
 
     <section id="archive" class="archive hidden">
       <strong id="archiveTitle"></strong>
@@ -22,7 +23,8 @@
     <button id="activeDoc" disabled>Вставить в открытый Google Doc</button>
 
     <p id="status" class="status">Готово.</p>
-    <p class="note">MVP: текст и форматирование сохраняются через rich clipboard; картинки пока вставляются best-effort через HTML.</p>
+    <p class="note">Сбор продолжается в фоне в открытой вкладке. Можно переключиться на другую вкладку или закрыть это окно. Страница ChatGPT должна оставаться открытой.</p>
+    <p class="note">Сохраняются текст, форматирование и доступные изображения. Изображения требуют отдельной проверки при вставке в Google Docs.</p>
   </main>
   <script src="popup.js"></script>
 </body>
