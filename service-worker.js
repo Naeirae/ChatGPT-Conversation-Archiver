@@ -44,7 +44,7 @@ async function setJob(patch) {
   if (next.tabId != null) {
     const badge = next.status === 'running' || next.status === 'starting' ? '…' : next.status === 'done' ? '✓' : next.status === 'error' ? '!' : '';
     await chrome.action.setBadgeText({ tabId: next.tabId, text: badge }).catch(() => {});
-    if (badge === '…') await chrome.action.setTitle({ tabId: next.tabId, title: `ChatGPT Archiver: ${next.message || 'сбор идет в фоне'}` }).catch(() => {});
+    if (badge === '…') await chrome.action.setTitle({ tabId: next.tabId, title: `Архиватор ChatGPT: ${next.message || 'сбор идет в фоне'}` }).catch(() => {});
   }
   return next;
 }
