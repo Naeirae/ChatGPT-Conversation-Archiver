@@ -1,51 +1,8 @@
-const DB_NAME = 'chatgpt-conversation-archiver';
-const DB_VERSION = 1;
-const STORE = 'conversations';
 const LAST_ARCHIVE_KEY = 'lastArchiveId';
+const ACTIVE_JOB_KEY = 'activeCaptureJob';
+const ARCHIVE_PREFIX = 'archive:';
 const DOCS_NEW_URL = 'https://docs.new';
-
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-function openDb() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE, { keyPath: 'id' });
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
-
-async function putConversation(conversation) {
-  const db = await openDb();
-  await new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE, 'readwrite');
-    tx.objectStore(STORE).put(conversation);
-    tx.oncomplete = resolve;
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error);
-  });
-  db.close();
-}
-
-async function getConversation(id) {
-  if (!id) return null;
-  const db = await openDb();
-  const value = await new Promise((resolve, reject) => {
-    const req = db.transaction(STORE, 'readonly').objectStore(STORE).get(id);
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-  db.close();
-  return value;
-}
-
-function archiveId(conversation) {
-  const safeTitle = String(conversation.title || 'chat').toLowerCase().replace(/[^a-zа-яё0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 48);
-  return `${Date.now()}-${safeTitle || 'chat'}`;
-}
 
 function isChatGptUrl(url = '') {
   return /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(url);
@@ -55,20 +12,8 @@ function isGoogleDocUrl(url = '') {
   return /^https:\/\/docs\.google\.com\/document\//i.test(url);
 }
 
-async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab || null;
-}
-
-async function captureCurrentChat() {
-  const tab = await getActiveTab();
-  if (!tab?.id || !isChatGptUrl(tab.url)) throw new Error('Откройте нужную переписку ChatGPT в активной вкладке.');
-  const result = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_CAPTURE_CONVERSATION' });
-  if (!result?.ok) throw new Error(result?.error || 'Не удалось собрать переписку.');
-  const conversation = { ...result.conversation, id: archiveId(result.conversation) };
-  await putConversation(conversation);
-  await chrome.storage.local.set({ [LAST_ARCHIVE_KEY]: conversation.id });
-  return summarize(conversation);
+function archiveKey(id) {
+  return `${ARCHIVE_PREFIX}${id}`;
 }
 
 function summarize(conversation) {
@@ -83,9 +28,128 @@ function summarize(conversation) {
   };
 }
 
-async function lastConversation() {
-  const data = await chrome.storage.local.get(LAST_ARCHIVE_KEY);
-  return getConversation(data[LAST_ARCHIVE_KEY]);
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+async function getJob() {
+  return (await chrome.storage.local.get(ACTIVE_JOB_KEY))[ACTIVE_JOB_KEY] || null;
+}
+
+async function setJob(patch) {
+  const current = await getJob();
+  const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
+  await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: next });
+  if (next.tabId != null) {
+    const badge = next.status === 'running' || next.status === 'starting' ? '…' : next.status === 'done' ? '✓' : next.status === 'error' ? '!' : '';
+    await chrome.action.setBadgeText({ tabId: next.tabId, text: badge }).catch(() => {});
+    if (badge === '…') await chrome.action.setTitle({ tabId: next.tabId, title: `ChatGPT Archiver: ${next.message || 'сбор идет в фоне'}` }).catch(() => {});
+  }
+  return next;
+}
+
+async function getArchive(id) {
+  if (!id) return null;
+  const result = await chrome.storage.local.get(archiveKey(id));
+  return result[archiveKey(id)] || null;
+}
+
+async function getLastArchive() {
+  const result = await chrome.storage.local.get(LAST_ARCHIVE_KEY);
+  return getArchive(result[LAST_ARCHIVE_KEY]);
+}
+
+function makeJobId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+async function ensureChatGptContentScript(tabId, jobId) {
+  try {
+    const result = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_START_CAPTURE', jobId });
+    if (result?.ok) return result;
+    throw new Error(result?.error || 'Content script не запустил сбор.');
+  } catch (firstError) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
+    const result = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_START_CAPTURE', jobId });
+    if (!result?.ok) throw new Error(result?.error || firstError?.message || 'Не удалось запустить сбор.');
+    return result;
+  }
+}
+
+async function startCapture() {
+  const tab = await getActiveTab();
+  if (!tab?.id || !isChatGptUrl(tab.url)) throw new Error('Откройте нужную переписку ChatGPT в активной вкладке.');
+  if (tab.discarded) throw new Error('Вкладка ChatGPT сейчас выгружена из памяти. Откройте ее и повторите запуск.');
+  if (tab.frozen) throw new Error('Вкладка ChatGPT сейчас заморожена. Активируйте ее и повторите запуск.');
+
+  const current = await getJob();
+  if (current && ['starting', 'running'].includes(current.status)) {
+    if (current.tabId === tab.id) return { ok: true, job: current, alreadyRunning: true };
+    throw new Error('Другой сбор переписки уже выполняется.');
+  }
+
+  const jobId = makeJobId();
+  const job = await setJob({
+    jobId,
+    tabId: tab.id,
+    status: 'starting',
+    phase: 'starting',
+    message: 'Запускаю фоновый сбор…',
+    count: 0,
+    imageCount: 0,
+    startedAt: Date.now(),
+    previousAutoDiscardable: tab.autoDiscardable
+  });
+
+  if (tab.autoDiscardable !== false) await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
+  try {
+    await ensureChatGptContentScript(tab.id, jobId);
+    await setJob({ status: 'running', message: 'Сбор идет в фоне…', phase: 'starting' });
+    return { ok: true, job: await getJob() };
+  } catch (error) {
+    await finishJobWithError(jobId, tab.id, error?.message || String(error));
+    throw error;
+  }
+}
+
+async function cancelCapture() {
+  const job = await getJob();
+  if (!job || !['starting', 'running', 'paused'].includes(job.status)) return { ok: true, job };
+  try {
+    await chrome.tabs.sendMessage(job.tabId, { type: 'ARCHIVER_CANCEL_CAPTURE', jobId: job.jobId });
+  } catch (_) {}
+  const next = await setJob({ status: 'cancelled', message: 'Сбор отменен.', finishedAt: Date.now() });
+  await restoreAutoDiscardable(next);
+  return { ok: true, job: next };
+}
+
+async function restoreAutoDiscardable(job) {
+  if (!job?.tabId || job.previousAutoDiscardable == null) return;
+  await chrome.tabs.update(job.tabId, { autoDiscardable: job.previousAutoDiscardable }).catch(() => {});
+}
+
+async function finishJobWithError(jobId, tabId, message) {
+  const job = await getJob();
+  if (job?.jobId !== jobId) return;
+  const next = await setJob({ status: 'error', message, finishedAt: Date.now(), tabId });
+  await restoreAutoDiscardable(next);
+}
+
+async function handleCaptureComplete(message) {
+  const job = await getJob();
+  if (!job || job.jobId !== message.jobId) return;
+  const archive = await getArchive(message.archiveId);
+  if (!archive) return finishJobWithError(message.jobId, job.tabId, 'Архив не найден после завершения сбора.');
+  const next = await setJob({
+    status: 'done',
+    message: 'Переписка собрана.',
+    count: archive.messages?.length || 0,
+    imageCount: archive.imageCount || 0,
+    archiveId: archive.id,
+    finishedAt: Date.now()
+  });
+  await restoreAutoDiscardable(next);
 }
 
 function escapeHtml(value) {
@@ -170,24 +234,20 @@ async function dispatchKey(tabId, key, code, windowsVirtualKeyCode, modifiers = 
 }
 
 async function editorPoint(tabId) {
-  try {
-    const result = await cdp(tabId, 'Runtime.evaluate', {
-      expression: `(() => {
-        const selectors = ['.kix-appview-editor', '.kix-page', '[role="textbox"]'];
-        for (const selector of selectors) {
-          const el = document.querySelector(selector);
-          if (!el) continue;
-          const r = el.getBoundingClientRect();
-          if (r.width > 100 && r.height > 100) return {x:r.left + Math.min(r.width * 0.5, 500), y:r.top + Math.min(Math.max(140, r.height * 0.2), 350)};
-        }
-        return {x:Math.max(320, innerWidth * 0.5), y:Math.max(220, Math.min(420, innerHeight * 0.35))};
-      })()`,
-      returnByValue: true
-    });
-    return result?.result?.value || { x: 500, y: 300 };
-  } catch (_) {
-    return { x: 500, y: 300 };
-  }
+  const result = await cdp(tabId, 'Runtime.evaluate', {
+    expression: `(() => {
+      const selectors = ['.kix-appview-editor', '.kix-page', '[role="textbox"]'];
+      for (const selector of selectors) {
+        const el = document.querySelector(selector);
+        if (!el) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 100 && r.height > 100) return {x:r.left + Math.min(r.width * 0.5, 500), y:r.top + Math.min(Math.max(140, r.height * 0.2), 350)};
+      }
+      return {x:Math.max(320, innerWidth * 0.5), y:Math.max(220, Math.min(420, innerHeight * 0.35))};
+    })()`,
+    returnByValue: true
+  });
+  return result?.result?.value || { x: 500, y: 300 };
 }
 
 async function pasteIntoGoogleDoc(tabId) {
@@ -209,7 +269,7 @@ async function pasteIntoGoogleDoc(tabId) {
 }
 
 async function exportConversation({ activeDoc = false } = {}) {
-  const conversation = await lastConversation();
+  const conversation = await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
   await writeClipboard(buildRichHtml(conversation), buildPlainText(conversation));
 
@@ -231,18 +291,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message?.type) {
       case 'ARCHIVER_CAPTURE_CURRENT':
-        return { ok: true, archive: await captureCurrentChat() };
+        return await startCapture();
+      case 'ARCHIVER_GET_STATE': {
+        const job = await getJob();
+        const archive = await getLastArchive();
+        return { ok: true, job, archive: summarize(archive) };
+      }
       case 'ARCHIVER_GET_LAST':
-        return { ok: true, archive: summarize(await lastConversation()) };
+        return { ok: true, archive: summarize(await getLastArchive()) };
+      case 'ARCHIVER_CANCEL_CAPTURE':
+        return await cancelCapture();
+      case 'ARCHIVER_CAPTURE_COMPLETE':
+        await handleCaptureComplete(message);
+        return { ok: true };
       case 'ARCHIVER_EXPORT_NEW_DOC':
         return { ok: true, ...(await exportConversation({ activeDoc: false })) };
       case 'ARCHIVER_EXPORT_ACTIVE_DOC':
         return { ok: true, ...(await exportConversation({ activeDoc: true })) };
-      case 'ARCHIVER_CAPTURE_PROGRESS':
-        return { ok: true };
       default:
         return null;
     }
   })().then(result => sendResponse(result)).catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
   return true;
+});
+
+chrome.tabs.onRemoved.addListener(async tabId => {
+  const job = await getJob();
+  if (job?.tabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
+  await setJob({ status: 'error', message: 'Вкладка с перепиской была закрыта.', finishedAt: Date.now() });
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  const job = await getJob();
+  if (job?.tabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
+  if (changeInfo.frozen === true) {
+    await setJob({ status: 'paused', message: 'Вкладка временно заморожена. Сбор продолжится после ее разморозки.', phase: 'paused' });
+  } else if (changeInfo.frozen === false && job.status === 'paused') {
+    await setJob({ status: 'running', message: 'Вкладка снова доступна. Продолжаю сбор…', phase: 'walk' });
+  }
+  if (changeInfo.status === 'loading' && !isChatGptUrl(tab.url || '')) {
+    await finishJobWithError(job.jobId, tabId, 'Вкладка с перепиской была переведена на другую страницу.');
+  }
 });
