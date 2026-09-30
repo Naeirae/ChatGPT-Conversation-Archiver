@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ChatGPT Conversation Archiver",
-  "version": "0.1.0",
-  "description": "Archive complete ChatGPT conversations with rich formatting and export them to Google Docs.",
+  "name": "Архиватор переписок ChatGPT",
+  "version": "0.2.0",
+  "description": "Собирает полные переписки ChatGPT с форматированием и изображениями и сохраняет их в Google Docs.",
   "permissions": [
     "activeTab",
     "tabs",
@@ -25,7 +25,12 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "ChatGPT Conversation Archiver"
+    "default_title": "Архиватор переписок ChatGPT",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
   },
   "content_scripts": [
     {
@@ -33,8 +38,18 @@
         "https://chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
-      "js": ["content-chatgpt.js"],
+      "js": [
+        "content-chatgpt.js"
+      ],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "icons": {
+    "16": "icons/icon-16.png",
+    "24": "icons/icon-24.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "64": "icons/icon-64.png",
+    "128": "icons/icon-128.png"
+  }
 }
