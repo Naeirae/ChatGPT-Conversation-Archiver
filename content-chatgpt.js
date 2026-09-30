@@ -184,7 +184,7 @@
     let previousTop = -1;
     for (let i = 0; i < 160; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
-      scroller.scrollTo({ top: 0, behavior: 'instant' });
+      scroller.scrollTo({ top: 0, behavior: 'auto' });
       await sleep(280);
       await expandVisible();
       collect(map, order);
@@ -200,7 +200,7 @@
       if (stable >= 5) return;
       scroller.scrollBy(0, 140);
       await sleep(130);
-      scroller.scrollTo({ top: 0, behavior: 'instant' });
+      scroller.scrollTo({ top: 0, behavior: 'auto' });
       await waitForDomQuiet(scroller, 1100);
     }
     throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться.');
@@ -231,10 +231,10 @@
         previousHeight = height;
         previousCount = count;
         previousTop = top;
-        scroller.scrollTo({ top: height, behavior: 'instant' });
+        scroller.scrollTo({ top: height, behavior: 'auto' });
       } else {
         stable = 0;
-        scroller.scrollTo({ top: next, behavior: 'instant' });
+        scroller.scrollTo({ top: next, behavior: 'auto' });
         await sleep(240);
         await waitForDomQuiet(scroller, 1000);
       }
@@ -298,7 +298,7 @@
       state.running = false;
       state.jobId = null;
       state.cancel = false;
-      if (scroller) scroller.scrollTo({ top: originalScrollTop, behavior: 'instant' });
+      if (scroller) scroller.scrollTo({ top: originalScrollTop, behavior: 'auto' });
     }
   }
 
