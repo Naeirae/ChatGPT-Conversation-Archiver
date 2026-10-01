@@ -29,6 +29,11 @@ button:active:not(:disabled) { transform:translateY(1px); }
 button.primary { border-color:transparent; background:linear-gradient(135deg,var(--accent),var(--accent-2)); color:#fff; font-weight:750; }
 button.cancel { color:var(--danger); }
 button:disabled { opacity:.45; cursor:default; }
+
+.doc-link { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
+.doc-link .field { margin-top:0; }
+.doc-link .muted { line-height:1.35; }
+
 .capture-progress { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
 .capture-progress strong { display:block; font-size:12px; }
 .run-log { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
