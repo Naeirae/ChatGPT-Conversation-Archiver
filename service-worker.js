@@ -552,17 +552,24 @@ async function startCapture({
     });
 
     if (captureTarget === 'copy') {
-      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+      // Current ChatGPT can stop hydrating/virtualizing older turns when the
+      // duplicated conversation loses foreground focus. Keep the working copy
+      // active during physical wheel traversal; the source tab remains untouched
+      // and is restored when the capture ends.
+      await chrome.tabs.update(captureTab.id, {
+        active: true,
+        autoDiscardable: false
+      }).catch(() => {});
       await appendRunLog({
         status: 'running',
         message: mode === 'full'
-          ? 'Сбор идет в рабочей копии…'
-          : 'Добираю сообщения после найденного стыка в рабочей копии…',
+          ? 'Сбор идет в рабочей копии; вкладка остается активной…'
+          : 'Добираю сообщения в рабочей копии; вкладка остается активной…',
         phase: 'top'
       }, {
         level: 'info',
-        code: 'SOURCE_TAB_RESTORED',
-        message: 'Фокус возвращен в исходный чат; рабочая копия продолжает сбор.',
+        code: 'CAPTURE_TAB_KEPT_ACTIVE',
+        message: 'Рабочая копия остается активной для надежной физической прокрутки ChatGPT.',
         phase: 'top',
         count: 0
       });
@@ -641,6 +648,9 @@ async function cancelCapture() {
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
+    if (job.sourceTabId != null) {
+      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
+    }
   }
   await cleanupTemporaryBaseline(job);
 
@@ -665,6 +675,9 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
+    if (job.sourceTabId != null) {
+      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
+    }
   }
   await cleanupTemporaryBaseline(job);
 
@@ -700,6 +713,9 @@ async function handleCaptureComplete(message) {
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
+    if (job.sourceTabId != null) {
+      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
+    }
   }
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);

@@ -2,6 +2,13 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.22
+
+- keep the duplicated ChatGPT working-copy tab active during physical wheel traversal instead of returning focus to the source chat immediately;
+- restore the source ChatGPT tab after successful completion, cancellation or capture failure;
+- rename the popup wording from misleading “background mode” to an explicit separate working-copy tab;
+- this responds to a live stall where stage 1/3 stayed at 9 collected messages after the working copy lost foreground visibility; browser live verification is still required.
+
 ## 0.3.21
 
 - restore the service-worker runtime helpers for active-tab lookup, capture-job state, badge/title updates and run-log formatting that were accidentally removed during the archive-store extraction;
