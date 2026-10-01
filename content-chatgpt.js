@@ -45,22 +45,36 @@
     return (hash >>> 0).toString(16);
   }
 
-  function normalizeMatchText(text = '') {
+  function normalizeDisplayText(text = '') {
     return String(text)
       .replace(/\u00a0/g, ' ')
       .replace(/[\u200b-\u200d\ufeff]/g, '')
       .replace(/\r\n?/g, '\n')
-      .replace(/[ \t]+/g, ' ')
+      .split('\n')
+      .map(line => line.replace(/[ \t]+$/g, ''))
+      .join('\n')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
 
+  function normalizeMatchText(text = '') {
+    return normalizeDisplayText(text)
+      .split('\n')
+      .map(line => line
+        .replace(/^\s*(?:[-*•▪◦]|\d+[.)])\s+/u, '')
+        .trim())
+      .filter(Boolean)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
   function cleanMessageText(text = '', role = '') {
-    let value = normalizeMatchText(text);
+    let value = normalizeDisplayText(text);
     if (role === 'assistant') {
       value = value.replace(/^(?:ChatGPT\s+(?:сказал|said):)\s*/i, '');
     }
-    return normalizeMatchText(value);
+    return normalizeDisplayText(value);
   }
 
   function absUrl(value) {
@@ -182,7 +196,7 @@
     const wrapperKey = String(wrapper?.getAttribute?.('data-turn-key') || '').trim();
     if (wrapperKey) {
       return 'turn:' + wrapperKey + ':' + role + ':' +
-        hashText(turnMessageText(turn));
+        hashText(normalizeMatchText(turnMessageText(turn)));
     }
 
     const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
@@ -204,12 +218,12 @@
 
   function turnTextSignature(turn) {
     const role = roleOf(turn) || 'unknown';
-    return role + ':' + hashText(turnMessageText(turn));
+    return role + ':' + hashText(normalizeMatchText(turnMessageText(turn)));
   }
 
   function messageTextSignature(message) {
     const role = message?.role || 'unknown';
-    return role + ':' + hashText(cleanMessageText(String(message?.text || ''), role));
+    return role + ':' + hashText(normalizeMatchText(cleanMessageText(String(message?.text || ''), role)));
   }
 
   function makeCaptureBoundary(turns) {
