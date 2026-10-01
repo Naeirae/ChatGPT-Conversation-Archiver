@@ -7,7 +7,7 @@ const DOC_EXPORTS_KEY = 'docExports';
 const DOC_LINKS_KEY = 'docLinks';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
-const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
+const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
   return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
@@ -404,12 +404,19 @@ async function probeChatDom(tabId) {
           '[data-chatgpt-search-unit-key$=":assistant"]',
           '[data-turn-key]'
         ].join(',');
+        const bodyText = String(document.body?.innerText || '');
+        const loadError = /Не удалось загрузить этот разговор ChatGPT|Failed to load this conversation/i.test(bodyText);
+        const retryAvailable = [...document.querySelectorAll('button, [role="button"]')].some(el =>
+          /^(Попробовать снова|Try again|Retry)$/i.test(String(el.innerText || el.textContent || '').trim())
+        );
         return {
           href: location.href,
           readyState: document.readyState,
           visibility: document.visibilityState,
           roleCount: document.querySelectorAll(roleSelector).length,
-          shellCount: document.querySelectorAll(shellSelector).length
+          shellCount: document.querySelectorAll(shellSelector).length,
+          loadError,
+          retryAvailable
         };
       }
     });
@@ -419,19 +426,66 @@ async function probeChatDom(tabId) {
   }
 }
 
-async function waitForChatDomReady(tabId, timeout = 30000) {
+async function clickChatRetry(tabId) {
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const button = [...document.querySelectorAll('button, [role="button"]')].find(el =>
+          /^(Попробовать снова|Try again|Retry)$/i.test(String(el.innerText || el.textContent || '').trim())
+        );
+        if (!button) return false;
+        button.click();
+        return true;
+      }
+    });
+    return Boolean(result?.result);
+  } catch (_) {
+    return false;
+  }
+}
+
+async function waitForChatDomReady(tabId, timeout = 45000, onRetry = null) {
   const started = Date.now();
   let last = null;
+  let retries = 0;
+  let nextRetryAt = 0;
+
   while (Date.now() - started < timeout) {
     last = await probeChatDom(tabId);
-    if (last && (last.roleCount > 0 || last.shellCount > 0)) return last;
+    if (last && (last.roleCount > 0 || last.shellCount > 0)) return { ...last, retries };
+
+    if (last?.loadError && retries < 3 && Date.now() >= nextRetryAt) {
+      const clicked = await clickChatRetry(tabId);
+      retries += 1;
+      if (onRetry) {
+        try { await onRetry(retries, clicked, last); } catch (_) {}
+      }
+      const backoff = retries === 1 ? 1800 : retries === 2 ? 3500 : 6500;
+      nextRetryAt = Date.now() + backoff;
+      await sleep(backoff);
+      continue;
+    }
+
+    if (last?.loadError && retries >= 3) {
+      throw new Error(
+        'Рабочая копия ChatGPT трижды не загрузила разговор. Попробуйте режим «Текущая вкладка».'
+      );
+    }
+
     await sleep(300);
   }
+
   const detail = last
     ? (' role-узлов: ' + last.roleCount + ', оболочек: ' + last.shellCount +
-       ', visibility: ' + last.visibility + ', readyState: ' + last.readyState + '.')
+       ', visibility: ' + last.visibility + ', readyState: ' + last.readyState +
+       (last.loadError ? ', ChatGPT показал ошибку загрузки разговора' : '') + '.')
     : '';
-  throw new Error('ChatGPT не отрисовал реплики в рабочей вкладке за 30 секунд.' + detail);
+
+  throw new Error(
+    'ChatGPT не отрисовал реплики в рабочей вкладке за 45 секунд.' + detail +
+    ' Попробуйте режим «Текущая вкладка».'
+  );
 }
 
 async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
