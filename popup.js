@@ -33,6 +33,41 @@ function renderCaptureProgress(job, running) {
   if (job?.iteration) parts.push('проход ' + job.iteration);
   $('captureMeta').textContent = parts.join(' · ');
 }
+function renderRunLog(job) {
+  const box = $('runLog');
+  if (!box) return;
+  box.classList.toggle('hidden', !job);
+  if (!job) return;
+
+  const statusLabels = {
+    starting: 'Запуск',
+    running: 'Идёт',
+    paused: 'Пауза',
+    done: 'Завершён',
+    error: 'Ошибка',
+    cancelled: 'Отменён'
+  };
+  $('runLogTitle').textContent = statusLabels[job.status] || job.status || 'Последний запуск';
+
+  const meta = [];
+  meta.push(job.captureMode === 'continue' ? 'продолжение' : 'полный сбор');
+  if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
+  meta.push((job.count || 0) + ' собрано');
+  if (job.draftCount) meta.push(job.draftCount + ' в черновике');
+  $('runLogMeta').textContent = meta.join(' · ');
+  $('runLogMessage').textContent = job.message || '';
+}
+
+function renderDraft(draft) {
+  const box = $('draft');
+  if (!box) return;
+  box.classList.toggle('hidden', !draft);
+  if (!draft) return;
+  $('draftTitle').textContent = draft.title || 'Незавершённый проход';
+  $('draftMeta').textContent =
+    (draft.messageCount || 0) + ' сообщений · ' + (draft.imageCount || 0) + ' изображений';
+}
+
 
 function setStatus(text, error = false) {
   $('status').textContent = text;
@@ -62,6 +97,7 @@ function render(data) {
   state = data || {};
   const job = state.job;
   const archive = state.archive;
+  const draft = state.draft;
   const running = job && ['starting', 'running', 'paused'].includes(job.status);
   const done = job?.status === 'done' && archive;
 
@@ -71,6 +107,8 @@ function render(data) {
   $('continue').disabled = Boolean(running);
   $('cancel').classList.toggle('hidden', !running);
   renderCaptureProgress(job, running);
+  renderRunLog(job);
+  renderDraft(draft);
 
   $('archive').classList.toggle('hidden', !archive);
   $('archiveTitle').textContent = archive?.title || '';
@@ -134,7 +172,12 @@ $('capture').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_CURRENT' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
-    render({ job: result.job, archive: state?.archive || null });
+    render({
+      ...state,
+      job: result.job,
+      archive: state?.archive || null,
+      draft: null
+    });
     startPolling();
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -149,8 +192,10 @@ $('continue').onclick = async () => {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CONTINUE_CURRENT' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить архив.');
     render({
+      ...state,
       job: result.job,
       archive: state?.archive || null,
+      draft: null,
       canContinue: true
     });
     startPolling();
@@ -171,6 +216,48 @@ $('cancel').onclick = async () => {
     $('cancel').disabled = false;
   }
 };
+$('copyArchive').onclick = async () => {
+  $('copyArchive').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_COPY_ARCHIVE',
+      archiveId: state?.archive?.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать архив.');
+    setStatus('Архив скопирован: ' + (result.count || 0) + ' сообщений.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('copyArchive').disabled = false;
+  }
+};
+
+$('copyDraft').onclick = async () => {
+  $('copyDraft').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_COPY_DRAFT',
+      draftId: state?.draft?.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать черновик.');
+    setStatus('Черновик скопирован: ' + (result.count || 0) + ' сообщений.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('copyDraft').disabled = false;
+  }
+};
+
+$('runLog').ondblclick = async () => {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_COPY_RUN_LOG' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать лог.');
+    setStatus('Лог последнего запуска скопирован.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
+};
+
 
 $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
