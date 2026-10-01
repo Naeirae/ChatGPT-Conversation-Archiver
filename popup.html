@@ -3,13 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Архиватор переписок ChatGPT</title>
+  <title>Архиватор ChatGPT</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main>
-    <h1>Архиватор ChatGPT</h1>
-    <p class="muted">Собрать полную переписку → сохранить в Google Docs</p>
+    <header class="hero">
+      <div class="brand-mark">↗</div>
+      <div>
+        <h1>Архиватор ChatGPT</h1>
+        <p class="subtitle">Собрать полную переписку → сохранить в Google Docs</p>
+      </div>
+    </header>
 
     <button id="capture" class="primary">Собрать текущий чат</button>
     <button id="cancel" class="cancel hidden">Остановить сбор</button>
@@ -19,12 +24,58 @@
       <div id="archiveMeta" class="muted"></div>
     </section>
 
-    <button id="newDoc" disabled>Сохранить в новый Google Doc</button>
-    <button id="activeDoc" disabled>Вставить в открытый Google Doc</button>
+    <div class="actions">
+      <button id="newDoc" disabled>Сохранить в новый Google Doc</button>
+      <button id="activeDoc" disabled>Вставить в открытый Google Doc</button>
+    </div>
 
     <p id="status" class="status">Готово.</p>
-    <p class="note">Сбор продолжается в фоне в открытой вкладке. Можно переключиться на другую вкладку или закрыть это окно. Страница ChatGPT должна оставаться открытой.</p>
-    <p class="note">Сохраняются текст, форматирование и доступные изображения. Изображения требуют отдельной проверки при вставке в Google Docs.</p>
+
+    <details class="settings" open>
+      <summary>Настройки оформления</summary>
+
+      <label class="field">
+        <span>Имя пользователя</span>
+        <input id="userName" type="text" maxlength="80" placeholder="Если пусто — «Пользователь»" autocomplete="off">
+      </label>
+
+      <label class="field">
+        <span>Имя ChatGPT</span>
+        <input id="assistantName" type="text" maxlength="80" placeholder="Необязательно" autocomplete="off">
+      </label>
+
+      <label class="check">
+        <input id="alignUserRight" type="checkbox">
+        <span>Пользовательские реплики — по правому краю</span>
+      </label>
+
+      <label class="check">
+        <input id="includeReasoning" type="checkbox">
+        <span>Сохранять доступные размышления</span>
+      </label>
+
+      <label class="field">
+        <span>Палитра</span>
+        <select id="palette">
+          <option value="ocean">Океан</option>
+          <option value="cobalt">Кобальт</option>
+          <option value="sky">Небо</option>
+          <option value="midnight">Полночь</option>
+        </select>
+      </label>
+
+      <div id="settingsSaved" class="saved" aria-live="polite"></div>
+    </details>
+
+    <section class="update">
+      <div>
+        <strong>Обновление</strong>
+        <div class="muted">Локальная копия обновляется из публичного GitHub</div>
+      </div>
+      <a href="https://github.com/Naeirae/ChatGPT-Conversation-Archiver" target="_blank" rel="noreferrer">GitHub</a>
+    </section>
+
+    <p class="note">Сбор продолжает работать в открытой вкладке ChatGPT после закрытия этого окна. Размышления сохраняются только если соответствующий блок доступен в интерфейсе страницы.</p>
   </main>
   <script src="popup.js"></script>
 </body>
