@@ -18,6 +18,16 @@
 
     <button id="capture" class="primary">Собрать заново</button>
     <button id="continue" class="hidden">Продолжить</button>
+
+    <section class="doc-link">
+      <label class="field doc-link-field">
+        <span>Google Doc архива</span>
+        <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
+      </label>
+      <div class="muted">Для «Продолжить» ссылка необязательна, если документ уже связан. «Сверить» использует фактический хвост документа как точку продолжения.</div>
+      <button id="syncDoc">Сверить</button>
+    </section>
+
     <button id="cancel" class="cancel hidden">Остановить сбор</button>
 
     <section id="captureProgress" class="capture-progress hidden" aria-live="polite">
