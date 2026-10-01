@@ -1,5 +1,7 @@
 # ChatGPT Conversation Archiver
 
+[![Verify](https://github.com/Naeirae/ChatGPT-Conversation-Archiver/actions/workflows/verify.yml/badge.svg)](https://github.com/Naeirae/ChatGPT-Conversation-Archiver/actions/workflows/verify.yml)
+
 Chrome extension for archiving complete ChatGPT conversations — including rich text formatting and images where possible — and exporting them to Google Docs.
 
 > Work in progress. No license has been selected yet.
