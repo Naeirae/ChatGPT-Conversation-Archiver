@@ -58,6 +58,24 @@ try {
 }
 
 try {
+  const popupHtml = await readFile('popup.html', 'utf8');
+  const updaterVbs = await readFile('Update ChatGPT Archiver.vbs', 'utf8');
+  if (!popupHtml.includes('id="updateExtension"') || !popupHtml.includes('chatgpt-archiver:update')) {
+    fail('popup.html: missing local updater UI action');
+  }
+  if (!popupHtml.includes('id="reloadExtension"')) {
+    fail('popup.html: missing extension reload action');
+  }
+  if (!updaterVbs.includes('HKCU\\Software\\Classes\\chatgpt-archiver\\') ||
+      !updaterVbs.includes('URL Protocol')) {
+    fail('Update ChatGPT Archiver.vbs: missing custom updater protocol registration');
+  }
+  console.log('OK: updater UI/protocol integration');
+} catch (error) {
+  fail(`Updater UI/protocol guard failed: ${error.message}`);
+}
+
+try {
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
   if (manifest.manifest_version !== 3) {
     fail('manifest.json: manifest_version must be 3');

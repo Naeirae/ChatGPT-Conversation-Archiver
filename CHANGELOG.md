@@ -2,6 +2,15 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.25
+
+- add **Обновить** directly to the extension popup;
+- register a per-user Windows `chatgpt-archiver:` URI handler from `Update ChatGPT Archiver.vbs`, so the popup can launch the existing quiet updater;
+- add **Перезагрузить** in the popup to call `chrome.runtime.reload()` after the updater finishes;
+- show the currently loaded extension version in the update block;
+- add verification guards for the popup updater controls and VBS protocol registration;
+- migration note: after 0.3.25 is downloaded by the older launcher, run the new VBS once manually to register the protocol; later updates can start from the popup.
+
 ## 0.3.24
 
 - fix the first live multi-tab export defect: a three-section plan could leave only two physical Google Docs tabs;

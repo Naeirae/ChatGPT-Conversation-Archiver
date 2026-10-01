@@ -452,6 +452,19 @@ $('captureTarget').onchange = e => {
 };
 $('palette').onchange = e => saveSettings({ palette: e.target.value });
 
+$('localVersion').textContent = chrome.runtime.getManifest().version || '—';
+
+$('updateExtension').addEventListener('click', () => {
+  setStatus(
+    'Запускаю локальное обновление. После окна «Обновление завершено» снова откройте расширение и нажмите «Перезагрузить».'
+  );
+});
+
+$('reloadExtension').addEventListener('click', () => {
+  setStatus('Перезагружаю расширение…');
+  setTimeout(() => chrome.runtime.reload(), 120);
+});
+
 (async () => {
   try {
     const settings = await loadSettings();

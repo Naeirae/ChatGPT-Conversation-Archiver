@@ -17,6 +17,8 @@ If HasArgument("--self-test") Then
   WScript.Quit 0
 End If
 
+RegisterUpdateProtocol
+
 If Not fso.FileExists(updaterPath) Then
   MsgBox "Не найден update.ps1 рядом с оболочкой обновления." & vbCrLf & _
          "Положите файл в папку распакованного ChatGPT Archiver.", _
@@ -63,6 +65,22 @@ If MsgBox("Обновление завершилось с ошибкой." & vbC
 End If
 
 WScript.Quit rc
+
+Sub RegisterUpdateProtocol()
+  Dim root, command, wscriptPath
+  On Error Resume Next
+
+  root = "HKCU\Software\Classes\chatgpt-archiver\"
+  wscriptPath = shell.ExpandEnvironmentStrings("%SystemRoot%\System32\wscript.exe")
+  command = Quote(wscriptPath) & " " & Quote(WScript.ScriptFullName) & _
+            " --from-ui " & Quote("%1")
+
+  shell.RegWrite root, "URL:ChatGPT Archiver Updater", "REG_SZ"
+  shell.RegWrite root & "URL Protocol", "", "REG_SZ"
+  shell.RegWrite root & "shell\open\command\", command, "REG_SZ"
+
+  On Error GoTo 0
+End Sub
 
 Function HasArgument(expected)
   Dim i
