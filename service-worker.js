@@ -449,20 +449,14 @@ async function syncCurrentWithDoc(docUrl) {
   const inspection = await inspectAndKickScroll(sourceTab.id);
   const baseline = await readGoogleDocBaseline(docUrl, sourceTab.id);
   const archive = await createBaselineArchiveFromGoogleDoc(inspection.href, baseline);
-  const linkedDoc = await setLinkedDoc(inspection.href, {
-    url: baseline.targetTabUrl || baseline.inputUrl,
-    docId: baseline.docId,
-    tabCount: baseline.tabs.length,
-    baselineMessageCount: baseline.messages.length,
-    baselineMeaningfulCount: baseline.meaningfulCount
-  });
+  const targetDocUrl = baseline.targetTabUrl || baseline.inputUrl;
 
   await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
   await sleep(120);
 
   const result = await startCapture({
     mode: 'sync',
-    docUrl: linkedDoc?.url || baseline.targetTabUrl || baseline.inputUrl,
+    docUrl: targetDocUrl,
     existingArchive: archive,
     resumeTailSignatures: baseline.tailSignatures
   });
@@ -470,7 +464,13 @@ async function syncCurrentWithDoc(docUrl) {
   return {
     ...result,
     archive: summarize(archive),
-    linkedDoc,
+    pendingDoc: {
+      url: targetDocUrl,
+      docId: baseline.docId,
+      tabCount: baseline.tabs.length,
+      baselineMessageCount: baseline.messages.length,
+      baselineMeaningfulCount: baseline.meaningfulCount
+    },
     baseline: {
       tabCount: baseline.tabs.length,
       messageCount: baseline.messages.length,
@@ -513,7 +513,7 @@ async function startCapture({
   const currentLink = await getLinkedDoc(inspection.href);
   const pendingDocUrl = requestedDocUrl || currentLink?.url || '';
 
-  if (requestedDocUrl) {
+  if (requestedDocUrl && mode !== 'sync') {
     await setLinkedDoc(inspection.href, {
       ...(currentLink || {}),
       url: requestedDocUrl,
