@@ -94,6 +94,8 @@ Bug fixes should not be described as "working" until the relevant live layer has
 
 The current updater engine is still `update.ps1` for local unpacked installs. The user-facing Windows entry point is `Update ChatGPT Archiver.vbs`, which runs that engine quietly; `update.cmd` remains the diagnostic fallback when console output is useful.
 
+For the current unpacked Windows workflow, the VBS launcher also registers the per-user URI handler `chatgpt-archiver:` under `HKCU\Software\Classes`. The popup's **Обновить** action opens `chatgpt-archiver:update`; **Перезагрузить** calls `chrome.runtime.reload()`. This is a local/developer bridge, not the long-term distribution mechanism.
+
 Long term, the simpler end-user path is:
 
 1. deterministic packaged ZIP/release artifacts;

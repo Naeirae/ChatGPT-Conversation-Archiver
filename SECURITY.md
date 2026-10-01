@@ -47,6 +47,8 @@ The optional reasoning setting only attempts to capture reasoning blocks exposed
 
 The updater:
 
+- registers the per-user `chatgpt-archiver:` URI scheme under `HKCU\Software\Classes` so the extension popup can launch the local VBS updater without elevated privileges;
+- binds that URI to the absolute local path of `Update ChatGPT Archiver.vbs`; the passed URI argument is not executed as a command or interpreted as updater input;
 - reads the public GitHub repository over HTTPS without a GitHub token;
 - compares Git blob SHA values;
 - stores a local update baseline;
