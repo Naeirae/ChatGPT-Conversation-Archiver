@@ -45,6 +45,24 @@
     return (hash >>> 0).toString(16);
   }
 
+  function normalizeMatchText(text = '') {
+    return String(text)
+      .replace(/\u00a0/g, ' ')
+      .replace(/[\u200b-\u200d\ufeff]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function cleanMessageText(text = '', role = '') {
+    let value = normalizeMatchText(text);
+    if (role === 'assistant') {
+      value = value.replace(/^(?:ChatGPT\s+(?:сказал|said):)\s*/i, '');
+    }
+    return normalizeMatchText(value);
+  }
+
   function absUrl(value) {
     try { return new URL(value, location.href).href; }
     catch (_) { return value || ''; }
@@ -164,7 +182,7 @@
     const wrapperKey = String(wrapper?.getAttribute?.('data-turn-key') || '').trim();
     if (wrapperKey) {
       return 'turn:' + wrapperKey + ':' + role + ':' +
-        hashText(String(contentRoot(turn, role)?.innerText || ''));
+        hashText(turnMessageText(turn));
     }
 
     const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
@@ -178,15 +196,20 @@
     return '';
   }
 
-  function turnTextSignature(turn) {
+  function turnMessageText(turn) {
     const role = roleOf(turn) || 'unknown';
     const root = contentRoot(turn, role);
-    const text = String(root?.innerText || root?.textContent || '').trim();
-    return role + ':' + hashText(text);
+    return cleanMessageText(String(root?.innerText || root?.textContent || ''), role);
+  }
+
+  function turnTextSignature(turn) {
+    const role = roleOf(turn) || 'unknown';
+    return role + ':' + hashText(turnMessageText(turn));
   }
 
   function messageTextSignature(message) {
-    return (message?.role || 'unknown') + ':' + hashText(String(message?.text || '').trim());
+    const role = message?.role || 'unknown';
+    return role + ':' + hashText(cleanMessageText(String(message?.text || ''), role));
   }
 
   function makeCaptureBoundary(turns) {
@@ -503,6 +526,10 @@
       img.removeAttribute('loading');
       img.removeAttribute('srcset');
     });
+    clone.querySelectorAll('h1,h2,h3,h4,h5,h6,[role="heading"]').forEach(node => {
+      const label = normalizeMatchText(node.textContent || '');
+      if (/^ChatGPT\s+(?:сказал|said):$/i.test(label)) node.remove();
+    });
     return clone;
   }
 
@@ -512,7 +539,7 @@
 
     const root = contentRoot(turn, role);
     const clone = cleanClone(root);
-    const text = String(root.innerText || root.textContent || '').trim();
+    const text = cleanMessageText(String(root.innerText || root.textContent || ''), role);
 
     const imageNodes = turnImageNodes(turn, role);
     const images = [];
