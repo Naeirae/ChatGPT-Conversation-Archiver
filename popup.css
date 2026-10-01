@@ -30,6 +30,11 @@ button.primary { border-color:transparent; background:linear-gradient(135deg,var
 button.cancel { color:var(--danger); }
 button:disabled { opacity:.45; cursor:default; }
 
+
+.capture-mode { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
+.capture-mode .field { margin-top:0; }
+.capture-mode .muted { line-height:1.35; }
+
 .doc-link { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
 .doc-link .field { margin-top:0; }
 .doc-link .muted { line-height:1.35; }
