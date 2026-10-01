@@ -19,7 +19,7 @@ $headers = @{
 $timeout = 20
 
 function Get-GitBlobSha([string]$RelativePath) {
-  $full = Join-Path $InstallPath ($RelativePath -replace '/', '')
+  $full = Join-Path $InstallPath ($RelativePath -replace '/', '\')
   $bytes = [IO.File]::ReadAllBytes($full)
   $header = [Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
   $all = New-Object byte[] ($header.Length + $bytes.Length)
@@ -91,7 +91,7 @@ $changed = @()
 $protected = @('update.ps1', 'update.cmd')
 foreach ($item in $remoteFiles) {
   $relative = [string]$item.path
-  $target = Join-Path $InstallPath ($relative -replace '/', '')
+  $target = Join-Path $InstallPath ($relative -replace '/', '\')
   if (-not (Test-Path -LiteralPath $target)) {
     $changed += [pscustomobject]@{ Path = $relative; Sha = $item.sha; Reason = 'missing' }
     continue
@@ -121,7 +121,7 @@ Write-Host "[2/3] Updating $localVersion -> $remoteVersion"
 Write-Host ("Files to update: " + $changed.Count)
 
 foreach ($item in $changed) {
-  $target = Join-Path $InstallPath ($item.Path -replace '/', '')
+  $target = Join-Path $InstallPath ($item.Path -replace '/', '\')
   $directory = Split-Path -Parent $target
   if ($directory -and -not (Test-Path -LiteralPath $directory)) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
