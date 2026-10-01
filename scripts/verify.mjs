@@ -7,7 +7,8 @@ const jsFiles = [
   'popup.js',
   'offscreen.js',
   'lib/text.mjs',
-  'lib/urls.mjs'
+  'lib/urls.mjs',
+  'lib/archive-store.mjs'
 ];
 
 const forbiddenArtifacts = [
@@ -61,7 +62,8 @@ for (const path of forbiddenArtifacts) {
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
-  'tests/urls.test.mjs'
+  'tests/urls.test.mjs',
+  'tests/archive-store.test.mjs'
 ], {
   encoding: 'utf8'
 });
