@@ -17,6 +17,7 @@ import {
   conversationKey,
   googleDocKey,
   googleDocTabToken,
+  unseenGoogleDocTabToken,
   isChatGptHost,
   isConversationUrl,
   normalizeGoogleDocUrl
@@ -1104,64 +1105,76 @@ async function physicalClick(tabId, point) {
   return true;
 }
 
-async function createNextGoogleDocsTab(tabId) {
+async function createNextGoogleDocsTab(tabId, seenTokens = new Set()) {
   let attached = false;
+  const knownTokens = seenTokens instanceof Set ? seenTokens : new Set(seenTokens || []);
+
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
     await sleep(500);
 
-    const before = await googleDocPageState(tabId);
-    const beforeToken = googleDocTabToken(before.href);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      let before = await googleDocPageState(tabId);
+      const beforeToken = googleDocTabToken(before.href);
+      if (beforeToken) knownTokens.add(beforeToken);
 
-    let addControl = await googleDocsControlRect(tabId, 'add-tab');
-    if (!addControl) {
-      const panelControl = await googleDocsControlRect(tabId, 'tabs-panel');
-      if (panelControl) {
-        await physicalClick(tabId, panelControl);
-        await sleep(450);
-        addControl = await googleDocsControlRect(tabId, 'add-tab');
+      let addControl = await googleDocsControlRect(tabId, 'add-tab');
+      if (!addControl) {
+        const panelControl = await googleDocsControlRect(tabId, 'tabs-panel');
+        if (panelControl) {
+          await physicalClick(tabId, panelControl);
+          await sleep(450);
+          addControl = await googleDocsControlRect(tabId, 'add-tab');
+        }
       }
-    }
 
-    if (!addControl) {
-      throw new Error(
-        'Не удалось найти кнопку добавления вкладки Google Docs. ' +
-        'Откройте панель «Вкладки в документе» и повторите экспорт.'
-      );
-    }
-
-    await physicalClick(tabId, addControl);
-    await sleep(350);
-
-    let state = await googleDocPageState(tabId);
-    if (googleDocTabToken(state.href) === beforeToken) {
-      const menuItem = await googleDocsControlRect(tabId, 'add-tab-menuitem');
-      if (menuItem) {
-        await physicalClick(tabId, menuItem);
-        await sleep(350);
+      if (!addControl) {
+        throw new Error(
+          'Не удалось найти кнопку добавления вкладки Google Docs. ' +
+          'Откройте панель «Вкладки в документе» и повторите экспорт.'
+        );
       }
-    }
 
-    const started = Date.now();
-    while (Date.now() - started < 6000) {
-      state = await googleDocPageState(tabId);
-      const token = googleDocTabToken(state.href);
-      if (token && token !== beforeToken) {
-        await sleep(450);
-        return {
-          ok: true,
-          url: state.href,
-          token,
-          controlLabel: addControl.label || ''
-        };
+      await physicalClick(tabId, addControl);
+      await sleep(350);
+
+      let state = await googleDocPageState(tabId);
+      if (googleDocTabToken(state.href) === beforeToken) {
+        const menuItem = await googleDocsControlRect(tabId, 'add-tab-menuitem');
+        if (menuItem) {
+          await physicalClick(tabId, menuItem);
+          await sleep(350);
+        }
       }
-      await sleep(180);
+
+      const started = Date.now();
+      while (Date.now() - started < 4500) {
+        state = await googleDocPageState(tabId);
+        const token = unseenGoogleDocTabToken(state.href, knownTokens);
+        if (token) {
+          knownTokens.add(token);
+          await sleep(450);
+          return {
+            ok: true,
+            url: state.href,
+            token,
+            controlLabel: addControl.label || '',
+            attempt
+          };
+        }
+        await sleep(180);
+      }
+
+      // A mere URL change to an already-seen tab is not creation. Re-open the
+      // panel / find the plus again and retry instead of silently pasting the
+      // next section into an existing tab.
+      await sleep(350);
     }
 
     throw new Error(
-      'Google Docs не переключился на новую вкладку после нажатия «+». ' +
-      'Документ оставлен открытым для проверки.'
+      'Google Docs не создал новую уникальную вкладку после трёх попыток. ' +
+      'Экспорт остановлен, чтобы следующая секция не попала в уже существующую вкладку.'
     );
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
@@ -1568,6 +1581,9 @@ async function exportTabbedConversation(planText = '') {
   await waitForTabComplete(tab.id);
   await sleep(2500);
 
+  const initialDocTab = await chrome.tabs.get(tab.id);
+  const seenTabTokens = new Set([googleDocTabToken(initialDocTab.url || '')].filter(Boolean));
+
   let imageInsertedCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
@@ -1578,7 +1594,8 @@ async function exportTabbedConversation(planText = '') {
       const section = sections[index];
 
       if (index > 0) {
-        await createNextGoogleDocsTab(tab.id);
+        const created = await createNextGoogleDocsTab(tab.id, seenTabTokens);
+        if (created?.token) seenTabTokens.add(created.token);
       }
 
       const pasted = await pasteArchiveIntoGoogleDoc(

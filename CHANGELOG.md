@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.24
+
+- fix the first live multi-tab export defect: a three-section plan could leave only two physical Google Docs tabs;
+- track every Google Docs tab token already visited during one export and require each new tab creation to produce a genuinely unseen token;
+- retry physical tab creation up to three times when Google Docs bounces to an existing tab instead of silently treating that navigation as a new tab;
+- fail closed before pasting the next section if a unique new tab cannot be proven;
+- add a regression test for existing-token vs new-token detection.
+
 ## 0.3.23
 
 - roll the default capture path back to the last live-proven 0.3.10 background architecture instead of continuing the failed 0.3.22 foreground-copy experiment;
