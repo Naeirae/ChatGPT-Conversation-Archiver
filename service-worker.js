@@ -642,19 +642,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener(async tabId => {
   const job = await getJob();
-  if (job?.tabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
-  await setJob({ status: 'error', message: 'Вкладка с перепиской была закрыта.', finishedAt: Date.now() });
+  if (!job || !['starting', 'running', 'paused'].includes(job.status)) return;
+
+  if (job.captureTabId === tabId) {
+    await setJob({
+      status: 'error',
+      message: 'Фоновая вкладка сбора была закрыта.',
+      finishedAt: Date.now(),
+      captureTabId: null
+    });
+  }
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const job = await getJob();
-  if (job?.tabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
+  if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
+
   if (changeInfo.frozen === true) {
-    await setJob({ status: 'paused', message: 'Вкладка временно заморожена. Сбор продолжится после ее разморозки.', phase: 'paused' });
+    await setJob({
+      status: 'paused',
+      message: 'Фоновая вкладка временно заморожена. Сбор продолжится после разморозки.',
+      phase: 'paused'
+    });
   } else if (changeInfo.frozen === false && job.status === 'paused') {
-    await setJob({ status: 'running', message: 'Вкладка снова доступна. Продолжаю сбор…', phase: 'walk' });
+    await setJob({
+      status: 'running',
+      message: 'Фоновая вкладка снова доступна. Продолжаю сбор…',
+      phase: 'walk'
+    });
   }
+
   if (changeInfo.status === 'loading' && !isChatGptUrl(tab.url || '')) {
-    await finishJobWithError(job.jobId, tabId, 'Вкладка с перепиской была переведена на другую страницу.');
+    await finishJobWithError(job.jobId, job.sourceTabId ?? job.tabId, 'Фоновая вкладка ушла со страницы ChatGPT.');
   }
 });
