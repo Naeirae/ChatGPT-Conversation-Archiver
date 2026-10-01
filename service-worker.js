@@ -394,13 +394,19 @@ function speakerLabel(role, settings) {
   return settings.assistantName ? `ChatGPT / ${settings.assistantName}:` : 'ChatGPT:';
 }
 
-function buildRichHtml(conversation, settings) {
+function buildRichHtml(conversation, settings, options = {}) {
   const chunks = [];
-  chunks.push(`<h1>${escapeHtml(conversation.title || 'ChatGPT conversation')}</h1>`);
-  if (conversation.sourceUrl) chunks.push(`<p><a href="${escapeHtml(conversation.sourceUrl)}">Исходная переписка ChatGPT</a></p>`);
-  chunks.push(`<p><em>Сохранено: ${escapeHtml(new Date(conversation.capturedAt || Date.now()).toLocaleString('ru-RU'))}</em></p>`);
-  chunks.push('<hr>');
-  for (const msg of conversation.messages || []) {
+  const messages = options.messages || conversation.messages || [];
+  const includeHeader = options.includeHeader !== false;
+
+  if (includeHeader) {
+    chunks.push(`<h1>${escapeHtml(conversation.title || 'ChatGPT conversation')}</h1>`);
+    if (conversation.sourceUrl) chunks.push(`<p><a href="${escapeHtml(conversation.sourceUrl)}">Исходная переписка ChatGPT</a></p>`);
+    chunks.push(`<p><em>Сохранено: ${escapeHtml(new Date(conversation.capturedAt || Date.now()).toLocaleString('ru-RU'))}</em></p>`);
+    chunks.push('<hr>');
+  }
+
+  for (const msg of messages) {
     const align = msg.role === 'user' && settings.alignUserRight ? 'right' : 'left';
     chunks.push(`<div style="text-align:${align};">`);
     chunks.push(`<p><strong>${escapeHtml(speakerLabel(msg.role, settings))}</strong></p>`);
@@ -417,11 +423,18 @@ function buildRichHtml(conversation, settings) {
   return chunks.join('\n');
 }
 
-function buildPlainText(conversation, settings) {
-  const lines = [conversation.title || 'ChatGPT conversation'];
-  if (conversation.sourceUrl) lines.push(conversation.sourceUrl);
-  lines.push('');
-  for (const msg of conversation.messages || []) {
+function buildPlainText(conversation, settings, options = {}) {
+  const lines = [];
+  const messages = options.messages || conversation.messages || [];
+  const includeHeader = options.includeHeader !== false;
+
+  if (includeHeader) {
+    lines.push(conversation.title || 'ChatGPT conversation');
+    if (conversation.sourceUrl) lines.push(conversation.sourceUrl);
+    lines.push('');
+  }
+
+  for (const msg of messages) {
     lines.push(speakerLabel(msg.role, settings));
     if (settings.includeReasoning && msg.reasoningText) {
       lines.push((msg.reasoningLabel || 'Размышления') + ':');
