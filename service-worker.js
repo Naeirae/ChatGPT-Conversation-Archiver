@@ -79,110 +79,10 @@ async function inspectAndKickScroll(tabId) {
       );
     }
 
-    const scrollExpression = `(() => {
-      const JOB = '__CHATGPT_ARCHIVER_BACKGROUND_SCROLL__';
-      const existing = window[JOB];
-      if (existing?.running) return { started: false, alreadyRunning: true, rootFound: existing.rootFound };
-
-      const isScrollable = (el) => {
-        if (!(el instanceof Element)) return false;
-        const style = getComputedStyle(el);
-        return /(auto|scroll|overlay)/.test(style.overflowY) &&
-          el.scrollHeight > el.clientHeight + 40;
-      };
-
-      const hasConversation = (el) => {
-        if (!(el instanceof Element)) return false;
-        return Boolean(el.querySelector(
-          '[data-message-author-role], [data-testid^="conversation-turn-"], [data-turn-key]'
-        ));
-      };
-
-      const findRoots = () => {
-        const candidates = [
-          document.scrollingElement,
-          document.documentElement,
-          ...document.querySelectorAll('main, [class*="overflow-y-auto"], [class*="overflow-auto"]')
-        ].filter(Boolean);
-
-        const unique = [...new Set(candidates)];
-        const conversationRoots = unique.filter(el => isScrollable(el) && hasConversation(el));
-        if (conversationRoots.length) {
-          return conversationRoots.sort(
-            (a, b) => (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
-          );
-        }
-
-        return unique.filter(isScrollable).sort(
-          (a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
-        );
-      };
-
-      const roots = findRoots();
-      const rootFound = roots.length > 0;
-
-      window[JOB] = {
-        running: true,
-        startedAt: Date.now(),
-        rootFound
-      };
-
-      (async () => {
-        let stable = 0;
-        let previous = '';
-        for (let i = 0; i < 120 && stable < 5; i++) {
-          const currentRoots = findRoots();
-          window.scrollTo(0, 0);
-          currentRoots.forEach(root => {
-            root.scrollTop = 0;
-            try { root.scrollTo({ top: 0, behavior: 'auto' }); } catch (_) {}
-          });
-
-          await new Promise(resolve => setTimeout(resolve, 220));
-
-          const signature = currentRoots.map(root =>
-            root.scrollTop + ':' + root.scrollHeight + ':' + root.clientHeight
-          ).join('|');
-
-          if (signature && signature === previous) stable++;
-          else stable = 0;
-          previous = signature;
-
-          if (currentRoots.length === 0) stable = 0;
-        }
-
-        const finalRoots = findRoots();
-        window[JOB] = {
-          ...window[JOB],
-          running: false,
-          finishedAt: Date.now(),
-          rootFound: finalRoots.length > 0,
-          finalTop: finalRoots.length ? Math.min(...finalRoots.map(root => Math.round(root.scrollTop))) : 0
-        };
-      })();
-
-      return {
-        started: true,
-        alreadyRunning: false,
-        rootFound
-      };
-    })()`;
-
-    const scrollResult = await chrome.debugger.sendCommand(
-      { tabId },
-      'Runtime.evaluate',
-      {
-        expression: scrollExpression,
-        returnByValue: true,
-        awaitPromise: false
-      }
-    );
-
     return {
       ok: true,
       href: page.href,
-      readyState: page.readyState,
-      scroll: scrollResult?.result?.value || null
+      readyState: page.readyState
     };
   } catch (error) {
     if (error?.code) throw error;
@@ -237,9 +137,12 @@ async function setJob(patch) {
   const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
   await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: next });
   if (next.tabId != null) {
-    const badge = next.status === 'running' || next.status === 'starting' ? '…' : next.status === 'done' ? '✓' : next.status === 'error' ? '!' : '';
+    const running = next.status === 'running' || next.status === 'starting';
+    const phaseBadge = next.phase === 'top' ? '1/3' : next.phase === 'walk' ? '2/3' : next.phase === 'finalizing' ? '3/3' : '…';
+    const badge = running ? phaseBadge : next.status === 'done' ? '✓' : next.status === 'error' ? '!' : next.status === 'cancelled' ? '×' : '';
     await chrome.action.setBadgeText({ tabId: next.tabId, text: badge }).catch(() => {});
-    if (badge === '…') await chrome.action.setTitle({ tabId: next.tabId, title: `Архиватор ChatGPT: ${next.message || 'сбор идет в фоне'}` }).catch(() => {});
+    const title = next.message ? `Архиватор ChatGPT: ${next.message}` : 'Архиватор ChatGPT';
+    await chrome.action.setTitle({ tabId: next.tabId, title }).catch(() => {});
   }
   return next;
 }
@@ -288,8 +191,8 @@ async function startCapture() {
     throw new Error('Другой сбор переписки уже выполняется.');
   }
 
-  // The debugger reads the live page URL, distinguishes ChatGPT from a non-chat
-  // page, and kicks off the top-scroll before the content script starts collecting.
+  // The debugger only validates the live page URL. The content script owns all
+  // scrolling so two independent loops cannot fight over the same conversation.
   const inspection = await inspectAndKickScroll(tab.id);
 
   if (tab.discarded) throw new Error('Вкладка ChatGPT сейчас выгружена из памяти. Откройте ее и повторите запуск.');
@@ -523,6 +426,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, archive: summarize(await getLastArchive()) };
       case 'ARCHIVER_CANCEL_CAPTURE':
         return await cancelCapture();
+      case 'ARCHIVER_CAPTURE_PROGRESS': {
+        const job = await getJob();
+        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        const tabId = sender?.tab?.id ?? job.tabId;
+        if (job.tabId != null && tabId !== job.tabId) return { ok: false, error: 'Прогресс пришел не из вкладки сбора.' };
+        await setJob({ ...message.patch, tabId: job.tabId });
+        return { ok: true };
+      }
+      case 'ARCHIVER_CAPTURE_FAILED': {
+        const job = await getJob();
+        if (!job || job.jobId !== message.jobId) return { ok: true };
+        await finishJobWithError(message.jobId, job.tabId, message.error || 'Сбор не выполнен.');
+        return { ok: true };
+      }
       case 'ARCHIVER_CAPTURE_COMPLETE':
         await handleCaptureComplete(message);
         return { ok: true };
