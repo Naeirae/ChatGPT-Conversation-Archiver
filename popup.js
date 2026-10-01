@@ -102,7 +102,7 @@ function render(data) {
   const done = job?.status === 'done' && archive;
 
   $('capture').disabled = Boolean(running);
-  $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать текущий чат';
+  $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать заново';
   $('continue').classList.toggle('hidden', running || !state.canContinue);
   $('continue').disabled = Boolean(running);
   $('cancel').classList.toggle('hidden', !running);
@@ -187,7 +187,7 @@ $('capture').onclick = async () => {
 
 $('continue').onclick = async () => {
   $('continue').disabled = true;
-  setStatus('Ищу конец сохраненного архива в фоновой вкладке…');
+  setStatus('Ищу последний сохраненный стык и добираю только новое…');
   try {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CONTINUE_CURRENT' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить архив.');
