@@ -4,26 +4,18 @@ $ProgressPreference = 'SilentlyContinue'
 $InstallPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $LogPath = Join-Path $InstallPath 'updater-last.log'
 
-try {
-  if (Test-Path -LiteralPath $LogPath) {
-    Remove-Item -LiteralPath $LogPath -Force
-  }
-} catch {
-  # Logging must not prevent the updater from starting.
-}
-
-function Write-Step([string]$Message) {
+function Write-Log([string]$Message = '') {
   Write-Host $Message
   [Console]::Out.Flush()
   try {
     Add-Content -LiteralPath $LogPath -Value $Message -Encoding UTF8
   } catch {
-    # Keep console output available even if the log cannot be written.
+    # Console output remains available if the log cannot be written.
   }
 }
 
 function Get-GitBlobSha([string]$RelativePath) {
-  $full = Join-Path $InstallPath ($RelativePath -replace '/', '\')
+  $full = Join-Path $InstallPath ($RelativePath -replace '/', '\\')
   $bytes = [IO.File]::ReadAllBytes($full)
   $header = [Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
   $all = New-Object byte[] ($header.Length + $bytes.Length)
@@ -44,139 +36,32 @@ function Get-StateSha($State, [string]$RelativePath) {
   return [string]$property.Value
 }
 
-function Get-TreeMap($Tree) {
-  $map = @{}
-  foreach ($item in @($Tree.tree | Where-Object { $_.type -eq 'blob' })) {
-    $map[[string]$item.path] = [string]$item.sha
-  }
-  return $map
-}
-
-function Get-FileTextAtRef([string]$RelativePath, [string]$Ref) {
-  $encoded = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
-  $url = $script:apiBase + '/contents/' + $encoded + '?ref=' + [Uri]::EscapeDataString($Ref)
-  $response = Invoke-RestMethod -Uri $url -Headers $script:headers -Method Get -TimeoutSec $script:timeout
-  if (-not $response.content) {
-    throw "GitHub did not return content for $RelativePath at $Ref."
-  }
-  $base64 = ([string]$response.content) -replace '\s', ''
-  $bytes = [Convert]::FromBase64String($base64)
-  return [Text.Encoding]::UTF8.GetString($bytes)
-}
-
-function Get-BaselineTreeForVersion([string]$Version) {
-  Write-Host ("  Resolving official baseline for local version " + $Version + '...')
-  [Console]::Out.Flush()
-
-  $commitsUrl = $script:apiBase + '/commits?path=manifest.json&sha=' + $script:branch + '&per_page=100'
-  try {
-    $commits = @(Invoke-RestMethod -Uri $commitsUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout)
-  } catch {
-    throw "Could not read manifest history from GitHub. $($_.Exception.Message)"
-  }
-
-  foreach ($commit in $commits) {
-    $commitSha = [string]$commit.sha
-    try {
-      $manifestText = Get-FileTextAtRef 'manifest.json' $commitSha
-      $manifestData = $manifestText | ConvertFrom-Json
-    } catch {
-      continue
-    }
-
-    if ([string]$manifestData.version -ne $Version) {
-      continue
-    }
-
-    $gitCommitUrl = $script:apiBase + '/git/commits/' + $commitSha
-    $gitCommit = Invoke-RestMethod -Uri $gitCommitUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
-    $treeSha = [string]$gitCommit.tree.sha
-    if (-not $treeSha) {
-      throw "Could not resolve the Git tree for version $Version."
-    }
-
-    $treeUrl = $script:apiBase + '/git/trees/' + $treeSha + '?recursive=1'
-    $baselineTree = Invoke-RestMethod -Uri $treeUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
-    if ($baselineTree.truncated) {
-      throw "GitHub returned a truncated baseline tree for version $Version."
-    }
-
-    Write-Host ("  Baseline commit: " + $commitSha.Substring(0, 12))
-    return Get-TreeMap $baselineTree
-  }
-
-  throw "Could not find an official GitHub baseline for local version $Version. Update stopped without changing extension files."
-}
-
-function Test-OfficialShaForVersion([string]$RelativePath, [string]$LocalSha, [string]$Version) {
-  $encodedPath = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
-  $commitsUrl = $script:apiBase + '/commits?path=' + $encodedPath + '&sha=' + $script:branch + '&per_page=100'
-
-  try {
-    $commits = @(Invoke-RestMethod -Uri $commitsUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout)
-  } catch {
-    throw "Could not inspect file history for $RelativePath. $($_.Exception.Message)"
-  }
-
-  foreach ($commit in $commits) {
-    $commitSha = [string]$commit.sha
-
-    if ($script:manifestVersionCache.ContainsKey($commitSha)) {
-      $manifestVersion = [string]$script:manifestVersionCache[$commitSha]
-    } else {
-      try {
-        $manifestText = Get-FileTextAtRef 'manifest.json' $commitSha
-        $manifestVersion = [string](($manifestText | ConvertFrom-Json).version)
-      } catch {
-        continue
-      }
-      $script:manifestVersionCache[$commitSha] = $manifestVersion
-    }
-
-    if ($manifestVersion -ne $Version) {
-      continue
-    }
-
-    $fileUrl = $script:apiBase + '/contents/' + $encodedPath + '?ref=' + [Uri]::EscapeDataString($commitSha)
-    try {
-      $fileMeta = Invoke-RestMethod -Uri $fileUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
-    } catch {
-      continue
-    }
-
-    if ([string]$fileMeta.sha -eq $LocalSha) {
-      Write-Host ('  Recognized official ' + $Version + ' file: ' + $RelativePath)
-      return $true
-    }
-  }
-
-  return $false
-}
-
 function Download-RemoteFile([string]$RelativePath, [string]$Target) {
   $encoded = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
-  $url = $script:apiBase + '/contents/' + $encoded + '?ref=' + $script:branch
+  $url = 'https://raw.githubusercontent.com/' + $script:repo + '/' + $script:branch + '/' + $encoded
   $temporary = "$Target.download"
+
   try {
-    Invoke-WebRequest -Uri $url -Headers $script:downloadHeaders -OutFile $temporary -UseBasicParsing -TimeoutSec $script:timeout -MaximumRedirection 5
+    Invoke-WebRequest -Uri $url -Headers $script:rawHeaders -OutFile $temporary -UseBasicParsing -TimeoutSec $script:timeout -MaximumRedirection 5
     Move-Item -LiteralPath $temporary -Destination $Target -Force
   } catch {
     if (Test-Path -LiteralPath $temporary) {
       Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
-    throw "Could not download $RelativePath. $($_.Exception.Message)"
+    throw "Could not download $RelativePath from $url. $($_.Exception.Message)"
   }
 }
 
 function Save-UpdaterState($RemoteFiles, [string]$RemoteVersion, [string]$StatePath) {
   $files = [ordered]@{}
   foreach ($item in $RemoteFiles) {
-    if ([string]$item.path -in @('update.cmd', 'update.ps1')) { continue }
-    $files[[string]$item.path] = [string]$item.sha
+    $relative = [string]$item.path
+    if ($relative -in @('update.cmd', 'update.ps1')) { continue }
+    $files[$relative] = [string]$item.sha
   }
 
   $state = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     repository = $script:repo
     branch = $script:branch
     remoteVersion = $RemoteVersion
@@ -189,41 +74,35 @@ function Save-UpdaterState($RemoteFiles, [string]$RemoteVersion, [string]$StateP
 }
 
 try {
-  Write-Step '[0/4] Updater started.'
-
-  if (-not $InstallPath) {
-    throw 'Install path is empty.'
+  try {
+    if (Test-Path -LiteralPath $LogPath) {
+      Remove-Item -LiteralPath $LogPath -Force
+    }
+  } catch {
+    # Logging must not prevent startup.
   }
+
+  Write-Log '[0/4] Updater started.'
 
   $InstallPath = [IO.Path]::GetFullPath($InstallPath)
   Set-Location -LiteralPath $InstallPath
 
-  foreach ($stale in @('update.ps1.new', 'update.cmd.new')) {
-    $stalePath = Join-Path $InstallPath $stale
-    if (Test-Path -LiteralPath $stalePath) {
-      Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
-    }
-  }
-
   $script:repo = 'Naeirae/ChatGPT-Conversation-Archiver'
   $script:branch = 'main'
-  $script:apiBase = "https://api.github.com/repos/$script:repo"
+  $script:apiBase = 'https://api.github.com/repos/' + $script:repo
   $script:headers = @{
     'User-Agent' = 'ChatGPT-Conversation-Archiver-Updater'
     'Accept' = 'application/vnd.github+json'
-    'X-GitHub-Api-Version' = '2026-03-10'
+    'X-GitHub-Api-Version' = '2022-11-28'
   }
-  $script:downloadHeaders = @{
+  $script:rawHeaders = @{
     'User-Agent' = 'ChatGPT-Conversation-Archiver-Updater'
-    'Accept' = 'application/vnd.github.raw+json'
-    'X-GitHub-Api-Version' = '2026-03-10'
   }
   $script:timeout = 20
-  $script:manifestVersionCache = @{}
 
   $localManifest = Join-Path $InstallPath 'manifest.json'
   if (-not (Test-Path -LiteralPath $localManifest)) {
-    throw 'manifest.json not found. Run update.cmd from the unpacked extension folder.'
+    throw 'manifest.json not found. Keep update.cmd and update.ps1 in the unpacked extension folder.'
   }
 
   try {
@@ -233,9 +112,10 @@ try {
     throw 'Could not read local manifest.json.'
   }
 
-  Write-Step '[1/4] Checking GitHub...'
+  Write-Log '[1/4] Checking GitHub...'
   $treeUrl = $script:apiBase + '/git/trees/' + [Uri]::EscapeDataString($script:branch) + '?recursive=1'
-  Write-Step ('  Request: ' + $treeUrl)
+  Write-Log ('  Request: ' + $treeUrl)
+
   try {
     $tree = Invoke-RestMethod -Uri $treeUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
   } catch {
@@ -247,8 +127,8 @@ try {
   }
 
   $remoteFiles = @($tree.tree | Where-Object { $_.type -eq 'blob' })
-  $remoteManifest = $remoteFiles | Where-Object { $_.path -eq 'manifest.json' } | Select-Object -First 1
-  if (-not $remoteManifest) {
+  $remoteManifestItem = $remoteFiles | Where-Object { $_.path -eq 'manifest.json' } | Select-Object -First 1
+  if (-not $remoteManifestItem) {
     throw 'Remote manifest.json not found.'
   }
 
@@ -269,13 +149,13 @@ try {
     try {
       $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
     } catch {
-      throw 'Updater state file is damaged. Update stopped without changing extension files.'
+      throw 'Updater state file is damaged. Remove only .chatgpt-archiver-updater-state.json and run again.'
     }
   }
 
-  $baselineTree = $null
-  if (-not $state) {
-    $baselineTree = Get-BaselineTreeForVersion $localVersion
+  $firstRun = -not $state
+  if ($firstRun) {
+    Write-Log ('  First updater run for local version ' + $localVersion + '. Existing changed files will be backed up before replacement.')
   }
 
   $changed = @()
@@ -284,93 +164,112 @@ try {
   foreach ($item in $remoteFiles) {
     $relative = [string]$item.path
 
-    # The updater pair is a stable control plane. It never updates or deletes itself.
+    # Stable updater control plane: never replace the files that are running the update.
     if ($relative -in @('update.cmd', 'update.ps1')) {
       continue
     }
 
-    $target = Join-Path $InstallPath ($relative -replace '/', '\')
+    $target = Join-Path $InstallPath ($relative -replace '/', '\\')
     if (-not (Test-Path -LiteralPath $target)) {
       $changed += [pscustomobject]@{
         Path = $relative
         Sha = [string]$item.sha
+        Exists = $false
         Reason = 'missing'
       }
       continue
     }
 
     $localSha = Get-GitBlobSha $relative
-    if ($localSha -eq [string]$item.sha) {
+    $remoteSha = [string]$item.sha
+
+    if ($localSha -eq $remoteSha) {
       continue
     }
 
-    if ($state) {
-      $baselineSha = Get-StateSha $state $relative
-    } else {
-      $baselineSha = $baselineTree[$relative]
+    if ($firstRun) {
+      $changed += [pscustomobject]@{
+        Path = $relative
+        Sha = $remoteSha
+        Exists = $true
+        Reason = 'first-run'
+      }
+      continue
     }
 
-    $matchesOfficialBaseline = $false
-    if ($baselineSha -and $localSha -eq $baselineSha) {
-      $matchesOfficialBaseline = $true
-    } elseif (-not $state) {
-      $matchesOfficialBaseline = Test-OfficialShaForVersion $relative $localSha $localVersion
-    }
-
-    if (-not $matchesOfficialBaseline) {
+    $baselineSha = Get-StateSha $state $relative
+    if (-not $baselineSha -or $localSha -ne $baselineSha) {
       $conflicts += [pscustomobject]@{
         Path = $relative
         LocalSha = $localSha
         BaselineSha = $baselineSha
-        RemoteSha = [string]$item.sha
+        RemoteSha = $remoteSha
       }
       continue
     }
 
     $changed += [pscustomobject]@{
       Path = $relative
-      Sha = [string]$item.sha
+      Sha = $remoteSha
+      Exists = $true
       Reason = 'remote'
     }
   }
 
   if ($conflicts.Count -gt 0) {
-    Write-Step '[2/4] Local changes detected. Update stopped before writing extension files.'
+    Write-Log '[2/4] Local changes detected. Update stopped before writing extension files.'
     foreach ($item in $conflicts) {
-      Write-Host ('  Local change: ' + $item.Path)
+      Write-Log ('  Local change: ' + $item.Path)
     }
-    Write-Host 'These files were not overwritten.'
     throw 'Local changes would be overwritten.'
   }
 
   if ($changed.Count -eq 0) {
-    Write-Step "[2/4] Already up to date: $localVersion"
+    Write-Log ("[2/4] Already up to date: $localVersion")
     Save-UpdaterState $remoteFiles $remoteVersion $statePath
-    Write-Step '[3/4] Updater state saved.'
-    Write-Step '[4/4] No files to update.'
+    Write-Log '[3/4] Updater state saved.'
+    Write-Log '[4/4] No files to update.'
     return
   }
 
-  Write-Step "[2/4] Updating $localVersion -> $remoteVersion"
-  Write-Host ('Files to update: ' + $changed.Count)
+  Write-Log ("[2/4] Updating $localVersion -> $remoteVersion")
+  Write-Log ('  Files to update: ' + $changed.Count)
+
+  $backupRoot = $null
+  if ($firstRun -and @($changed | Where-Object { $_.Exists }).Count -gt 0) {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backupRoot = Join-Path $InstallPath ('.archiver-update-backup\\' + $stamp)
+    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+    Write-Log ('  First-run backup: ' + $backupRoot)
+  }
 
   foreach ($item in $changed) {
-    $target = Join-Path $InstallPath ($item.Path -replace '/', '\')
+    $target = Join-Path $InstallPath ($item.Path -replace '/', '\\')
     $directory = Split-Path -Parent $target
     if ($directory -and -not (Test-Path -LiteralPath $directory)) {
       New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
+    if ($backupRoot -and $item.Exists) {
+      $backupTarget = Join-Path $backupRoot ($item.Path -replace '/', '\\')
+      $backupDirectory = Split-Path -Parent $backupTarget
+      if ($backupDirectory -and -not (Test-Path -LiteralPath $backupDirectory)) {
+        New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
+      }
+      Copy-Item -LiteralPath $target -Destination $backupTarget -Force
+      Write-Log ('  Backed up: ' + $item.Path)
+    }
+
     Download-RemoteFile $item.Path $target
-    Write-Host ('  Updated: ' + $item.Path)
+    Write-Log ('  Updated: ' + $item.Path)
   }
 
   Save-UpdaterState $remoteFiles $remoteVersion $statePath
-  Write-Step '[3/4] Updater state saved.'
-  Write-Step "[4/4] Update complete: $remoteVersion"
-  Write-Host 'Reload the extension at chrome://extensions.'
+  Write-Log '[3/4] Updater state saved.'
+  Write-Log ("[4/4] Update complete: $remoteVersion")
+  Write-Log 'Reload the extension at chrome://extensions.'
 } catch {
-  Write-Step ''
-  Write-Step ('ERROR: ' + $_.Exception.Message)
+  Write-Log ''
+  Write-Log ('ERROR: ' + $_.Exception.Message)
   exit 1
 }
