@@ -42,16 +42,48 @@ function writeWithExecCommand(html, text) {
   }
 }
 
+
+
+function readWithExecCommand() {
+  const host = document.createElement('textarea');
+  host.setAttribute('aria-hidden', 'true');
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  host.style.opacity = '0';
+  document.body.appendChild(host);
+
+  host.focus();
+  host.select();
+
+  try {
+    const ok = document.execCommand('paste');
+    if (!ok && !host.value) {
+      throw new Error('Chrome отклонил чтение буфера обмена.');
+    }
+    return host.value || '';
+  } finally {
+    host.remove();
+  }
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== 'ARCHIVER_OFFSCREEN_WRITE' || message?.target !== 'offscreen') return;
+  if (message?.target !== 'offscreen') return;
 
   (async () => {
-    // Offscreen documents cannot receive focus, so navigator.clipboard.write()
-    // fails with "Document is not focused" on current Chrome. Chrome's own
-    // extension migration guidance recommends selection + execCommand('copy')
-    // for offscreen clipboard work.
-    writeWithExecCommand(String(message.html || ''), String(message.text || ''));
-    return { ok: true };
+    if (message?.type === 'ARCHIVER_OFFSCREEN_WRITE') {
+      // Offscreen documents cannot receive focus, so navigator.clipboard.write()
+      // fails with "Document is not focused" on current Chrome. Selection +
+      // execCommand('copy') works with the extension clipboard permission.
+      writeWithExecCommand(String(message.html || ''), String(message.text || ''));
+      return { ok: true };
+    }
+
+    if (message?.type === 'ARCHIVER_OFFSCREEN_READ') {
+      return { ok: true, text: readWithExecCommand() };
+    }
+
+    return null;
   })().then(sendResponse).catch(error => sendResponse({
     ok: false,
     error: error?.message || String(error)
