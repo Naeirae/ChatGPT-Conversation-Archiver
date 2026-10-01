@@ -1483,6 +1483,82 @@ async function exportConversation({ activeDoc = false } = {}) {
   };
 }
 
+async function exportTabbedConversation(planText = '') {
+  const conversation = await getLastArchive();
+  if (!conversation) throw new Error('Сначала соберите переписку.');
+
+  const messages = conversation.messages || [];
+  if (!messages.length) throw new Error('В архиве нет сообщений для экспорта.');
+
+  const events = parseTabPlan(planText, messages.length);
+  const sections = buildTabbedSections(messages, events);
+  if (sections.length > 40) {
+    throw new Error('За один экспорт можно создать не более 40 вкладок.');
+  }
+
+  const settings = await getSettings();
+  const tab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
+  if (!tab?.id) throw new Error('Не удалось открыть новый Google Doc.');
+
+  await waitForTabComplete(tab.id);
+  await sleep(2500);
+
+  let imageInsertedCount = 0;
+  let imageFailedCount = 0;
+  const failedImages = [];
+  let completedTabs = 0;
+
+  try {
+    for (let index = 0; index < sections.length; index++) {
+      const section = sections[index];
+
+      if (index > 0) {
+        await createNextGoogleDocsTab(tab.id);
+      }
+
+      const pasted = await pasteArchiveIntoGoogleDoc(
+        tab.id,
+        conversation,
+        section.messages,
+        settings,
+        {
+          includeHeader: index === 0,
+          appendToEnd: false
+        }
+      );
+
+      imageInsertedCount += Number(pasted.imageInsertedCount || 0);
+      imageFailedCount += Number(pasted.imageFailedCount || 0);
+      failedImages.push(...(pasted.failedImages || []));
+      completedTabs++;
+    }
+  } catch (error) {
+    throw new Error(
+      'Разделение остановлено после ' + completedTabs + ' из ' + sections.length +
+      ' вкладок. Документ оставлен открытым. Причина: ' +
+      (error?.message || String(error))
+    );
+  }
+
+  const finalTab = await chrome.tabs.get(tab.id);
+  const linkedDoc = await recordDocExport(conversation, finalTab.url);
+  const headingCount = events.filter(event => event.type === 'heading').length;
+
+  return {
+    docUrl: finalTab.url,
+    archive: summarize(conversation),
+    linkedDoc,
+    exportMode: 'tabbed-full',
+    addedCount: messages.length,
+    tabCount: sections.length,
+    headingCount,
+    imageInsertedCount,
+    imageFailedCount,
+    failedImages,
+    noChanges: false
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target === 'offscreen') return;
   (async () => {
@@ -1601,11 +1677,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
         return { ok: true };
       }
+      case 'ARCHIVER_COPY_MESSAGE_MAP': {
+        const archive = await getLastArchive();
+        if (!archive) throw new Error('Нет завершенного архива.');
+        const text = buildMessageMap(archive.messages || []);
+        await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
+        return { ok: true, count: archive.messages?.length || 0 };
+      }
       case 'ARCHIVER_CAPTURE_COMPLETE':
         await handleCaptureComplete(message);
         return { ok: true };
       case 'ARCHIVER_EXPORT_NEW_DOC':
         return { ok: true, ...(await exportConversation({ activeDoc: false })) };
+      case 'ARCHIVER_EXPORT_TABBED_NEW_DOC':
+        return { ok: true, ...(await exportTabbedConversation(message.planText || '')) };
       case 'ARCHIVER_EXPORT_ACTIVE_DOC':
         return { ok: true, ...(await exportConversation({ activeDoc: true })) };
       default:
