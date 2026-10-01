@@ -6,7 +6,7 @@ Chrome extension for archiving complete ChatGPT conversations — including rich
 
 > Work in progress. No license has been selected yet.
 
-Project docs: [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md)
+Project docs: [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
 
 ## Goal
 
