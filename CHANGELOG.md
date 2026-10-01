@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.19
+
+- replace the copied message-map/text-plan workflow with a dedicated full-page visual archive planner;
+- allow scrolling the saved conversation and placing tab/heading markers directly on messages;
+- persist markers per archive and migrate the temporary 0.3.18 text plan once;
+- show image thumbnails and collapsible long messages to make topic boundaries easier to identify;
+- package and verify the new planner page while keeping the existing deterministic tab-plan export engine.
+
 ## 0.3.18
 
 - add a manual Google Docs tab export plan based on archive message numbers;
