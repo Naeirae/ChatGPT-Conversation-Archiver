@@ -285,7 +285,6 @@ $('retryCurrent').onclick = async () => {
   $('retryCurrent').disabled = true;
   $('captureTarget').value = 'current';
   updateCaptureTargetHint('current');
-  await saveSettings({ captureTarget: 'current' });
 
   try {
     let result;
