@@ -226,6 +226,11 @@
     return role + ':' + hashText(normalizeMatchText(cleanMessageText(String(message?.text || ''), role)));
   }
 
+  function externalMatchSignature(role, text = '') {
+    const normalized = normalizeMatchText(text);
+    return String(role || 'unknown') + ':p:' + hashText(normalized.slice(0, 240));
+  }
+
   function makeCaptureBoundary(turns) {
     for (let i = turns.length - 1; i >= 0; i--) {
       const key = turnStableKey(turns[i]);
@@ -709,12 +714,18 @@
 
   function visibleMeaningfulSignatures() {
     return orderedTurns()
-      .map(turn => ({
-        signature: turnTextSignature(turn),
-        text: turnMessageText(turn)
-      }))
-      .filter(item => item.text)
-      .map(item => item.signature);
+      .map(turn => {
+        const role = roleOf(turn) || 'unknown';
+        const text = turnMessageText(turn);
+        return {
+          turn,
+          role,
+          text,
+          externalSignature: externalMatchSignature(role, text),
+          exactSignature: turnTextSignature(turn)
+        };
+      })
+      .filter(item => item.text);
   }
 
   function findResumeTailMatch(tailSignatures) {
@@ -729,14 +740,15 @@
       for (let start = 0; start <= visible.length - length; start++) {
         let same = true;
         for (let offset = 0; offset < length; offset++) {
-          if (visible[start + offset] !== suffix[offset]) {
+          if (visible[start + offset].externalSignature !== suffix[offset]) {
             same = false;
             break;
           }
         }
         if (same) {
+          const last = visible[start + length - 1];
           return {
-            signature: suffix[suffix.length - 1],
+            signature: last.exactSignature,
             matchLength: length
           };
         }
