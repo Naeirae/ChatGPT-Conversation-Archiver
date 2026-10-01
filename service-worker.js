@@ -677,22 +677,51 @@ async function handleCaptureComplete(message) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
 
+  const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
+  let docResult = null;
+  let docError = '';
+
+  if (job.pendingDocUrl) {
+    try {
+      const delta = addedCount > 0 ? archive.messages.slice(-addedCount) : [];
+      docResult = await appendMessagesToGoogleDocUrl(
+        archive,
+        delta,
+        job.pendingDocUrl,
+        job.sourceTabId ?? job.tabId
+      );
+    } catch (error) {
+      docError = error?.message || String(error);
+    }
+  }
+
+  const isContinuation = message.mode === 'continue' || message.mode === 'sync';
+  let finalMessage = isContinuation
+    ? ('Архив продолжен: +' + addedCount + ' сообщений.')
+    : 'Переписка собрана.';
+
+  if (job.pendingDocUrl) {
+    if (docError) finalMessage += ' Google Doc не обновлен: ' + docError;
+    else if (docResult?.addedCount) finalMessage += ' В Google Doc добавлено ' + docResult.addedCount + '.';
+    else finalMessage += ' В Google Doc новых сообщений для вставки нет.';
+  }
+
   await appendRunLog({
     status: 'done',
     phase: 'done',
-    message: message.mode === 'continue'
-      ? ('Архив продолжен: +' + (message.addedCount || 0) + ' сообщений.')
-      : 'Переписка собрана.',
+    message: finalMessage,
     count: archive.messages?.length || 0,
-    addedCount: message.addedCount || archive.lastCaptureAddedCount || 0,
+    addedCount,
     imageCount: archive.imageCount || 0,
     archiveId: archive.id,
+    docUrl: docResult?.docUrl || job.pendingDocUrl || '',
+    docExportError: docError,
     finishedAt: Date.now(),
     captureTabId: null
   }, {
-    level: 'info',
-    code: 'ARCHIVE_SAVED',
-    message: 'Завершенный архив сохранен и доступен для копирования/экспорта.',
+    level: docError ? 'warn' : 'info',
+    code: docError ? 'ARCHIVE_SAVED_DOC_APPEND_FAILED' : (job.pendingDocUrl ? 'ARCHIVE_SAVED_AND_DOC_APPENDED' : 'ARCHIVE_SAVED'),
+    message: finalMessage,
     phase: 'done',
     count: archive.messages?.length || 0
   });
@@ -1078,6 +1107,64 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
   return chrome.tabs.get(tabId);
+}
+
+async function recordDocExport(conversation, docUrl) {
+  const docKey = googleDocKey(docUrl);
+  if (!docKey || !conversation) return null;
+
+  const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
+  const exports = result[DOC_EXPORTS_KEY] || {};
+  const lastMessageId = conversation.messages?.[conversation.messages.length - 1]?.id || '';
+  exports[docKey] = {
+    conversationKey: conversationKey(conversation.sourceUrl),
+    archiveId: conversation.id,
+    lastMessageId,
+    docUrl,
+    updatedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [DOC_EXPORTS_KEY]: exports });
+
+  return setLinkedDoc(conversation.sourceUrl, {
+    url: docUrl,
+    docId: docKey,
+    lastMessageId
+  });
+}
+
+async function appendMessagesToGoogleDocUrl(conversation, messages, docUrl, sourceTabId = null) {
+  const normalizedUrl = normalizeGoogleDocUrl(docUrl);
+  if (!normalizedUrl) throw new Error('Некорректная ссылка на Google Doc.');
+
+  if (!messages?.length) {
+    const linkedDoc = await recordDocExport(conversation, normalizedUrl);
+    return { docUrl: normalizedUrl, addedCount: 0, noChanges: true, linkedDoc };
+  }
+
+  const settings = await getSettings();
+  let tab = null;
+  try {
+    tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
+    if (!tab?.id) throw new Error('Не удалось открыть Google Doc для продолжения.');
+    await waitForTabComplete(tab.id);
+    await sleep(1800);
+
+    await writeClipboard(
+      buildRichHtml(conversation, settings, { messages, includeHeader: false }),
+      buildPlainText(conversation, settings, { messages, includeHeader: false })
+    );
+
+    const finalTab = await pasteIntoGoogleDoc(tab.id, { appendToEnd: true });
+    const linkedDoc = await recordDocExport(conversation, finalTab.url || normalizedUrl);
+    return {
+      docUrl: finalTab.url || normalizedUrl,
+      addedCount: messages.length,
+      noChanges: false,
+      linkedDoc
+    };
+  } finally {
+    if (sourceTabId != null) await chrome.tabs.update(sourceTabId, { active: true }).catch(() => {});
+  }
 }
 
 async function exportConversation({ activeDoc = false } = {}) {
