@@ -28,7 +28,7 @@ if errorlevel 1 (
 
 echo [2/2] Running updater...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0."
 set "RC=%ERRORLEVEL%"
 
 if exist "%~dp0update.ps1.new" (
