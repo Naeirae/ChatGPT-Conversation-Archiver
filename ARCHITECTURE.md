@@ -45,6 +45,19 @@ Responsibilities:
 
 These modules are intentionally free of `chrome.*` and DOM dependencies so real continuation bugs can be reproduced with small fixtures.
 
+### `lib/tab-plan.mjs`
+
+Pure planner for manual Google Docs organization.
+
+Responsibilities:
+
+- parse message-number rules such as `41 | вкладка`;
+- attach H2 topic headings to selected message boundaries;
+- split the immutable local archive into export sections without changing archive order;
+- generate the numbered message map used by the popup.
+
+The browser-specific act of creating a Google Docs tab remains in the service worker.
+
 ### `content-chatgpt.js`
 
 ChatGPT-page adapter.
@@ -72,7 +85,7 @@ Responsibilities:
 - starts full, continue and sync flows;
 - manages archive-to-Google-Doc links and continuation anchors;
 - prepares export data;
-- drives Google Docs focus, clipboard paste and image insertion;
+- drives Google Docs focus, clipboard paste, image insertion and physical document-tab creation;
 - prevents unverified full-archive re-insertion into an already-linked document.
 
 ### `offscreen.js` / `offscreen.html`
