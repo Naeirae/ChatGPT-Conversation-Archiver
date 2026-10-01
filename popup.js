@@ -10,6 +10,30 @@ const DEFAULT_SETTINGS = {
   includeReasoning: false
 };
 
+const PHASE_LABELS = {
+  top: 'Этап 1/3 · Загружаю начало',
+  walk: 'Этап 2/3 · Собираю к зафиксированному концу',
+  finalizing: 'Этап 3/3 · Сохраняю локальный архив',
+  paused: 'Сбор приостановлен'
+};
+
+function renderCaptureProgress(job, running) {
+  const box = $('captureProgress');
+  if (!box) return;
+  box.classList.toggle('hidden', !running);
+  if (!running) return;
+
+  $('capturePhase').textContent = PHASE_LABELS[job?.phase] || 'Сбор переписки';
+  const parts = [];
+  parts.push((job?.count || 0) + ' сообщений');
+  if (job?.startedAt) {
+    const seconds = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
+    parts.push(seconds + ' с');
+  }
+  if (job?.iteration) parts.push('проход ' + job.iteration);
+  $('captureMeta').textContent = parts.join(' · ');
+}
+
 function setStatus(text, error = false) {
   $('status').textContent = text;
   $('status').classList.toggle('error', error);
@@ -44,6 +68,7 @@ function render(data) {
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать текущий чат';
   $('cancel').classList.toggle('hidden', !running);
+  renderCaptureProgress(job, running);
 
   if (done) {
     $('archive').classList.remove('hidden');
