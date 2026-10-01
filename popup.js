@@ -105,6 +105,11 @@ function render(data) {
   $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать заново';
   $('continue').classList.toggle('hidden', running || !state.canContinue);
   $('continue').disabled = Boolean(running);
+  $('syncDoc').disabled = Boolean(running);
+  $('docUrl').disabled = Boolean(running);
+  if (!running && !$('docUrl').value && state.linkedDoc?.url) {
+    $('docUrl').value = state.linkedDoc.url;
+  }
   $('cancel').classList.toggle('hidden', !running);
   renderCaptureProgress(job, running);
   renderRunLog(job);
@@ -189,19 +194,58 @@ $('continue').onclick = async () => {
   $('continue').disabled = true;
   setStatus('Ищу последний сохраненный стык и добираю только новое…');
   try {
-    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CONTINUE_CURRENT' });
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CONTINUE_CURRENT',
+      docUrl: $('docUrl').value.trim()
+    });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить архив.');
     render({
       ...state,
       job: result.job,
       archive: state?.archive || null,
       draft: null,
-      canContinue: true
+      canContinue: true,
+      linkedDoc: result.linkedDoc || state?.linkedDoc || null
     });
     startPolling();
   } catch (error) {
     setStatus(error.message || String(error), true);
     $('continue').disabled = false;
+  }
+};
+
+$('syncDoc').onclick = async () => {
+  const docUrl = $('docUrl').value.trim();
+  if (!docUrl) {
+    setStatus('Вставьте ссылку на Google Doc, который нужно сверить.', true);
+    return;
+  }
+
+  $('syncDoc').disabled = true;
+  $('continue').disabled = true;
+  $('capture').disabled = true;
+  setStatus('Читаю хвост Google Doc по вкладкам и ищу стык с текущим чатом…');
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_SYNC_CURRENT',
+      docUrl
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить Google Doc с чатом.');
+    render({
+      ...state,
+      job: result.job,
+      archive: result.archive || state?.archive || null,
+      draft: null,
+      canContinue: true,
+      linkedDoc: result.linkedDoc || state?.linkedDoc || null
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('syncDoc').disabled = false;
+    $('continue').disabled = false;
+    $('capture').disabled = false;
   }
 };
 
@@ -310,6 +354,7 @@ $('palette').onchange = e => saveSettings({ palette: e.target.value });
     $('palette').value = settings.palette;
     applyPalette(settings.palette);
     const result = await getState();
+    if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
   } catch (error) {
     setStatus(error.message || String(error), true);
