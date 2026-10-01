@@ -196,6 +196,10 @@ function summarize(conversation) {
     capturedAt: conversation.capturedAt,
     messageCount: conversation.messages?.length || 0,
     imageCount: conversation.imageCount || 0,
+    imageBinaryReady: conversation.imageBinaryReady || 0,
+    imageBinaryFailed: conversation.imageBinaryFailed || 0,
+    lastImageBinaryReady: conversation.lastImageBinaryReady || 0,
+    lastImageBinaryFailed: conversation.lastImageBinaryFailed || 0,
     lastCaptureAddedCount: conversation.lastCaptureAddedCount || 0,
     lastCaptureMode: conversation.lastCaptureMode || 'full',
     lastMessageId: conversation.lastMessageId || conversation.messages?.[conversation.messages.length - 1]?.id || ''
@@ -905,6 +909,38 @@ function speakerLabel(role, settings) {
   if (role === 'user') return settings.userName ? `Пользователь / ${settings.userName}:` : 'Пользователь:';
   return settings.assistantName ? `ChatGPT / ${settings.assistantName}:` : 'ChatGPT:';
 }
+function messageHtmlForExport(message, { stripImages = false } = {}) {
+  let html = String(message?.html || `<p>${escapeHtml(message?.text || '')}</p>`);
+
+  html = html.replace(/<img\b[^>]*>/gi, tag => {
+    const indexMatch = tag.match(/data-archiver-image-index=["']?(\d+)["']?/i);
+    const index = indexMatch ? Number(indexMatch[1]) : -1;
+    const image = index >= 0 ? message?.images?.[index] : null;
+
+    if (stripImages) return '';
+
+    const src = image?.dataUrl || image?.src || '';
+    if (!src) return '';
+
+    const escaped = escapeHtml(src);
+    if (/\bsrc\s*=\s*["'][^"']*["']/i.test(tag)) {
+      return tag.replace(/\bsrc\s*=\s*["'][^"']*["']/i, 'src="' + escaped + '"');
+    }
+    return tag.replace(/<img\b/i, '<img src="' + escaped + '"');
+  });
+
+  if (stripImages) {
+    html = html
+      .replace(/<p\b[^>]*data-archiver-attachment=["']true["'][^>]*>\s*<\/p>/gi, '')
+      .replace(/<div\b[^>]*>\s*<\/div>/gi, '');
+  }
+
+  return html;
+}
+
+function messageImagesReady(message) {
+  return (message?.images || []).filter(image => image?.binaryStatus === 'ready' && image?.dataUrl);
+}
 
 function buildRichHtml(conversation, settings, options = {}) {
   const chunks = [];
@@ -928,7 +964,7 @@ function buildRichHtml(conversation, settings, options = {}) {
       chunks.push(msg.reasoningHtml);
       chunks.push('</div>');
     }
-    chunks.push(`<div>${msg.html || `<p>${escapeHtml(msg.text || '')}</p>`}</div>`);
+    chunks.push(`<div>${messageHtmlForExport(msg, { stripImages: Boolean(options.stripImages) })}</div>`);
     chunks.push('</div>');
     chunks.push('<p><br></p>');
   }
@@ -1259,10 +1295,7 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
     await sleep(700);
-    const point = await editorPoint(tabId);
-    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-    await sleep(450);
+    await focusGoogleDocEditor(tabId);
     if (appendToEnd) {
       await dispatchKey(tabId, 'End', 'End', 35, 2);
       await sleep(220);
@@ -1273,6 +1306,166 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
   return chrome.tabs.get(tabId);
+}
+
+async function copyImageClipboardInGoogleDocs(tabId, image) {
+  const dataUrl = String(image?.dataUrl || '');
+  if (!/^data:image\//i.test(dataUrl)) {
+    return { ok: false, error: 'В архиве нет бинарных данных изображения.' };
+  }
+
+  const expression = `(async () => {
+    const dataUrl = ${JSON.stringify(dataUrl)};
+    let clipboardError = '';
+
+    try {
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+      const type = blob.type || 'image/png';
+      if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+        await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+        return { ok: true, method: 'navigator.clipboard', type, size: blob.size };
+      }
+    } catch (error) {
+      clipboardError = String(error?.message || error);
+    }
+
+    try {
+      const host = document.createElement('div');
+      host.contentEditable = 'true';
+      host.style.position = 'fixed';
+      host.style.left = '-10000px';
+      host.style.top = '0';
+      host.style.opacity = '0';
+
+      const img = document.createElement('img');
+      img.src = dataUrl;
+      host.appendChild(img);
+      document.body.appendChild(host);
+      if (img.decode) await img.decode();
+
+      const selection = getSelection();
+      const range = document.createRange();
+      range.selectNode(img);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      host.focus();
+
+      const ok = document.execCommand('copy');
+      selection.removeAllRanges();
+      host.remove();
+
+      if (!ok) throw new Error('document.execCommand(copy) returned false');
+      return { ok: true, method: 'execCommand-image', type: 'image/png', size: dataUrl.length };
+    } catch (error) {
+      return {
+        ok: false,
+        error: (clipboardError ? clipboardError + ' | ' : '') + String(error?.message || error)
+      };
+    }
+  })()`;
+
+  const result = await cdp(tabId, 'Runtime.evaluate', {
+    expression,
+    awaitPromise: true,
+    returnByValue: true,
+    userGesture: true
+  });
+  return result?.result?.value || { ok: false, error: 'Не удалось подготовить image clipboard.' };
+}
+
+async function pasteArchiveIntoGoogleDoc(
+  tabId,
+  conversation,
+  messages,
+  settings,
+  { includeHeader = true, appendToEnd = false } = {}
+) {
+  let attached = false;
+  let imageInsertedCount = 0;
+  let imageFailedCount = 0;
+  const failedImages = [];
+
+  const flushText = async (buffer, withHeader) => {
+    if (!buffer.length && !withHeader) return;
+    const html = buildRichHtml(conversation, settings, {
+      messages: buffer,
+      includeHeader: withHeader,
+      stripImages: true
+    });
+    const text = buildPlainText(conversation, settings, {
+      messages: buffer,
+      includeHeader: withHeader
+    });
+    if (!html.trim() && !text.trim()) return;
+
+    await writeClipboard(html, text);
+    await focusGoogleDocEditor(tabId);
+    await dispatchKey(tabId, 'End', 'End', 35, 2);
+    await sleep(100);
+    await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
+    await sleep(450);
+  };
+
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    await sleep(700);
+    await focusGoogleDocEditor(tabId);
+    if (appendToEnd) {
+      await dispatchKey(tabId, 'End', 'End', 35, 2);
+      await sleep(180);
+    }
+
+    let buffer = [];
+    let headerPending = includeHeader;
+
+    for (const message of messages || []) {
+      buffer.push(message);
+      const ready = messageImagesReady(message);
+      const failed = (message.images || []).filter(image => !image?.dataUrl);
+
+      if (!ready.length && !failed.length) continue;
+
+      await flushText(buffer, headerPending);
+      buffer = [];
+      headerPending = false;
+
+      for (const image of ready) {
+        const copied = await copyImageClipboardInGoogleDocs(tabId, image);
+        if (!copied?.ok) {
+          imageFailedCount++;
+          failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
+          continue;
+        }
+
+        await focusGoogleDocEditor(tabId);
+        await dispatchKey(tabId, 'End', 'End', 35, 2);
+        await sleep(100);
+        await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
+        await sleep(850);
+        await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+        await sleep(120);
+        imageInsertedCount++;
+      }
+
+      for (const image of failed) {
+        imageFailedCount++;
+        failedImages.push({ src: image.src || '', error: image.binaryError || 'binary unavailable' });
+      }
+    }
+
+    await flushText(buffer, headerPending);
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+
+  return {
+    tab: await chrome.tabs.get(tabId),
+    imageInsertedCount,
+    imageFailedCount,
+    failedImages
+  };
 }
 
 async function recordDocExport(conversation, docUrl) {
