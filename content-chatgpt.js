@@ -666,6 +666,7 @@
     const existingArchiveId = String(options.existingArchiveId || '');
     const map = new Map();
     const order = [];
+    let chronologicalStarted = false;
 
     try {
       const settings = await getSettings();
@@ -699,6 +700,7 @@
       // archive in chronological order while physically walking downward.
       map.clear();
       order.length = 0;
+      chronologicalStarted = true;
 
       await walkDown(map, order, settings, boundary);
 
@@ -790,20 +792,56 @@
       const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
       const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
+
+      let draftId = '';
+      let draftCount = 0;
+
+      // Only the downward pass is in reliable chronological order. If that pass
+      // fails, keep the already captured prefix as an explicit draft instead of
+      // leaving useful text only in an ephemeral Map.
+      if (chronologicalStarted && map.size > 0) {
+        const draftMessages = order.map(id => map.get(id)).filter(Boolean);
+        if (draftMessages.length) {
+          draftId = 'draft-' + jobId;
+          draftCount = draftMessages.length;
+          const draft = {
+            id: draftId,
+            kind: 'capture-draft',
+            title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
+            sourceUrl: location.href,
+            capturedAt: new Date().toISOString(),
+            captureMode: mode,
+            messages: draftMessages,
+            imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+            complete: false,
+            error: message
+          };
+          await chrome.storage.local.set({ ['draft:' + draftId]: draft });
+        }
+      }
+
       await chrome.storage.local.set({
         activeCaptureJob: Object.assign({}, current, {
           jobId,
           status,
           message,
+          draftId,
+          draftCount,
           finishedAt: Date.now(),
           updatedAt: Date.now()
         })
       });
-      if (status === 'error') {
-        try {
-          await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_FAILED', jobId, error: message });
-        } catch (_) {}
-      }
+
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_CAPTURE_FAILED',
+          jobId,
+          error: message,
+          draftId,
+          draftCount,
+          status
+        });
+      } catch (_) {}
     } finally {
       state.running = false;
       state.jobId = null;
