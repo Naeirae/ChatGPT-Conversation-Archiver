@@ -16,6 +16,11 @@
       </div>
     </header>
 
+    <div class="status-bar">
+      <p id="status" class="status" role="status" aria-live="polite">Готово.</p>
+      <button id="retryCurrent" class="hidden">Повторить в обычном режиме</button>
+    </div>
+
     <button id="capture" class="primary">Собрать заново</button>
     <button id="continue" class="hidden">Продолжить</button>
 
@@ -81,9 +86,6 @@
       <button id="newDoc" disabled>Сохранить в новый Google Doc</button>
       <button id="activeDoc" disabled>Вставить в открытый Google Doc</button>
     </div>
-
-    <p id="status" class="status">Готово.</p>
-    <button id="retryCurrent" class="hidden">Повторить в обычном режиме</button>
 
     <details class="settings" open>
       <summary>Настройки оформления</summary>

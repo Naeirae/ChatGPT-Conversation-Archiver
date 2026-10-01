@@ -48,8 +48,10 @@ button:disabled { opacity:.45; cursor:default; }
 .archive strong { display:block; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .muted { color:var(--muted); font-size:11px; margin-top:3px; }
 .hidden { display:none !important; }
-.status { min-height:34px; margin:12px 0 0; font-size:13px; line-height:1.35; }
-.status.error { color:var(--danger); }
+.status-bar { position:sticky; top:0; z-index:20; padding:4px 0 8px; background:var(--bg); }
+.status { min-height:34px; margin:0; padding:8px 10px; border:1px solid var(--border); border-radius:10px; background:var(--panel); font-size:13px; line-height:1.35; }
+.status.error { color:var(--danger); border-color:var(--danger); }
+.status-bar #retryCurrent { margin-top:6px; }
 .settings { margin-top:15px; border:1px solid var(--border); border-radius:13px; background:var(--panel); overflow:hidden; }
 .settings summary { padding:11px 12px; cursor:pointer; font-weight:700; font-size:13px; color:var(--text); background:var(--soft); }
 .settings[open] summary { border-bottom:1px solid var(--border); }

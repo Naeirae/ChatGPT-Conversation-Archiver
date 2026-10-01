@@ -132,6 +132,69 @@ function isGoogleDocUrl(url = '') {
   return /^https:\/\/docs\.google\.com\/document\//i.test(url);
 }
 
+async function getActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab || null;
+}
+
+async function getJob() {
+  return (await chrome.storage.local.get(ACTIVE_JOB_KEY))[ACTIVE_JOB_KEY] || null;
+}
+
+async function setJob(patch) {
+  const current = await getJob();
+  const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
+  await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: next });
+  if (next.tabId != null) {
+    const running = next.status === 'running' || next.status === 'starting';
+    const phaseBadge = next.phase === 'top' ? '1/3' : next.phase === 'walk' ? '2/3' : next.phase === 'finalizing' ? '3/3' : '…';
+    const badge = running ? phaseBadge : next.status === 'done' ? '✓' : next.status === 'error' ? '!' : next.status === 'cancelled' ? '×' : '';
+    await chrome.action.setBadgeText({ tabId: next.tabId, text: badge }).catch(() => {});
+    const title = next.message ? `Архиватор ChatGPT: ${next.message}` : 'Архиватор ChatGPT';
+    await chrome.action.setTitle({ tabId: next.tabId, title }).catch(() => {});
+  }
+  return next;
+}
+
+async function appendRunLog(patch, entry = null) {
+  const current = await getJob();
+  const log = Array.isArray(current?.log) ? [...current.log] : [];
+  if (entry) {
+    log.push({
+      at: Date.now(),
+      level: entry.level || 'info',
+      code: entry.code || '',
+      message: entry.message || '',
+      phase: entry.phase || patch?.phase || current?.phase || '',
+      count: Number(entry.count ?? patch?.count ?? current?.count ?? 0)
+    });
+  }
+  return setJob({ ...(patch || {}), log: log.slice(-40) });
+}
+
+function formatRunLog(job) {
+  if (!job) return 'Нет данных о последнем запуске.';
+  const lines = [];
+  lines.push('ChatGPT Archiver run');
+  lines.push('jobId: ' + (job.jobId || ''));
+  lines.push('mode: ' + (job.captureMode || 'full'));
+  lines.push('captureTarget: ' + (job.captureTarget || 'copy'));
+  lines.push('status: ' + (job.status || ''));
+  lines.push('phase: ' + (job.phase || ''));
+  lines.push('count: ' + Number(job.count || 0));
+  if (job.draftCount) lines.push('draftCount: ' + Number(job.draftCount || 0));
+  if (job.archiveId) lines.push('archiveId: ' + job.archiveId);
+  if (job.message) lines.push('message: ' + job.message);
+  lines.push('');
+  for (const item of job.log || []) {
+    const time = item.at ? new Date(item.at).toLocaleTimeString('ru-RU') : '--:--:--';
+    const meta = [item.phase, Number.isFinite(item.count) ? item.count + ' msg' : ''].filter(Boolean).join(' · ');
+    lines.push('[' + time + '] ' + (item.level || 'info').toUpperCase() + ' ' + (item.code || '') +
+      (meta ? ' · ' + meta : '') + (item.message ? ' — ' + item.message : ''));
+  }
+  return lines.join('\n');
+}
+
 async function cleanupTemporaryBaseline(job) {
   if (!job?.baselineArchiveId) return;
   await removeArchive(job.baselineArchiveId).catch(() => {});

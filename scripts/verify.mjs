@@ -38,6 +38,26 @@ for (const file of jsFiles) {
 }
 
 try {
+  const serviceWorkerSource = await readFile('service-worker.js', 'utf8');
+  const requiredRuntimeHelpers = [
+    'getActiveTab',
+    'getJob',
+    'setJob',
+    'appendRunLog',
+    'formatRunLog'
+  ];
+  for (const helper of requiredRuntimeHelpers) {
+    const declaration = new RegExp('(?:async\\s+)?function\\s+' + helper + '\\s*\\(');
+    if (!declaration.test(serviceWorkerSource)) {
+      fail('service-worker.js: missing runtime helper declaration ' + helper);
+    }
+  }
+  console.log('OK: service-worker runtime helper declarations');
+} catch (error) {
+  fail(`service-worker.js runtime helper guard failed: ${error.message}`);
+}
+
+try {
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
   if (manifest.manifest_version !== 3) {
     fail('manifest.json: manifest_version must be 3');

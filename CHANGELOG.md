@@ -2,6 +2,13 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.21
+
+- restore the service-worker runtime helpers for active-tab lookup, capture-job state, badge/title updates and run-log formatting that were accidentally removed during the archive-store extraction;
+- add a repository verification guard so these required runtime helpers cannot disappear while syntax checks still pass;
+- keep popup status/errors visible in a sticky status panel instead of placing them below the export controls;
+- this fixes the reported `getActiveTab is not defined` / `getJob is not defined` startup failures in source; browser live verification is still required after updating and reloading the extension.
+
 ## 0.3.20
 
 - add a quiet Windows updater launcher, `Update ChatGPT Archiver.vbs`, as the user-facing entry point;
