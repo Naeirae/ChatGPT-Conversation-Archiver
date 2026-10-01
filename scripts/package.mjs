@@ -11,6 +11,9 @@ const files = [
   'popup.html',
   'popup.css',
   'popup.js',
+  'planner.html',
+  'planner.css',
+  'planner.js',
   'offscreen.html',
   'offscreen.js'
 ];
