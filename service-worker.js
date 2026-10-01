@@ -22,6 +22,12 @@ import {
   normalizeGoogleDocUrl
 } from './lib/urls.mjs';
 
+import {
+  buildMessageMap,
+  buildTabbedSections,
+  parseTabPlan
+} from './lib/tab-plan.mjs';
+
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
@@ -752,6 +758,9 @@ function buildRichHtml(conversation, settings, options = {}) {
   }
 
   for (const msg of messages) {
+    for (const heading of Array.isArray(msg.archiveHeadings) ? msg.archiveHeadings : []) {
+      if (heading) chunks.push('<h2>' + escapeHtml(heading) + '</h2>');
+    }
     const align = msg.role === 'user' && settings.alignUserRight ? 'right' : 'left';
     chunks.push(`<div style="text-align:${align};">`);
     chunks.push(`<p><strong>${escapeHtml(speakerLabel(msg.role, settings))}</strong></p>`);
@@ -780,6 +789,12 @@ function buildPlainText(conversation, settings, options = {}) {
   }
 
   for (const msg of messages) {
+    for (const heading of Array.isArray(msg.archiveHeadings) ? msg.archiveHeadings : []) {
+      if (heading) {
+        lines.push(heading);
+        lines.push('');
+      }
+    }
     lines.push(speakerLabel(msg.role, settings));
     if (settings.includeReasoning && msg.reasoningText) {
       lines.push((msg.reasoningLabel || 'Размышления') + ':');
