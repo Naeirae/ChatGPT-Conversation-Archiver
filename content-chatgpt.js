@@ -144,26 +144,35 @@
   function turnStableKey(turn) {
     if (!turn) return '';
 
-    const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
-    if (searchUnit) return 'search:' + searchUnit;
-
+    const role = roleOf(turn) || 'unknown';
     const nodes = [
       turn,
       turn.matches?.(ROLE_SELECTOR) ? turn : turn.querySelector?.(ROLE_SELECTOR)
     ].filter(Boolean);
 
-    for (const attr of ['data-message-id', 'data-turn-id', 'data-testid']) {
+    for (const attr of ['data-message-id', 'data-turn-id']) {
       for (const node of nodes) {
         const value = String(node.getAttribute?.(attr) || '').trim();
         if (value) return attr + ':' + value;
       }
     }
 
+    // Current ChatGPT virtualization exposes a stable UUID on the outer turn
+    // wrapper, while data-chatgpt-search-unit-key may be positional
+    // (fallback-turn-N) and can change as the virtualized list is rebuilt.
     const wrapper = turn.closest?.('[data-turn-key]') || turn.querySelector?.('[data-turn-key]');
     const wrapperKey = String(wrapper?.getAttribute?.('data-turn-key') || '').trim();
     if (wrapperKey) {
-      const role = roleOf(turn) || 'unknown';
-      return 'turn:' + wrapperKey + ':' + role + ':' + hashText(String(contentRoot(turn, role)?.innerText || ''));
+      return 'turn:' + wrapperKey + ':' + role + ':' +
+        hashText(String(contentRoot(turn, role)?.innerText || ''));
+    }
+
+    const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
+    if (searchUnit) return 'search:' + searchUnit + ':' + hashText(String(contentRoot(turn, role)?.innerText || ''));
+
+    for (const node of nodes) {
+      const testId = String(node.getAttribute?.('data-testid') || '').trim();
+      if (testId) return 'testid:' + testId + ':' + hashText(String(contentRoot(turn, role)?.innerText || ''));
     }
 
     return '';
