@@ -96,6 +96,51 @@ function Get-BaselineTreeForVersion([string]$Version) {
   throw "Could not find an official GitHub baseline for local version $Version. Update stopped without changing extension files."
 }
 
+function Test-OfficialShaForVersion([string]$RelativePath, [string]$LocalSha, [string]$Version) {
+  $encodedPath = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+  $commitsUrl = $script:apiBase + '/commits?path=' + $encodedPath + '&sha=' + $script:branch + '&per_page=100'
+
+  try {
+    $commits = @(Invoke-RestMethod -Uri $commitsUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout)
+  } catch {
+    throw "Could not inspect file history for $RelativePath. $($_.Exception.Message)"
+  }
+
+  foreach ($commit in $commits) {
+    $commitSha = [string]$commit.sha
+
+    if ($script:manifestVersionCache.ContainsKey($commitSha)) {
+      $manifestVersion = [string]$script:manifestVersionCache[$commitSha]
+    } else {
+      try {
+        $manifestText = Get-FileTextAtRef 'manifest.json' $commitSha
+        $manifestVersion = [string](($manifestText | ConvertFrom-Json).version)
+      } catch {
+        continue
+      }
+      $script:manifestVersionCache[$commitSha] = $manifestVersion
+    }
+
+    if ($manifestVersion -ne $Version) {
+      continue
+    }
+
+    $fileUrl = $script:apiBase + '/contents/' + $encodedPath + '?ref=' + [Uri]::EscapeDataString($commitSha)
+    try {
+      $fileMeta = Invoke-RestMethod -Uri $fileUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
+    } catch {
+      continue
+    }
+
+    if ([string]$fileMeta.sha -eq $LocalSha) {
+      Write-Host ('  Recognized official ' + $Version + ' file: ' + $RelativePath)
+      return $true
+    }
+  }
+
+  return $false
+}
+
 function Download-RemoteFile([string]$RelativePath, [string]$Target) {
   $encoded = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
   $url = $script:apiBase + '/contents/' + $encoded + '?ref=' + $script:branch
@@ -162,6 +207,7 @@ try {
     'X-GitHub-Api-Version' = '2022-11-28'
   }
   $script:timeout = 20
+  $script:manifestVersionCache = @{}
 
   $localManifest = Join-Path $InstallPath 'manifest.json'
   if (-not (Test-Path -LiteralPath $localManifest)) {
@@ -260,7 +306,14 @@ try {
       $baselineSha = $baselineTree[$relative]
     }
 
-    if (-not $baselineSha -or $localSha -ne $baselineSha) {
+    $matchesOfficialBaseline = $false
+    if ($baselineSha -and $localSha -eq $baselineSha) {
+      $matchesOfficialBaseline = $true
+    } elseif (-not $state) {
+      $matchesOfficialBaseline = Test-OfficialShaForVersion $relative $localSha $localVersion
+    }
+
+    if (-not $matchesOfficialBaseline) {
       $conflicts += [pscustomobject]@{
         Path = $relative
         LocalSha = $localSha
