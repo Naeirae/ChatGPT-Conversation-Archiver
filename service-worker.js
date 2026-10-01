@@ -23,7 +23,6 @@ import {
 } from './lib/urls.mjs';
 
 import {
-  buildMessageMap,
   buildTabbedSections,
   parseTabPlan
 } from './lib/tab-plan.mjs';
@@ -1676,13 +1675,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const text = formatRunLog(job);
         await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
         return { ok: true };
-      }
-      case 'ARCHIVER_COPY_MESSAGE_MAP': {
-        const archive = await getLastArchive();
-        if (!archive) throw new Error('Нет завершенного архива.');
-        const text = buildMessageMap(archive.messages || []);
-        await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
-        return { ok: true, count: archive.messages?.length || 0 };
       }
       case 'ARCHIVER_CAPTURE_COMPLETE':
         await handleCaptureComplete(message);
