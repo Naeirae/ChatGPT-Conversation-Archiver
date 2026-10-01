@@ -28,7 +28,7 @@
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
-  const REASONING_LABEL_RE = /^(думаю|размышляю|thinking|reasoning|show thinking|show reasoning|показать рассуждения|показать размышления)$/i;
+  const REASONING_ACTION_EXCLUDE_RE = /copy|share|regenerate|retry|edit|like|dislike|feedback|citation|source|download|listen|read aloud|stop|поделиться|скопировать|повторить|изменить|источник|скачать|озвучить/i;
   const reasoningClicked = new WeakSet();
 
   async function getSettings() {
@@ -165,64 +165,137 @@
   }
 
 
-  function reasoningRoots(turn) {
-    const selectors = [
-      '[data-testid*="reasoning"]',
-      '[data-testid*="thinking"]',
-      '[class*="reasoning"]',
-      '[class*="thinking"]'
-    ];
+  function reasoningLabel(el) {
+    return String(
+      el.innerText ||
+      el.getAttribute('aria-label') ||
+      el.getAttribute('title') ||
+      ''
+    ).replace(/\s+/g, ' ').trim();
+  }
+
+  function isReasoningDisclosure(el, turn, messageRoot) {
+    if (!visible(el) || el.disabled) return false;
+    if (!el.matches('button, [role="button"], [aria-expanded], [data-state="open"], [data-state="closed"]')) return false;
+    if (el.getAttribute('aria-haspopup')) return false;
+
+    const testId = String(el.getAttribute('data-testid') || '');
+    if (REASONING_ACTION_EXCLUDE_RE.test(testId)) return false;
+
+    const label = reasoningLabel(el);
+    if (!label && !el.hasAttribute('aria-controls')) return false;
+    if (REASONING_ACTION_EXCLUDE_RE.test(label)) return false;
+
+    const buttonRect = el.getBoundingClientRect();
+    const contentRect = messageRoot?.getBoundingClientRect?.();
+    if (!buttonRect.width || !buttonRect.height) return false;
+
+    // Reasoning/analysis controls are structurally before the final assistant
+    // message. This does not depend on the language or the visible label.
+    if (contentRect && buttonRect.top > contentRect.top + 24) return false;
+    if (messageRoot && messageRoot.contains(el)) return false;
+
+    return Boolean(
+      el.hasAttribute('aria-expanded') ||
+      el.hasAttribute('aria-controls') ||
+      el.getAttribute('data-state') === 'open' ||
+      el.getAttribute('data-state') === 'closed' ||
+      el.closest('.relative.my-1.min-h-6')
+    );
+  }
+
+  function reasoningCandidates(turn) {
+    const messageRoot = contentRoot(turn, 'assistant');
+    const candidates = [...turn.querySelectorAll(
+      'button[aria-expanded], [role="button"][aria-expanded], button[aria-controls], [role="button"][aria-controls], [data-state="open"], [data-state="closed"], .relative.my-1.min-h-6 button, .relative.my-1.min-h-6 [role="button"]'
+    )].filter(el => isReasoningDisclosure(el, turn, messageRoot));
+
+    return candidates.sort((a, b) =>
+      a.getBoundingClientRect().top - b.getBoundingClientRect().top
+    );
+  }
+
+  function controlledReasoningRoot(trigger) {
+    const ids = String(trigger.getAttribute('aria-controls') || '')
+      .split(/\s+/).filter(Boolean);
+    for (const id of ids) {
+      const target = document.getElementById(id);
+      if (target && visible(target)) return target;
+    }
+    return null;
+  }
+
+  function siblingReasoningRoots(trigger, messageRoot) {
+    const header = trigger.closest('.relative.my-1.min-h-6');
+    if (!header?.parentElement) return [];
+
+    const siblings = [...header.parentElement.children];
+    const start = siblings.indexOf(header);
+    if (start < 0) return [];
+
     const roots = [];
-    const seen = new Set();
-    for (const selector of selectors) {
-      for (const el of turn.querySelectorAll(selector)) {
-        if (seen.has(el) || !visible(el)) continue;
-        if (el.matches('button, [role="button"]')) continue;
-        if (el.querySelector('.markdown, [class*="markdown"], [class*="prose"]')) continue;
-        const text = String(el.innerText || el.textContent || '').trim();
-        if (text.length < 2) continue;
-        seen.add(el);
-        roots.push(el);
-      }
+    for (let i = start + 1; i < siblings.length; i++) {
+      const sibling = siblings[i];
+      if (sibling === messageRoot || sibling.contains(messageRoot)) break;
+      if (!visible(sibling)) continue;
+      const text = String(sibling.innerText || sibling.textContent || '').trim();
+      if (text) roots.push(sibling);
     }
     return roots;
+  }
+
+  function captureReasoning(turn) {
+    const messageRoot = contentRoot(turn, 'assistant');
+    const candidates = reasoningCandidates(turn);
+    if (!candidates.length) return { html: '', text: '', label: '', count: 0 };
+
+    const holder = document.createElement('div');
+    const texts = [];
+    const labels = [];
+    const seenRoots = new Set();
+
+    for (const trigger of candidates) {
+      const label = reasoningLabel(trigger);
+      const controlled = controlledReasoningRoot(trigger);
+      const roots = controlled ? [controlled] : siblingReasoningRoots(trigger, messageRoot);
+
+      for (const root of roots) {
+        if (seenRoots.has(root)) continue;
+        seenRoots.add(root);
+        const clone = cleanClone(root);
+        holder.appendChild(clone);
+        const text = String(root.innerText || root.textContent || '').trim();
+        if (text) texts.push(text);
+      }
+      if (label) labels.push(label);
+    }
+
+    if (!texts.length) return { html: '', text: '', label: labels[0] || '', count: 0 };
+    return {
+      html: holder.innerHTML,
+      text: texts.join('\n\n'),
+      label: labels[0] || 'Размышления',
+      count: texts.length
+    };
   }
 
   async function expandReasoningVisible(turns) {
     let clicks = 0;
     for (const turn of turns || orderedTurns()) {
-      for (const el of turn.querySelectorAll('button, [role="button"]')) {
-        if (!visible(el) || el.disabled || reasoningClicked.has(el)) continue;
-        const label = String(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '')
-          .replace(/\s+/g, ' ').trim();
-        if (!REASONING_LABEL_RE.test(label)) continue;
-        if (el.getAttribute('aria-expanded') === 'true') {
-          reasoningClicked.add(el);
-          continue;
-        }
+      for (const el of reasoningCandidates(turn)) {
+        if (reasoningClicked.has(el)) continue;
+        const expanded = el.getAttribute('aria-expanded');
+        const state = el.getAttribute('data-state');
+        reasoningClicked.add(el);
+        if (expanded === 'true' || state === 'open') continue;
         try {
           el.click();
-          reasoningClicked.add(el);
           clicks++;
           await sleep(320);
         } catch (_) {}
       }
     }
     return clicks;
-  }
-
-  function captureReasoning(turn) {
-    const roots = reasoningRoots(turn);
-    if (!roots.length) return { html: '', text: '' };
-    const holder = document.createElement('div');
-    const texts = [];
-    for (const root of roots) {
-      const clone = cleanClone(root);
-      holder.appendChild(clone);
-      const text = String(root.innerText || root.textContent || '').trim();
-      if (text) texts.push(text);
-    }
-    return { html: holder.innerHTML, text: texts.join('\n\n') };
   }
 
   function contentRoot(turn, role) {
@@ -269,7 +342,7 @@
       height: Number(img.getAttribute('height')) || null
     }));
     if (!text && !images.length) return null;
-    const reasoning = role === 'assistant' && settings?.includeReasoning ? captureReasoning(turn) : { html: '', text: '' };
+    const reasoning = role === 'assistant' && settings?.includeReasoning ? captureReasoning(turn) : { html: '', text: '', label: '', count: 0 };
     const explicitId = turn.getAttribute('data-message-id') || turn.getAttribute('data-turn-id');
     return {
       id: explicitId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
@@ -278,7 +351,9 @@
       html: clone.innerHTML,
       images,
       reasoningHtml: reasoning.html,
-      reasoningText: reasoning.text
+      reasoningText: reasoning.text,
+      reasoningLabel: reasoning.label,
+      reasoningCount: reasoning.count
     };
   }
 
