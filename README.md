@@ -19,31 +19,34 @@ The project does **not** use the ChatGPT API and is not part of another extensio
 
 ## Как работает сбор
 
-Сбор запускается как отдельная фоновая задача для открытой вкладки ChatGPT. После запуска окно расширения можно закрыть и переключиться на другую вкладку.
+Сбор запускается как отдельная фоновая задача. Исходная вкладка ChatGPT остается свободной: расширение открывает неактивную копию того же диалога и физически прокручивает именно ее.
 
-Маршрут сбора:
+Маршрут полного сбора:
 
-1. расширение находит контейнер переписки;
-2. физически отматывает его в самое начало;
-3. после каждого захода в начало ждет, пока страница догрузит старые сообщения;
-4. когда начало стабилизировалось, проходит переписку вниз;
-5. по пути раскрывает сокращенные сообщения и сохраняет уже увиденные сообщения до того, как виртуализированный интерфейс уберет их из DOM;
-6. готовый архив сохраняется локально в профиле расширения;
-7. только после завершения сбора архив можно отдельно вставить в Google Docs.
+1. расширение фиксирует конец снимка на момент запуска;
+2. в фоновой вкладке отправляет реальные wheel-события через Chrome DevTools Protocol, чтобы виртуализированный список физически дошел до начала;
+3. после каждой серии прокруток ждет стабилизации доступных message-unit узлов;
+4. когда начало достигнуто, очищает временный навигационный буфер и физически проходит вниз;
+5. по пути раскрывает доступные элементы и собирает сообщения в хронологическом порядке;
+6. проход вниз останавливается на зафиксированном конце снимка, поэтому новые сообщения в исходной вкладке не растягивают задачу;
+7. готовый архив сохраняется локально в `chrome.storage.local`.
 
-Если вкладка временно замораживается браузером, расширение показывает состояние паузы; если вкладку закрыть или увести с ChatGPT, текущий сбор завершается с ошибкой.
+Для уже сохраненного чата доступен режим **«Продолжить сохраненный архив»**. Он ищет последнее сохраненное сообщение по стабильному идентификатору или локальной сигнатуре текста, собирает только участок после него и объединяет дельту с локальным архивом без повторной вставки старых сообщений.
+
+Popup и badge показывают этапы 1/3 → 2/3 → 3/3, число собранных сообщений и текущий проход.
 
 ## Current MVP
 
 The first prototype does the following:
 
-1. Opens the current ChatGPT conversation.
-2. Scrolls from the beginning to the end and tries to click local `Show more` / `Развернуть` controls inside messages.
-3. Captures each `[data-message-author-role]` turn as rich HTML + plain text.
-4. Stores the captured conversation locally in extension IndexedDB.
-5. Builds one rich clipboard fragment with `Пользователь` / `ChatGPT` separators.
-6. Opens `docs.new` or uses an already-open Google Doc.
-7. Focuses the Google Docs editor through Chrome DevTools Protocol and performs a physical paste.
+1. Opens a dedicated background copy of the current ChatGPT conversation.
+2. Physically scrolls the virtualized conversation with DevTools Protocol wheel events.
+3. Captures individual message units as rich HTML + plain text and keeps stable message IDs where available.
+4. Stores the captured conversation locally in `chrome.storage.local`.
+5. Can continue an existing local archive by collecting only messages after the saved anchor.
+6. Builds a rich clipboard fragment with `Пользователь` / `ChatGPT` separators.
+7. Opens `docs.new` or uses an already-open Google Doc and performs a physical paste.
+8. For a Google Doc already linked to this archive, appends only messages after the last exported message.
 
 ### Images
 
@@ -90,9 +93,9 @@ No license selected yet.
 
 Для распакованной ZIP-копии не нужно каждый раз скачивать весь репозиторий. Запустите `update.cmd` из корня расширения.
 
-`update.cmd` — стабильный bootstrap: он скачивает свежий `update.ps1` из публичной ветки `main` без токена GitHub и запускает его отдельно. Основной updater сравнивает Git blob SHA, скачивает только отсутствующие или изменившиеся файлы и хранит локальный baseline в `.chatgpt-archiver-updater-state.json`.
+`update.cmd` и `update.ps1` — стабильная локальная пара управления обновлением и сами себя не заменяют. `update.cmd` только запускает лежащий рядом PowerShell-скрипт. `update.ps1` читает публичный GitHub без токена, сравнивает Git blob SHA, скачивает только отсутствующие или изменившиеся файлы и хранит baseline в `.chatgpt-archiver-updater-state.json`.
 
-На первом запуске updater сверяет локальную версию с официальной историей репозитория, поэтому старый официальный ZIP можно отличить от вручную изменённого файла. Если обнаружена локальная правка, updater останавливается до записи файлов и выводит её имя вместо молчаливой перезаписи.
+На первом запуске существующие файлы, которые будут заменены, сохраняются в `.archiver-update-backup/<дата-время>/`. После создания state-файла последующие запуски останавливаются, если локальный файл отличается и от сохраненного baseline, и от текущей версии в GitHub.
 
 Последний запуск записывается в `updater-last.log`. Окно `update.cmd` остаётся открытым до нажатия клавиши и при успехе, и при ошибке.
 
@@ -120,7 +123,7 @@ ChatGPT может применять защитные механизмы к н�
 
 Перед сбором расширение проверяет активную вкладку. Сначала отсеивается любой адрес вне ChatGPT; затем через Chrome Debugger читается фактический URL страницы. Для обычных чатов и чатов внутри GPT/проекта принимаются URL с сегментом `/c/<conversation-id>`. Если открыт ChatGPT, но не конкретный диалог, показывается отдельное сообщение: **«Убедитесь, что в активной вкладке открыт диалог ChatGPT.»**
 
-После проверки сразу запускается фоновая прокрутка к началу страницы. Затем основной сборщик отдельно проходит весь загруженный диапазон и дожидается догрузки истории.
+После проверки создается отдельная неактивная вкладка того же диалога. Она физически прокручивается wheel-событиями через Chrome Debugger; DOM используется для чтения уже подгруженных message-unit узлов, а не как источник виртуального `scrollTop`.
 
 ### Размышления
 
