@@ -34,7 +34,8 @@ The current regression suite covers:
 - Google Docs document/tab key parsing;
 - archive indexing and legacy linked-document recovery;
 - duplicate-safe export metadata persistence;
-- multi-tab Google Docs baseline parsing, including empty trailing tabs and tails crossing a tab boundary.
+- multi-tab Google Docs baseline parsing, including empty trailing tabs and tails crossing a tab boundary;
+- manual tab-plan parsing, message maps and deterministic section boundaries for multi-tab export.
 
 Run the same gate locally with:
 
@@ -65,6 +66,7 @@ Before calling a release live-verified, test at least:
 - continuation with a small delta;
 - duplicate protection against an already linked Google Doc;
 - Google Doc sync from a multi-tab document;
+- new multi-tab export with at least two document tabs and one topic subheading;
 - text-only export;
 - image-only message export;
 - mixed text + image export;
