@@ -1142,7 +1142,7 @@
 
       const binaryTargetMessages = mode === 'full'
         ? messages
-        : messages.slice(Math.max(0, messages.length - addedCount));
+        : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
       const binaryStats = await hydrateMessageImages(binaryTargetMessages);
 
       const allImages = messages.flatMap(item => item.images || []);
