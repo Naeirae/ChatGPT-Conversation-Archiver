@@ -6,6 +6,19 @@ The current codebase deliberately avoids a backend. Conversation content stays i
 
 ## Runtime components
 
+### `lib/text.mjs` and `lib/urls.mjs`
+
+Browser-independent pure helpers shared by the service worker and regression tests.
+
+Current responsibilities:
+
+- normalize display/match text;
+- create stable text fingerprints;
+- recover a continuation/export tail after message IDs change;
+- parse ChatGPT and Google Docs URLs/keys.
+
+These modules are intentionally free of `chrome.*` and DOM dependencies so real continuation bugs can be reproduced with small fixtures.
+
 ### `content-chatgpt.js`
 
 ChatGPT-page adapter.
@@ -123,9 +136,9 @@ The project is still pre-1.0.
 
 The largest debt items are:
 
-- `service-worker.js` and `content-chatgpt.js` are too large and should later be split into testable modules;
+- `service-worker.js` and `content-chatgpt.js` are still too large; the first pure text/URL helpers have been extracted, but orchestration, Docs adapter and ChatGPT DOM adapter still need further separation;
 - DOM adapters are necessarily sensitive to ChatGPT/Google Docs UI changes;
-- current automated checks are mostly static/smoke checks; regression fixtures should be added for real capture bugs;
+- automated checks now include pure regression tests for continuation signatures/URL parsing, but browser-level capture/export regression coverage is still missing;
 - reasoning capture remains best-effort against visible DOM;
 - the local ZIP updater is a development distribution mechanism, not the desired long-term user update channel.
 
