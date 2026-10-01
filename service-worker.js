@@ -1221,24 +1221,12 @@ async function exportConversation({ activeDoc = false } = {}) {
   );
 
   const finalTab = await pasteIntoGoogleDoc(tab.id, { appendToEnd });
-  const docKey = googleDocKey(finalTab.url);
-
-  if (docKey) {
-    const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
-    const exports = result[DOC_EXPORTS_KEY] || {};
-    const lastMessageId = conversation.messages?.[conversation.messages.length - 1]?.id || '';
-    exports[docKey] = {
-      conversationKey: conversationKey(conversation.sourceUrl),
-      archiveId: conversation.id,
-      lastMessageId,
-      updatedAt: Date.now()
-    };
-    await chrome.storage.local.set({ [DOC_EXPORTS_KEY]: exports });
-  }
+  const linkedDoc = await recordDocExport(conversation, finalTab.url);
 
   return {
     docUrl: finalTab.url,
     archive: summarize(conversation),
+    linkedDoc,
     exportMode,
     addedCount: messages.length,
     noChanges: false
@@ -1252,13 +1240,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({ mode: 'full' });
       case 'ARCHIVER_CONTINUE_CURRENT':
-        return await startCapture({ mode: 'continue' });
+        return await startCapture({ mode: 'continue', docUrl: message.docUrl || '' });
+      case 'ARCHIVER_SYNC_CURRENT':
+        return await syncCurrentWithDoc(message.docUrl || '');
       case 'ARCHIVER_GET_STATE': {
         const job = await getJob();
         const tab = await getActiveTab();
         let currentArchive = null;
+        let linkedDoc = null;
         if (tab?.url && isConversationUrl(tab.url)) {
           currentArchive = await getArchiveForUrl(tab.url);
+          linkedDoc = await getLinkedDoc(tab.url);
         }
         const archive = currentArchive || await getLastArchive();
         const draft = job?.draftId ? await getDraft(job.draftId) : null;
@@ -1267,6 +1259,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           job,
           archive: summarize(archive),
           draft: summarize(draft),
+          linkedDoc,
           canContinue: Boolean(currentArchive?.messages?.length)
         };
       }
