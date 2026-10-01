@@ -13,11 +13,12 @@ if not exist "%~dp0manifest.json" (
   exit /b 1
 )
 
+set "TEMP_UPDATER=%TEMP%\ChatGPT-Conversation-Archiver-update.ps1"
+set "UPDATER_LOG=%~dp0updater-last.log"
+
 echo [1/2] Getting updater from GitHub...
 echo.
-set "TEMP_UPDATER=%TEMP%\ChatGPT-Conversation-Archiver-update.ps1"
-
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $u='https://api.github.com/repos/Naeirae/ChatGPT-Conversation-Archiver/contents/update.ps1?ref=main'; $h=@{'User-Agent'='ChatGPT-Conversation-Archiver-Updater'; 'Accept'='application/vnd.github.raw+json'; 'X-GitHub-Api-Version'='2026-03-10'}; try { Invoke-WebRequest -Uri $u -Headers $h -OutFile '%TEMP_UPDATER%' -UseBasicParsing -TimeoutSec 20 -MaximumRedirection 5; Write-Host 'Updater downloaded.' } catch { Write-Host ('ERROR: ' + $_.Exception.Message); exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $u='https://api.github.com/repos/Naeirae/ChatGPT-Conversation-Archiver/contents/update.ps1?ref=main'; $h=@{'User-Agent'='ChatGPT-Conversation-Archiver-Updater'; 'Accept'='application/vnd.github.raw+json'; 'X-GitHub-Api-Version'='2022-11-28'}; try { Invoke-WebRequest -Uri $u -Headers $h -OutFile '%TEMP_UPDATER%' -UseBasicParsing -TimeoutSec 20 -MaximumRedirection 5; Write-Host 'Updater downloaded.' } catch { Write-Host ('ERROR: ' + $_.Exception.Message); exit 1 }"
 if errorlevel 1 (
   echo.
   echo Could not get the updater from GitHub.
@@ -28,26 +29,20 @@ if errorlevel 1 (
 
 echo [2/2] Running updater...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0."
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { & '%TEMP_UPDATER%' -InstallPath '%~dp0' 2^>^&1 ^| Tee-Object -FilePath '%UPDATER_LOG%'; if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 0 } } catch { Write-Host ('ERROR: ' + $_.Exception.Message); ($_ ^| Out-String) ^| Out-File -FilePath '%UPDATER_LOG%' -Append -Encoding utf8; exit 1 }"
 set "RC=%ERRORLEVEL%"
-
-if exist "%~dp0update.ps1.new" (
-  move /y "%~dp0update.ps1.new" "%~dp0update.ps1" >nul
-  echo Updated updater: update.ps1
-)
-
-if exist "%~dp0update.cmd.new" (
-  move /y "%~dp0update.cmd.new" "%~dp0update.cmd" >nul
-  echo Updated updater: update.cmd
-)
 
 echo.
 if not "%RC%"=="0" (
   echo Update failed. Error code %RC%.
+  echo Details were written to:
+  echo %UPDATER_LOG%
   pause
   exit /b %RC%
 )
 
 echo Updater finished.
+echo Details were written to:
+echo %UPDATER_LOG%
 pause
 exit /b 0
