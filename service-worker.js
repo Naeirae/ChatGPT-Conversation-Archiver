@@ -271,6 +271,11 @@ async function getDraft(id) {
   return result[DRAFT_PREFIX + id] || null;
 }
 
+async function cleanupTemporaryBaseline(job) {
+  if (!job?.baselineArchiveId) return;
+  await chrome.storage.local.remove(archiveKey(job.baselineArchiveId)).catch(() => {});
+}
+
 async function getLastArchive() {
   const result = await chrome.storage.local.get(LAST_ARCHIVE_KEY);
   return getArchive(result[LAST_ARCHIVE_KEY]);
@@ -537,6 +542,7 @@ async function startCapture({
       status: 'starting',
       phase: 'top',
       captureMode: mode,
+      baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
       pendingDocUrl,
       message: mode === 'full'
         ? 'Рабочая вкладка загружена; иду к началу…'
@@ -599,6 +605,9 @@ async function startCapture({
     };
   } catch (error) {
     if (captureTab?.id) await chrome.tabs.remove(captureTab.id).catch(() => {});
+    if (mode === 'sync' && existingArchive?.id) {
+      await chrome.storage.local.remove(archiveKey(existingArchive.id)).catch(() => {});
+    }
     await setJob({
       jobId,
       tabId: sourceTab.id,
@@ -633,6 +642,7 @@ async function cancelCapture() {
   if (job.captureTabId != null) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
+  await cleanupTemporaryBaseline(job);
 
   const next = await appendRunLog({
     status: 'cancelled',
@@ -656,6 +666,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   if (job.captureTabId != null) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
+  await cleanupTemporaryBaseline(job);
 
   await appendRunLog({
     status,
