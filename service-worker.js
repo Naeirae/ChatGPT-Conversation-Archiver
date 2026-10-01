@@ -520,7 +520,7 @@ async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
   return archive;
 }
 
-async function syncCurrentWithDoc(docUrl) {
+async function syncCurrentWithDoc(docUrl, captureTarget = 'copy') {
   const sourceTab = await getActiveTab();
   if (!sourceTab?.id || !isConversationUrl(sourceTab.url || '')) {
     throw new Error('Откройте нужный диалог ChatGPT перед сверкой.');
@@ -538,7 +538,8 @@ async function syncCurrentWithDoc(docUrl) {
     mode: 'sync',
     docUrl: targetDocUrl,
     existingArchive: archive,
-    resumeTailSignatures: baseline.tailSignatures
+    resumeTailSignatures: baseline.tailSignatures,
+    captureTarget
   });
 
   return {
@@ -563,7 +564,8 @@ async function startCapture({
   mode = 'full',
   docUrl = '',
   existingArchive: providedArchive = null,
-  resumeTailSignatures = []
+  resumeTailSignatures = [],
+  captureTarget = 'copy'
 } = {}) {
   const sourceTab = await getActiveTab();
   if (!sourceTab?.id) throw new Error('Не удалось определить активную вкладку.');
@@ -571,6 +573,8 @@ async function startCapture({
   if (!isChatGptHost(sourceTab.url || '')) {
     throw makeCaptureError('WRONG_SITE', 'Откройте ChatGPT в активной вкладке.');
   }
+
+  captureTarget = captureTarget === 'current' ? 'current' : 'copy';
 
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
@@ -603,16 +607,24 @@ async function startCapture({
 
   const jobId = makeJobId();
   let captureTab = null;
+  let domProbe = null;
 
   try {
-    captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
-    if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для сбора.');
+    if (captureTarget === 'current') {
+      captureTab = await chrome.tabs.get(sourceTab.id);
+      domProbe = await waitForChatDomReady(sourceTab.id, 15000);
+    } else {
+      captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
+      if (!captureTab?.id) throw new Error('Не удалось открыть рабочую копию для сбора.');
 
-    await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
-    captureTab = await waitForChatTabComplete(captureTab.id);
-    const domProbe = await waitForChatDomReady(captureTab.id);
+      await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
+      captureTab = await waitForChatTabComplete(captureTab.id);
+      domProbe = await waitForChatDomReady(captureTab.id, 45000);
+    }
 
     const modeLabel = mode === 'sync' ? 'сверка' : mode === 'continue' ? 'продолжение' : 'полный сбор';
+    const targetLabel = captureTarget === 'current' ? 'текущая вкладка' : 'рабочая копия';
+
     await setJob({
       jobId,
       tabId: sourceTab.id,
@@ -622,11 +634,16 @@ async function startCapture({
       status: 'starting',
       phase: 'top',
       captureMode: mode,
+      captureTarget,
       baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
       pendingDocUrl,
       message: mode === 'full'
-        ? 'Рабочая вкладка загружена; иду к началу…'
-        : 'Рабочая вкладка загружена; ищу последний сохраненный стык…',
+        ? (captureTarget === 'current'
+            ? 'Текущая вкладка готова; иду к началу…'
+            : 'Рабочая копия загружена; иду к началу…')
+        : (captureTarget === 'current'
+            ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
+            : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
       count: 0,
       addedCount: 0,
       imageCount: 0,
@@ -636,14 +653,14 @@ async function startCapture({
         at: Date.now(),
         level: 'info',
         code: 'RUN_STARTED',
-        message: 'Запущен режим: ' + modeLabel + '.',
+        message: 'Запущен режим: ' + modeLabel + '; источник: ' + targetLabel + '.',
         phase: 'top',
         count: 0
       }, {
         at: Date.now(),
         level: 'info',
-        code: 'CAPTURE_TAB_HYDRATED',
-        message: 'ChatGPT отрисовал реплики в рабочей вкладке: role=' +
+        code: captureTarget === 'current' ? 'CURRENT_TAB_READY' : 'CAPTURE_TAB_HYDRATED',
+        message: 'ChatGPT отрисовал реплики: role=' +
           Number(domProbe?.roleCount || 0) + ', shells=' + Number(domProbe?.shellCount || 0) + '.',
         phase: 'top',
         count: 0
@@ -664,19 +681,36 @@ async function startCapture({
       existingArchiveId: existingArchive?.id || ''
     });
 
-    await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
-
-    await appendRunLog({
-      status: 'running',
-      message: mode === 'full' ? 'Сбор идет в рабочей вкладке…' : 'Добираю сообщения после найденного стыка…',
-      phase: 'top'
-    }, {
-      level: 'info',
-      code: 'SOURCE_TAB_RESTORED',
-      message: 'Фокус возвращен в исходный чат; рабочая вкладка продолжает сбор.',
-      phase: 'top',
-      count: 0
-    });
+    if (captureTarget === 'copy') {
+      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+      await appendRunLog({
+        status: 'running',
+        message: mode === 'full'
+          ? 'Сбор идет в рабочей копии…'
+          : 'Добираю сообщения после найденного стыка в рабочей копии…',
+        phase: 'top'
+      }, {
+        level: 'info',
+        code: 'SOURCE_TAB_RESTORED',
+        message: 'Фокус возвращен в исходный чат; рабочая копия продолжает сбор.',
+        phase: 'top',
+        count: 0
+      });
+    } else {
+      await appendRunLog({
+        status: 'running',
+        message: mode === 'full'
+          ? 'Физически прокручиваю текущую вкладку…'
+          : 'Ищу стык и добираю хвост в текущей вкладке…',
+        phase: 'top'
+      }, {
+        level: 'info',
+        code: 'CURRENT_TAB_CAPTURE_STARTED',
+        message: 'Сбор идет прямо в текущей вкладке; прокрутка будет видна.',
+        phase: 'top',
+        count: 0
+      });
+    }
 
     return {
       ok: true,
@@ -684,28 +718,44 @@ async function startCapture({
       linkedDoc: await getLinkedDoc(inspection.href)
     };
   } catch (error) {
-    if (captureTab?.id) await chrome.tabs.remove(captureTab.id).catch(() => {});
+    if (captureTarget === 'copy' && captureTab?.id && captureTab.id !== sourceTab.id) {
+      await chrome.tabs.remove(captureTab.id).catch(() => {});
+      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+    }
+
     if (mode === 'sync' && existingArchive?.id) {
       await chrome.storage.local.remove(archiveKey(existingArchive.id)).catch(() => {});
     }
+
+    const rawMessage = error?.message || String(error);
+    const message = captureTarget === 'copy' &&
+      !/Текущая вкладка/i.test(rawMessage)
+      ? rawMessage + ' Можно повторить в режиме «Текущая вкладка».'
+      : rawMessage;
+
     await setJob({
       jobId,
       tabId: sourceTab.id,
       sourceTabId: sourceTab.id,
-      captureTabId: captureTab?.id || null,
+      captureTabId: null,
+      sourceUrl: inspection.href,
       status: 'error',
-      message: error?.message || String(error),
+      phase: 'starting',
+      captureMode: mode,
+      captureTarget,
+      pendingDocUrl,
+      message,
       finishedAt: Date.now(),
       log: [{
         at: Date.now(),
         level: 'error',
-        code: 'START_FAILED',
-        message: error?.message || String(error),
+        code: captureTarget === 'copy' ? 'WORKING_COPY_START_FAILED' : 'CURRENT_TAB_START_FAILED',
+        message,
         phase: 'starting',
         count: 0
       }]
     });
-    throw error;
+    throw new Error(message);
   }
 }
 
