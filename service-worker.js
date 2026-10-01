@@ -584,10 +584,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message?.type) {
       case 'ARCHIVER_CAPTURE_CURRENT':
-        return await startCapture();
+        return await startCapture({ mode: 'full' });
+      case 'ARCHIVER_CONTINUE_CURRENT':
+        return await startCapture({ mode: 'continue' });
       case 'ARCHIVER_GET_STATE': {
         const job = await getJob();
-        const archive = await getLastArchive();
+        const tab = await getActiveTab();
+        let archive = null;
+        if (tab?.url && isConversationUrl(tab.url)) {
+          archive = await getArchiveForUrl(tab.url);
+        }
+        if (!archive) archive = await getLastArchive();
         return { ok: true, job, archive: summarize(archive) };
       }
       case 'ARCHIVER_GET_LAST':
@@ -597,15 +604,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
-        const tabId = sender?.tab?.id ?? job.tabId;
-        if (job.tabId != null && tabId !== job.tabId) return { ok: false, error: 'Прогресс пришел не из вкладки сбора.' };
-        await setJob({ ...message.patch, tabId: job.tabId });
+        const senderTabId = sender?.tab?.id;
+        if (job.captureTabId != null && senderTabId !== job.captureTabId) {
+          return { ok: false, error: 'Прогресс пришел не из фоновой вкладки сбора.' };
+        }
+        await setJob({ ...message.patch, tabId: job.sourceTabId ?? job.tabId });
         return { ok: true };
+      }
+      case 'ARCHIVER_PHYSICAL_SCROLL': {
+        const job = await getJob();
+        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        const senderTabId = sender?.tab?.id;
+        if (job.captureTabId == null || senderTabId !== job.captureTabId) {
+          return { ok: false, error: 'Физическая прокрутка разрешена только фоновой вкладке сбора.' };
+        }
+        return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
       }
       case 'ARCHIVER_CAPTURE_FAILED': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: true };
-        await finishJobWithError(message.jobId, job.tabId, message.error || 'Сбор не выполнен.');
+        await finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, message.error || 'Сбор не выполнен.');
         return { ok: true };
       }
       case 'ARCHIVER_CAPTURE_COMPLETE':
