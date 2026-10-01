@@ -4,6 +4,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+Write-Host '[0/3] Updater started.'
+[Console]::Out.Flush()
 Set-Location -LiteralPath $InstallPath
 
 $repo = 'Naeirae/ChatGPT-Conversation-Archiver'
@@ -31,6 +33,7 @@ function Get-GitBlobSha([string]$RelativePath) {
 function Get-RemoteTree {
   $url = "$apiBase/git/trees/$branch?recursive=1"
   Write-Host '[1/3] Checking GitHub...'
+  [Console]::Out.Flush()
   try {
     return Invoke-RestMethod -Uri $url -Headers $headers -Method Get -TimeoutSec $timeout
   } catch {
@@ -114,6 +117,7 @@ if ($changed.Count -eq 0) {
 }
 
 Write-Host "[2/3] Updating $localVersion -> $remoteVersion"
+[Console]::Out.Flush()
 Write-Host ("Files to update: " + $changed.Count)
 
 foreach ($item in $changed) {
@@ -134,4 +138,5 @@ foreach ($item in $changed) {
 }
 
 Write-Host "[3/3] Update complete: $remoteVersion"
+[Console]::Out.Flush()
 Write-Host 'Reload the extension at chrome://extensions.'
