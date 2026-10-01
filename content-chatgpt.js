@@ -142,14 +142,30 @@
   }
 
   function turnStableKey(turn) {
-    const nodes = [turn, turn?.matches?.(ROLE_SELECTOR) ? turn : turn?.querySelector?.(ROLE_SELECTOR)].filter(Boolean);
-    const attrs = ['data-message-id', 'data-turn-id', 'data-turn-key', 'data-testid', 'data-chatgpt-search-unit-key'];
-    for (const node of nodes) {
-      for (const attr of attrs) {
+    if (!turn) return '';
+
+    const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
+    if (searchUnit) return 'search:' + searchUnit;
+
+    const nodes = [
+      turn,
+      turn.matches?.(ROLE_SELECTOR) ? turn : turn.querySelector?.(ROLE_SELECTOR)
+    ].filter(Boolean);
+
+    for (const attr of ['data-message-id', 'data-turn-id', 'data-testid']) {
+      for (const node of nodes) {
         const value = String(node.getAttribute?.(attr) || '').trim();
         if (value) return attr + ':' + value;
       }
     }
+
+    const wrapper = turn.closest?.('[data-turn-key]') || turn.querySelector?.('[data-turn-key]');
+    const wrapperKey = String(wrapper?.getAttribute?.('data-turn-key') || '').trim();
+    if (wrapperKey) {
+      const role = roleOf(turn) || 'unknown';
+      return 'turn:' + wrapperKey + ':' + role + ':' + hashText(String(contentRoot(turn, role)?.innerText || ''));
+    }
+
     return '';
   }
 
@@ -399,9 +415,9 @@
     }));
     if (!text && !images.length) return null;
     const reasoning = role === 'assistant' && settings?.includeReasoning ? captureReasoning(turn) : { html: '', text: '', label: '', count: 0 };
-    const explicitId = turn.getAttribute('data-message-id') || turn.getAttribute('data-turn-id');
+    const stableId = turnStableKey(turn);
     return {
-      id: explicitId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
+      id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       role,
       text,
       html: clone.innerHTML,
@@ -461,60 +477,132 @@
     return updateJob(patch);
   }
 
-  async function waitForDomQuiet(scroller, timeout) {
-    const started = Date.now();
-    let last = scroller.scrollHeight + ':' + document.querySelectorAll(TURN_SELECTOR).length;
-    while (Date.now() - started < timeout) {
-      await sleep(180);
-      const next = scroller.scrollHeight + ':' + document.querySelectorAll(TURN_SELECTOR).length;
-      if (next === last) return;
-      last = next;
-    }
+  function visibleTurnSignature() {
+    const keys = orderedTurns().map(turn => turnStableKey(turn) || turnTextSignature(turn));
+    return keys.slice(0, 3).concat(keys.slice(-3)).join('|') + '::' + keys.length;
   }
 
-  async function reachTop(scroller, map, order, jobId, settings) {
+  async function waitForTurnSettle(timeout = 1600) {
+    const started = Date.now();
+    let previous = '';
     let stable = 0;
-    let previousHeight = -1;
-    let previousCount = -1;
-    let previousTop = -1;
-    for (let i = 0; i < 160; i++) {
+    while (Date.now() - started < timeout) {
+      await sleep(180);
+      const next = visibleTurnSignature();
+      if (next && next === previous) stable++;
+      else stable = 0;
+      previous = next;
+      if (stable >= 2) return next;
+    }
+    return previous;
+  }
+
+  async function physicalScroll(direction, bursts = 7) {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_PHYSICAL_SCROLL',
+      jobId: state.jobId,
+      direction,
+      bursts
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
+    await waitForTurnSettle();
+    return result;
+  }
+
+  function hasMessageId(id) {
+    if (!id) return false;
+    return orderedTurns().some(turn => {
+      const key = turnStableKey(turn) || turnTextSignature(turn);
+      return key === id;
+    });
+  }
+
+  async function reachTop(map, order, settings) {
+    let stable = 0;
+    let previousSignature = '';
+    let previousSize = -1;
+
+    for (let i = 0; i < 260; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
-      scroller.scrollTo({ top: 0, behavior: 'auto' });
-      await sleep(280);
+
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
-      const top = Math.round(scroller.scrollTop);
-      const height = scroller.scrollHeight;
-      const count = document.querySelectorAll(TURN_SELECTOR).length;
-      await progress('Этап 1/3: иду к началу · собрано ' + map.size + ' сообщений', map.size, {
+
+      const signature = visibleTurnSignature();
+      await progress('Этап 1/3: физически иду к началу · собрано ' + map.size + ' сообщений', map.size, {
         phase: 'top',
-        iteration: i + 1,
-        scrollTop: top,
-        scrollHeight: height
+        iteration: i + 1
       });
-      if (top <= 2 && height === previousHeight && count === previousCount && previousTop <= 2) stable++;
-      else stable = 0;
-      previousHeight = height;
-      previousCount = count;
-      previousTop = top;
-      if (stable >= 5) return;
-      scroller.scrollBy(0, 140);
-      await sleep(130);
-      scroller.scrollTo({ top: 0, behavior: 'auto' });
-      await waitForDomQuiet(scroller, 1100);
+
+      await physicalScroll('up');
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
+
+      const nextSignature = visibleTurnSignature();
+      if (nextSignature && nextSignature === signature && signature === previousSignature && map.size === previousSize) {
+        stable++;
+      } else {
+        stable = 0;
+      }
+
+      previousSignature = nextSignature;
+      previousSize = map.size;
+
+      if (stable >= 4) {
+        await progress('Этап 1/3: начало достигнуто · собрано ' + map.size + ' сообщений', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          force: true
+        });
+        return;
+      }
     }
-    throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться.');
+
+    throw new Error('Не удалось надежно дойти до начала переписки физической прокруткой.');
   }
 
-  async function walkDown(scroller, map, order, jobId, settings, boundary) {
-    let stable = 0;
-    let previousHeight = -1;
-    let previousCount = -1;
-    let previousTop = -1;
+  async function reachResumeAnchor(anchorId, map, order, settings) {
+    if (!anchorId) throw new Error('У сохраненного архива нет якоря продолжения.');
 
-    for (let i = 0; i < 1600 && stable < 5; i++) {
+    for (let i = 0; i < 260; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
+
+      if (hasMessageId(anchorId)) {
+        await progress('Этап 1/3: найден конец сохраненного архива · ' + map.size + ' сообщений в новом проходе', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          anchorReached: true,
+          force: true
+        });
+        return;
+      }
+
+      await progress('Этап 1/3: ищу конец сохраненного архива · ' + map.size + ' сообщений', map.size, {
+        phase: 'top',
+        iteration: i + 1
+      });
+
+      await physicalScroll('up');
+    }
+
+    throw new Error('Не удалось найти последний сохраненный фрагмент. Нужен полный пересбор.');
+  }
+
+  async function walkDown(map, order, settings, boundary) {
+    let stable = 0;
+    let previousSignature = '';
+    let previousSize = -1;
+
+    for (let i = 0; i < 520; i++) {
+      if (state.cancel) throw new Error('Сбор отменен.');
+
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
@@ -529,54 +617,26 @@
         return;
       }
 
-      const viewport = scroller.clientHeight || innerHeight;
-      const max = Math.max(0, scroller.scrollHeight - viewport);
-      const current = Math.max(0, Math.round(scroller.scrollTop));
-      const next = Math.min(max, current + Math.max(420, Math.floor(viewport * 0.68)));
+      const signature = visibleTurnSignature();
+      await progress('Этап 2/3: физически прохожу вниз · собрано ' + map.size + ' сообщений', map.size, {
+        phase: 'walk',
+        iteration: i + 1
+      });
 
-      if (next >= max - 4) {
-        await sleep(520);
-        await expandVisible();
-        if (settings.includeReasoning) await expandReasoningVisible();
-        collect(map, order, settings);
+      await physicalScroll('down');
 
-        if (boundaryIsVisible(boundary)) {
-          await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
-            phase: 'walk',
-            iteration: i + 1,
-            boundaryReached: true,
-            force: true
-          });
-          return;
-        }
+      const nextSignature = visibleTurnSignature();
+      if (nextSignature && nextSignature === signature && signature === previousSignature && map.size === previousSize) stable++;
+      else stable = 0;
 
-        const height = scroller.scrollHeight;
-        const count = document.querySelectorAll(TURN_SELECTOR).length;
-        const top = Math.round(scroller.scrollTop);
-        if (height === previousHeight && count === previousCount && top === previousTop) stable++;
-        else stable = 0;
-        previousHeight = height;
-        previousCount = count;
-        previousTop = top;
-        scroller.scrollTo({ top: height, behavior: 'auto' });
-      } else {
-        stable = 0;
-        scroller.scrollTo({ top: next, behavior: 'auto' });
-        await sleep(240);
-        await waitForDomQuiet(scroller, 1000);
-      }
+      previousSignature = nextSignature;
+      previousSize = map.size;
 
-      if (i % 3 === 0) {
-        await progress('Этап 2/3: прохожу вниз · собрано ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          position: Math.round(scroller.scrollTop)
-        });
-      }
+      if (stable >= 4) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
-      throw new Error('Не удалось дойти до конца снимка переписки.');
+      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
     }
   }
 
