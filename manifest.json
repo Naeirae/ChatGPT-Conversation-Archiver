@@ -11,6 +11,7 @@
     "scripting",
     "debugger",
     "offscreen",
+    "clipboardRead",
     "clipboardWrite"
   ],
   "host_permissions": [
