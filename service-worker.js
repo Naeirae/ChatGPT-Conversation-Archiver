@@ -555,7 +555,7 @@ async function editorPoint(tabId) {
   return result?.result?.value || { x: 500, y: 300 };
 }
 
-async function pasteIntoGoogleDoc(tabId) {
+async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
   let attached = false;
   try {
     await chrome.debugger.attach({ tabId }, '1.3');
@@ -565,6 +565,10 @@ async function pasteIntoGoogleDoc(tabId) {
     await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     await sleep(450);
+    if (appendToEnd) {
+      await dispatchKey(tabId, 'End', 'End', 35, 2);
+      await sleep(220);
+    }
     await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
     await sleep(2500);
   } finally {
@@ -576,20 +580,79 @@ async function pasteIntoGoogleDoc(tabId) {
 async function exportConversation({ activeDoc = false } = {}) {
   const conversation = await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
-  const settings = await getSettings();
-  await writeClipboard(buildRichHtml(conversation, settings), buildPlainText(conversation, settings));
 
+  const settings = await getSettings();
   let tab;
+  let messages = conversation.messages || [];
+  let includeHeader = true;
+  let appendToEnd = false;
+  let exportMode = 'full';
+
   if (activeDoc) {
     tab = await getActiveTab();
     if (!tab?.id || !isGoogleDocUrl(tab.url)) throw new Error('Откройте нужный Google Doc в активной вкладке.');
+
+    const docKey = googleDocKey(tab.url);
+    if (!docKey) throw new Error('Не удалось определить ID открытого Google Doc.');
+
+    const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
+    const exports = result[DOC_EXPORTS_KEY] || {};
+    const previous = exports[docKey];
+    const currentConversationKey = conversationKey(conversation.sourceUrl);
+
+    if (previous?.conversationKey === currentConversationKey && previous.lastMessageId) {
+      const anchorIndex = messages.findIndex(item => item.id === previous.lastMessageId);
+      if (anchorIndex >= 0) {
+        messages = messages.slice(anchorIndex + 1);
+        includeHeader = false;
+        appendToEnd = true;
+        exportMode = 'delta';
+      }
+    }
+
+    if (!messages.length) {
+      return {
+        docUrl: tab.url,
+        archive: summarize(conversation),
+        exportMode: 'delta',
+        addedCount: 0,
+        noChanges: true
+      };
+    }
   } else {
     tab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
     await waitForTabComplete(tab.id);
     await sleep(2500);
   }
-  const finalTab = await pasteIntoGoogleDoc(tab.id);
-  return { docUrl: finalTab.url, archive: summarize(conversation) };
+
+  await writeClipboard(
+    buildRichHtml(conversation, settings, { messages, includeHeader }),
+    buildPlainText(conversation, settings, { messages, includeHeader })
+  );
+
+  const finalTab = await pasteIntoGoogleDoc(tab.id, { appendToEnd });
+  const docKey = googleDocKey(finalTab.url);
+
+  if (docKey) {
+    const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
+    const exports = result[DOC_EXPORTS_KEY] || {};
+    const lastMessageId = conversation.messages?.[conversation.messages.length - 1]?.id || '';
+    exports[docKey] = {
+      conversationKey: conversationKey(conversation.sourceUrl),
+      archiveId: conversation.id,
+      lastMessageId,
+      updatedAt: Date.now()
+    };
+    await chrome.storage.local.set({ [DOC_EXPORTS_KEY]: exports });
+  }
+
+  return {
+    docUrl: finalTab.url,
+    archive: summarize(conversation),
+    exportMode,
+    addedCount: messages.length,
+    noChanges: false
+  };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
