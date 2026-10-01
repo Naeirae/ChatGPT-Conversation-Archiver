@@ -15,7 +15,7 @@ function Write-Log([string]$Message = '') {
 }
 
 function Get-GitBlobSha([string]$RelativePath) {
-  $full = Join-Path $InstallPath ($RelativePath -replace '/', '\\')
+  $full = Join-Path $InstallPath ($RelativePath -replace '/', [IO.Path]::DirectorySeparatorChar)
   $bytes = [IO.File]::ReadAllBytes($full)
   $header = [Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
   $all = New-Object byte[] ($header.Length + $bytes.Length)
@@ -169,7 +169,7 @@ try {
       continue
     }
 
-    $target = Join-Path $InstallPath ($relative -replace '/', '\\')
+    $target = Join-Path $InstallPath ($relative -replace '/', [IO.Path]::DirectorySeparatorChar)
     if (-not (Test-Path -LiteralPath $target)) {
       $changed += [pscustomobject]@{
         Path = $relative
@@ -238,20 +238,20 @@ try {
   $backupRoot = $null
   if ($firstRun -and @($changed | Where-Object { $_.Exists }).Count -gt 0) {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $backupRoot = Join-Path $InstallPath ('.archiver-update-backup\\' + $stamp)
+    $backupRoot = Join-Path (Join-Path $InstallPath '.archiver-update-backup') $stamp
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
     Write-Log ('  First-run backup: ' + $backupRoot)
   }
 
   foreach ($item in $changed) {
-    $target = Join-Path $InstallPath ($item.Path -replace '/', '\\')
+    $target = Join-Path $InstallPath ($item.Path -replace '/', [IO.Path]::DirectorySeparatorChar)
     $directory = Split-Path -Parent $target
     if ($directory -and -not (Test-Path -LiteralPath $directory)) {
       New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
     if ($backupRoot -and $item.Exists) {
-      $backupTarget = Join-Path $backupRoot ($item.Path -replace '/', '\\')
+      $backupTarget = Join-Path $backupRoot ($item.Path -replace '/', [IO.Path]::DirectorySeparatorChar)
       $backupDirectory = Split-Path -Parent $backupTarget
       if ($backupDirectory -and -not (Test-Path -LiteralPath $backupDirectory)) {
         New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
