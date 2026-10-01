@@ -178,6 +178,44 @@ async function setJob(patch) {
   return next;
 }
 
+async function appendRunLog(patch, entry = null) {
+  const current = await getJob();
+  const log = Array.isArray(current?.log) ? [...current.log] : [];
+  if (entry) {
+    log.push({
+      at: Date.now(),
+      level: entry.level || 'info',
+      code: entry.code || '',
+      message: entry.message || '',
+      phase: entry.phase || patch?.phase || current?.phase || '',
+      count: Number(entry.count ?? patch?.count ?? current?.count ?? 0)
+    });
+  }
+  return setJob({ ...(patch || {}), log: log.slice(-40) });
+}
+
+function formatRunLog(job) {
+  if (!job) return 'Нет данных о последнем запуске.';
+  const lines = [];
+  lines.push('ChatGPT Archiver run');
+  lines.push('jobId: ' + (job.jobId || ''));
+  lines.push('mode: ' + (job.captureMode || 'full'));
+  lines.push('status: ' + (job.status || ''));
+  lines.push('phase: ' + (job.phase || ''));
+  lines.push('count: ' + Number(job.count || 0));
+  if (job.draftCount) lines.push('draftCount: ' + Number(job.draftCount || 0));
+  if (job.archiveId) lines.push('archiveId: ' + job.archiveId);
+  if (job.message) lines.push('message: ' + job.message);
+  lines.push('');
+  for (const item of job.log || []) {
+    const time = item.at ? new Date(item.at).toLocaleTimeString('ru-RU') : '--:--:--';
+    const meta = [item.phase, Number.isFinite(item.count) ? item.count + ' msg' : ''].filter(Boolean).join(' · ');
+    lines.push('[' + time + '] ' + (item.level || 'info').toUpperCase() + ' ' + (item.code || '') +
+      (meta ? ' · ' + meta : '') + (item.message ? ' — ' + item.message : ''));
+  }
+  return lines.join('\n');
+}
+
 async function getArchive(id) {
   if (!id) return null;
   const result = await chrome.storage.local.get(archiveKey(id));
@@ -296,7 +334,22 @@ async function startCapture({ mode = 'full' } = {}) {
       count: 0,
       addedCount: 0,
       imageCount: 0,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      log: [{
+        at: Date.now(),
+        level: 'info',
+        code: 'RUN_STARTED',
+        message: mode === 'continue' ? 'Запущено продолжение архива.' : 'Запущен полный сбор.',
+        phase: 'top',
+        count: 0
+      }, {
+        at: Date.now(),
+        level: 'info',
+        code: 'BACKGROUND_TAB_READY',
+        message: 'Фоновая вкладка ChatGPT загружена.',
+        phase: 'top',
+        count: 0
+      }]
     });
 
     const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
@@ -391,8 +444,9 @@ async function handleCaptureComplete(message) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
 
-  await setJob({
+  await appendRunLog({
     status: 'done',
+    phase: 'done',
     message: message.mode === 'continue'
       ? ('Архив продолжен: +' + (message.addedCount || 0) + ' сообщений.')
       : 'Переписка собрана.',
@@ -402,6 +456,12 @@ async function handleCaptureComplete(message) {
     archiveId: archive.id,
     finishedAt: Date.now(),
     captureTabId: null
+  }, {
+    level: 'info',
+    code: 'ARCHIVE_SAVED',
+    message: 'Завершенный архив сохранен и доступен для копирования/экспорта.',
+    phase: 'done',
+    count: archive.messages?.length || 0
   });
 }
 
@@ -715,7 +775,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (job.captureTabId != null && senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Прогресс пришел не из фоновой вкладки сбора.' };
         }
-        await setJob({ ...message.patch, tabId: job.sourceTabId ?? job.tabId });
+        const phaseChanged = message.patch?.phase && message.patch.phase !== job.phase;
+        const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
+        if (notable) {
+          await appendRunLog(
+            { ...message.patch, tabId: job.sourceTabId ?? job.tabId },
+            {
+              level: 'info',
+              code: message.patch?.boundaryReached
+                ? 'BOUNDARY_REACHED'
+                : message.patch?.anchorReached
+                  ? 'RESUME_ANCHOR_REACHED'
+                  : 'PHASE_CHANGED',
+              message: message.patch?.message || '',
+              phase: message.patch?.phase || job.phase,
+              count: Number(message.patch?.count || 0)
+            }
+          );
+        } else {
+          await setJob({ ...message.patch, tabId: job.sourceTabId ?? job.tabId });
+        }
         return { ok: true };
       }
       case 'ARCHIVER_PHYSICAL_SCROLL': {
@@ -756,6 +835,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           buildPlainText(draft, settings, { includeHeader: true })
         );
         return { ok: true, count: draft.messages?.length || 0 };
+      }
+      case 'ARCHIVER_COPY_RUN_LOG': {
+        const job = await getJob();
+        const text = formatRunLog(job);
+        await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
+        return { ok: true };
       }
       case 'ARCHIVER_CAPTURE_COMPLETE':
         await handleCaptureComplete(message);
