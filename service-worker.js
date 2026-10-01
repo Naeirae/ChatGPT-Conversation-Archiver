@@ -1,3 +1,23 @@
+import {
+  externalMatchSignature,
+  exportTailSignatures,
+  findExportTailAnchor,
+  hashText,
+  messageSignature,
+  normalizeDisplayText,
+  normalizeMatchText
+} from './lib/text.mjs';
+
+import {
+  conversationKey,
+  googleDocKey,
+  googleDocTabToken,
+  isChatGptHost,
+  isConversationUrl,
+  normalizeGoogleDocUrl,
+  parseUrl
+} from './lib/urls.mjs';
+
 const LAST_ARCHIVE_KEY = 'lastArchiveId';
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const ARCHIVE_PREFIX = 'archive:';
@@ -13,97 +33,6 @@ async function getSettings() {
   return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-
-function hashText(text = '') {
-  let hash = 2166136261;
-  const value = String(text);
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
-}
-
-function normalizeDisplayText(text = '') {
-  return String(text)
-    .replace(/\u00a0/g, ' ')
-    .replace(/[\u200b-\u200d\ufeff]/g, '')
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map(line => line.replace(/[ \t]+$/g, ''))
-    .join('\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function normalizeMatchText(text = '') {
-  return normalizeDisplayText(text)
-    .split('\n')
-    .map(line => line
-      .replace(/^\s*(?:[-*•▪◦]|\d+[.)])\s+/u, '')
-      .trim())
-    .filter(Boolean)
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function messageSignature(role, text = '') {
-  return String(role || 'unknown') + ':' + hashText(normalizeMatchText(text));
-}
-
-function externalMatchSignature(role, text = '') {
-  const normalized = normalizeMatchText(text);
-  return String(role || 'unknown') + ':p:' + hashText(normalized.slice(0, 240));
-}
-
-
-function parseUrl(url = '') {
-  try { return new URL(url); } catch (_) { return null; }
-}
-
-function isChatGptHost(url = '') {
-  const parsed = parseUrl(url);
-  return Boolean(parsed && /^https:$/.test(parsed.protocol) &&
-    (parsed.hostname === 'chatgpt.com' || parsed.hostname === 'chat.openai.com'));
-}
-
-function isConversationUrl(url = '') {
-  const parsed = parseUrl(url);
-  if (!parsed || !isChatGptHost(url)) return false;
-  if (/(?:^|\/)c\/[^/]+(?:\/|$)/.test(parsed.pathname)) return true;
-  if (parsed.searchParams.has('conversationId') && parsed.searchParams.get('conversationId')) return true;
-  return false;
-}
-
-function conversationKey(url = '') {
-  const parsed = parseUrl(url);
-  if (!parsed || !isChatGptHost(url)) return '';
-  const match = parsed.pathname.match(/(?:^|\/)c\/([^/]+)(?:\/|$)/);
-  const id = match?.[1] || parsed.searchParams.get('conversationId') || '';
-  return id ? parsed.hostname + ':' + id : '';
-}
-
-function googleDocKey(url = '') {
-  const parsed = parseUrl(url);
-  if (!parsed || parsed.hostname !== 'docs.google.com') return '';
-  const match = parsed.pathname.match(/\/document\/d\/([^/]+)/);
-  return match?.[1] || '';
-}
-
-function googleDocTabToken(url = '') {
-  const parsed = parseUrl(url);
-  if (!parsed) return '';
-  return parsed.searchParams.get('tab') || 't.0';
-}
-
-function normalizeGoogleDocUrl(url = '') {
-  const parsed = parseUrl(String(url).trim());
-  if (!parsed || parsed.protocol !== 'https:' || parsed.hostname !== 'docs.google.com') return '';
-  const docId = googleDocKey(parsed.href);
-  if (!docId) return '';
-  return parsed.href;
-}
 
 function makeCaptureError(code, message) {
   const error = new Error(message);
@@ -1482,31 +1411,6 @@ async function pasteArchiveIntoGoogleDoc(
     imageFailedCount,
     failedImages
   };
-}
-
-function exportTailSignatures(messages = [], limit = 4) {
-  return messages
-    .filter(item => normalizeMatchText(item?.text || ''))
-    .slice(-limit)
-    .map(item => messageSignature(item.role, item.text));
-}
-
-function findExportTailAnchor(messages = [], tailSignatures = []) {
-  const tail = (tailSignatures || []).filter(Boolean);
-  if (tail.length < 2) return -1;
-
-  const signatures = messages.map(item => messageSignature(item.role, item.text));
-  for (let start = signatures.length - tail.length; start >= 0; start--) {
-    let same = true;
-    for (let offset = 0; offset < tail.length; offset++) {
-      if (signatures[start + offset] !== tail[offset]) {
-        same = false;
-        break;
-      }
-    }
-    if (same) return start + tail.length - 1;
-  }
-  return -1;
 }
 
 async function recordDocExport(conversation, docUrl) {
