@@ -573,12 +573,25 @@
 
       const size = imageSize(img);
       const index = images.length;
+      const pos = img.compareDocumentPosition(root);
+      const placement = root.contains(img)
+        ? 'inline'
+        : (pos & Node.DOCUMENT_POSITION_FOLLOWING)
+          ? 'before'
+          : 'after';
+
       const item = {
         index,
         src,
         alt: img.getAttribute('alt') || '',
         width: size.width || null,
-        height: size.height || null
+        height: size.height || null,
+        placement,
+        mimeType: '',
+        byteSize: 0,
+        dataUrl: '',
+        binaryStatus: 'pending',
+        binaryError: ''
       };
       images.push(item);
 
@@ -590,7 +603,6 @@
       const html = '<p data-archiver-attachment="true"><img src="' + escapedSrc +
         '" alt="' + escapedAlt + '" data-archiver-image-index="' + index + '"></p>';
 
-      const pos = img.compareDocumentPosition(root);
       if (pos & Node.DOCUMENT_POSITION_FOLLOWING) extraBefore.push(html);
       else extraAfter.push(html);
     });
@@ -622,6 +634,118 @@
       reasoningLabel: reasoning.label,
       reasoningCount: reasoning.count
     };
+  }
+
+  async function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function normalizeImageBlob(blob) {
+    if (!blob || !blob.size) throw new Error('Пустой файл изображения.');
+    if (blob.size > 12 * 1024 * 1024) {
+      throw new Error('Изображение больше 12 МБ; бинарная вставка пропущена.');
+    }
+
+    // PNG is the most predictable clipboard format in Chromium. Convert when
+    // possible; if decoding fails, preserve the original image blob.
+    try {
+      const bitmap = await createImageBitmap(blob);
+      const maxSide = 4096;
+      const scale = Math.min(1, maxSide / Math.max(bitmap.width || 1, bitmap.height || 1));
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Canvas 2D недоступен.');
+      ctx.drawImage(bitmap, 0, 0, width, height);
+      bitmap.close?.();
+      const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      if (pngBlob?.size) return pngBlob;
+    } catch (_) {}
+
+    if (!String(blob.type || '').startsWith('image/')) {
+      throw new Error('Полученный ресурс не является изображением.');
+    }
+    return blob;
+  }
+
+  async function fetchImageBinary(image) {
+    if (!image?.src) throw new Error('У изображения нет src.');
+
+    if (/^data:image\//i.test(image.src)) {
+      const response = await fetch(image.src);
+      return normalizeImageBlob(await response.blob());
+    }
+
+    const response = await fetch(image.src, {
+      credentials: 'include',
+      cache: 'force-cache'
+    });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    return normalizeImageBlob(await response.blob());
+  }
+
+  async function hydrateMessageImages(messages) {
+    const unique = new Map();
+    for (const message of messages || []) {
+      for (const image of message.images || []) {
+        if (!image?.src) continue;
+        if (!unique.has(image.src)) unique.set(image.src, []);
+        unique.get(image.src).push(image);
+      }
+    }
+
+    let embedded = 0;
+    let failed = 0;
+    let processed = 0;
+    const total = unique.size;
+
+    for (const [src, refs] of unique) {
+      if (state.cancel) throw new Error('Сбор отменен.');
+
+      try {
+        const blob = await fetchImageBinary(refs[0]);
+        const dataUrl = await blobToDataUrl(blob);
+        for (const image of refs) {
+          image.dataUrl = dataUrl;
+          image.mimeType = blob.type || 'image/png';
+          image.byteSize = blob.size || 0;
+          image.binaryStatus = 'ready';
+          image.binaryError = '';
+        }
+        embedded += refs.length;
+      } catch (error) {
+        const message = error?.message || String(error);
+        for (const image of refs) {
+          image.binaryStatus = 'failed';
+          image.binaryError = message;
+        }
+        failed += refs.length;
+      }
+
+      processed++;
+      await progress(
+        'Этап 3/3: забираю изображения · ' + processed + '/' + total,
+        messages.length,
+        {
+          phase: 'finalizing',
+          imageBinaryProcessed: processed,
+          imageBinaryTotal: total,
+          imageBinaryReady: embedded,
+          imageBinaryFailed: failed,
+          force: true
+        }
+      );
+    }
+
+    return { embedded, failed, unique: total };
   }
 
   async function expandVisible() {
@@ -1016,12 +1140,22 @@
         messages = existing.messages.concat(delta);
       }
 
+      const binaryTargetMessages = mode === 'full'
+        ? messages
+        : messages.slice(Math.max(0, messages.length - addedCount));
+      const binaryStats = await hydrateMessageImages(binaryTargetMessages);
+
+      const allImages = messages.flatMap(item => item.images || []);
       const conversation = {
         title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
         sourceUrl: location.href,
         capturedAt: new Date().toISOString(),
         messages,
-        imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+        imageCount: allImages.length,
+        imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
+        imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length,
+        lastImageBinaryReady: binaryStats.embedded,
+        lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
         lastCaptureAddedCount: addedCount,
         previousMessageCount: previousCount,
