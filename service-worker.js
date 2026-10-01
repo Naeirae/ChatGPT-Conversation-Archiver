@@ -10,6 +10,195 @@ async function getSettings() {
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+
+function parseUrl(url = '') {
+  try { return new URL(url); } catch (_) { return null; }
+}
+
+function isChatGptHost(url = '') {
+  const parsed = parseUrl(url);
+  return Boolean(parsed && /^https:$/.test(parsed.protocol) &&
+    (parsed.hostname === 'chatgpt.com' || parsed.hostname === 'chat.openai.com'));
+}
+
+function isConversationUrl(url = '') {
+  const parsed = parseUrl(url);
+  if (!parsed || !isChatGptHost(url)) return false;
+  if (/(?:^|\\/)c\\/[^/]+(?:\\/|$)/.test(parsed.pathname)) return true;
+  if (parsed.searchParams.has('conversationId') && parsed.searchParams.get('conversationId')) return true;
+  return false;
+}
+
+function makeCaptureError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+async function inspectAndKickScroll(tabId) {
+  let attached = false;
+  try {
+    const targets = await chrome.debugger.getTargets();
+    const target = targets.find(item => item.tabId === tabId);
+    if (target?.attached) {
+      throw makeCaptureError(
+        'DEBUGGER_BUSY',
+        'Chrome уже использует отладчик этой вкладки. Если открыты DevTools, закройте их и повторите запуск.'
+      );
+    }
+
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+
+    const locationResult = await chrome.debugger.sendCommand(
+      { tabId },
+      'Runtime.evaluate',
+      {
+        expression: `({
+          href: location.href,
+          origin: location.origin,
+          pathname: location.pathname,
+          readyState: document.readyState
+        })`,
+        returnByValue: true
+      }
+    );
+
+    const page = locationResult?.result?.value || {};
+    if (!isChatGptHost(page.href)) {
+      throw makeCaptureError(
+        'WRONG_SITE',
+        'Откройте ChatGPT в активной вкладке.'
+      );
+    }
+
+    if (!isConversationUrl(page.href)) {
+      throw makeCaptureError(
+        'NOT_CONVERSATION',
+        'Убедитесь, что в активной вкладке открыт диалог ChatGPT.'
+      );
+    }
+
+    const scrollExpression = `(() => {
+      const JOB = '__CHATGPT_ARCHIVER_BACKGROUND_SCROLL__';
+      const existing = window[JOB];
+      if (existing?.running) return { started: false, alreadyRunning: true, rootFound: existing.rootFound };
+
+      const isScrollable = (el) => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        return /(auto|scroll|overlay)/.test(style.overflowY) &&
+          el.scrollHeight > el.clientHeight + 40;
+      };
+
+      const hasConversation = (el) => {
+        if (!(el instanceof Element)) return false;
+        return Boolean(el.querySelector(
+          '[data-message-author-role], [data-testid^="conversation-turn-"], [data-turn-key]'
+        ));
+      };
+
+      const findRoots = () => {
+        const candidates = [
+          document.scrollingElement,
+          document.documentElement,
+          ...document.querySelectorAll('main, [class*="overflow-y-auto"], [class*="overflow-auto"]')
+        ].filter(Boolean);
+
+        const unique = [...new Set(candidates)];
+        const conversationRoots = unique.filter(el => isScrollable(el) && hasConversation(el));
+        if (conversationRoots.length) {
+          return conversationRoots.sort(
+            (a, b) => (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
+          );
+        }
+
+        return unique.filter(isScrollable).sort(
+          (a, b) => (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+        );
+      };
+
+      const roots = findRoots();
+      const rootFound = roots.length > 0;
+
+      window[JOB] = {
+        running: true,
+        startedAt: Date.now(),
+        rootFound
+      };
+
+      (async () => {
+        let stable = 0;
+        let previous = '';
+        for (let i = 0; i < 120 && stable < 5; i++) {
+          const currentRoots = findRoots();
+          window.scrollTo(0, 0);
+          currentRoots.forEach(root => {
+            root.scrollTop = 0;
+            try { root.scrollTo({ top: 0, behavior: 'auto' }); } catch (_) {}
+          });
+
+          await new Promise(resolve => setTimeout(resolve, 220));
+
+          const signature = currentRoots.map(root =>
+            root.scrollTop + ':' + root.scrollHeight + ':' + root.clientHeight
+          ).join('|');
+
+          if (signature && signature === previous) stable++;
+          else stable = 0;
+          previous = signature;
+
+          if (currentRoots.length === 0) stable = 0;
+        }
+
+        const finalRoots = findRoots();
+        window[JOB] = {
+          ...window[JOB],
+          running: false,
+          finishedAt: Date.now(),
+          rootFound: finalRoots.length > 0,
+          finalTop: finalRoots.length ? Math.min(...finalRoots.map(root => Math.round(root.scrollTop))) : 0
+        };
+      })();
+
+      return {
+        started: true,
+        alreadyRunning: false,
+        rootFound
+      };
+    })()`;
+
+    const scrollResult = await chrome.debugger.sendCommand(
+      { tabId },
+      'Runtime.evaluate',
+      {
+        expression: scrollExpression,
+        returnByValue: true,
+        awaitPromise: false
+      }
+    );
+
+    return {
+      ok: true,
+      href: page.href,
+      readyState: page.readyState,
+      scroll: scrollResult?.result?.value || null
+    };
+  } catch (error) {
+    if (error?.code) throw error;
+    const raw = String(error?.message || error);
+    if (/debugger|attach|target/i.test(raw)) {
+      throw makeCaptureError(
+        'DEBUGGER_ERROR',
+        'Не удалось подключиться к отладчику вкладки. Если открыты DevTools, закройте их и повторите запуск.'
+      );
+    }
+    throw error;
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
 function isChatGptUrl(url = '') {
   return /^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(url);
 }
@@ -85,9 +274,7 @@ async function ensureChatGptContentScript(tabId, jobId) {
 
 async function startCapture() {
   const tab = await getActiveTab();
-  if (!tab?.id || !isChatGptUrl(tab.url)) throw new Error('Откройте нужную переписку ChatGPT в активной вкладке.');
-  if (tab.discarded) throw new Error('Вкладка ChatGPT сейчас выгружена из памяти. Откройте ее и повторите запуск.');
-  if (tab.frozen) throw new Error('Вкладка ChatGPT сейчас заморожена. Активируйте ее и повторите запуск.');
+  if (!tab?.id) throw new Error('Не удалось определить активную вкладку.');
 
   const current = await getJob();
   if (current && ['starting', 'running'].includes(current.status)) {
@@ -95,23 +282,31 @@ async function startCapture() {
     throw new Error('Другой сбор переписки уже выполняется.');
   }
 
+  // The debugger reads the live page URL, distinguishes ChatGPT from a non-chat
+  // page, and kicks off the top-scroll before the content script starts collecting.
+  const inspection = await inspectAndKickScroll(tab.id);
+
+  if (tab.discarded) throw new Error('Вкладка ChatGPT сейчас выгружена из памяти. Откройте ее и повторите запуск.');
+  if (tab.frozen) throw new Error('Вкладка ChatGPT сейчас заморожена. Активируйте ее и повторите запуск.');
+
   const jobId = makeJobId();
   const job = await setJob({
     jobId,
     tabId: tab.id,
     status: 'starting',
-    phase: 'starting',
-    message: 'Запускаю фоновый сбор…',
+    phase: 'top',
+    message: 'Прокручиваю диалог к началу в фоне…',
     count: 0,
     imageCount: 0,
     startedAt: Date.now(),
-    previousAutoDiscardable: tab.autoDiscardable
+    previousAutoDiscardable: tab.autoDiscardable,
+    debugUrl: inspection.href
   });
 
   if (tab.autoDiscardable !== false) await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
   try {
     await ensureChatGptContentScript(tab.id, jobId);
-    await setJob({ status: 'running', message: 'Сбор идет в фоне…', phase: 'starting' });
+    await setJob({ status: 'running', message: 'Сбор идет в фоне…', phase: 'top' });
     return { ok: true, job: await getJob() };
   } catch (error) {
     await finishJobWithError(jobId, tab.id, error?.message || String(error));
