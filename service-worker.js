@@ -1,6 +1,8 @@
 const LAST_ARCHIVE_KEY = 'lastArchiveId';
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const ARCHIVE_PREFIX = 'archive:';
+const ARCHIVE_INDEX_KEY = 'archiveIndex';
+const DOC_EXPORTS_KEY = 'docExports';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
@@ -27,6 +29,21 @@ function isConversationUrl(url = '') {
   if (/(?:^|\/)c\/[^/]+(?:\/|$)/.test(parsed.pathname)) return true;
   if (parsed.searchParams.has('conversationId') && parsed.searchParams.get('conversationId')) return true;
   return false;
+}
+
+function conversationKey(url = '') {
+  const parsed = parseUrl(url);
+  if (!parsed || !isChatGptHost(url)) return '';
+  const match = parsed.pathname.match(/(?:^|\/)c\/([^/]+)(?:\/|$)/);
+  const id = match?.[1] || parsed.searchParams.get('conversationId') || '';
+  return id ? parsed.hostname + ':' + id : '';
+}
+
+function googleDocKey(url = '') {
+  const parsed = parseUrl(url);
+  if (!parsed || parsed.hostname !== 'docs.google.com') return '';
+  const match = parsed.pathname.match(/\/document\/d\/([^/]+)/);
+  return match?.[1] || '';
 }
 
 function makeCaptureError(code, message) {
@@ -119,7 +136,10 @@ function summarize(conversation) {
     sourceUrl: conversation.sourceUrl,
     capturedAt: conversation.capturedAt,
     messageCount: conversation.messages?.length || 0,
-    imageCount: conversation.imageCount || 0
+    imageCount: conversation.imageCount || 0,
+    lastCaptureAddedCount: conversation.lastCaptureAddedCount || 0,
+    lastCaptureMode: conversation.lastCaptureMode || 'full',
+    lastMessageId: conversation.lastMessageId || conversation.messages?.[conversation.messages.length - 1]?.id || ''
   };
 }
 
@@ -156,6 +176,22 @@ async function getArchive(id) {
 async function getLastArchive() {
   const result = await chrome.storage.local.get(LAST_ARCHIVE_KEY);
   return getArchive(result[LAST_ARCHIVE_KEY]);
+}
+
+async function getArchiveForUrl(url = '') {
+  const key = conversationKey(url);
+  if (!key) return null;
+  const result = await chrome.storage.local.get(ARCHIVE_INDEX_KEY);
+  const index = result[ARCHIVE_INDEX_KEY] || {};
+  return getArchive(index[key]);
+}
+
+async function indexArchive(conversation) {
+  const key = conversationKey(conversation?.sourceUrl || '');
+  if (!key || !conversation?.id) return;
+  const result = await chrome.storage.local.get(ARCHIVE_INDEX_KEY);
+  const index = { ...(result[ARCHIVE_INDEX_KEY] || {}), [key]: conversation.id };
+  await chrome.storage.local.set({ [ARCHIVE_INDEX_KEY]: index });
 }
 
 function makeJobId() {
