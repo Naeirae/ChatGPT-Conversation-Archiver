@@ -39,6 +39,18 @@ Run the same gate locally with:
 node scripts/verify.mjs
 ```
 
+## Packaging
+
+Create a clean unpacked-extension directory with:
+
+```bash
+node scripts/package.mjs
+```
+
+The output is `dist/extension`. It contains only runtime files required by Chrome; updater scripts, tests and project documentation are not part of the packaged extension.
+
+GitHub Actions builds the same directory and publishes it as the `chatgpt-conversation-archiver` workflow artifact after verification passes. This is the first step toward versioned releases / Chrome Web Store distribution without changing the current developer updater.
+
 ## Manual smoke matrix
 
 Before calling a release live-verified, test at least:
