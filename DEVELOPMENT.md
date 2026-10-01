@@ -72,7 +72,9 @@ Before calling a release live-verified, test at least:
 - image-only message export;
 - mixed text + image export;
 - cancellation and one forced failure;
-- updater once, then updater again when already current.
+- quiet updater launcher once, then again when already current;
+- one forced updater failure to confirm the launcher offers `updater-last.log`;
+- diagnostic `update.cmd` fallback once.
 
 Record which layer was actually tested. A green CI run is not a substitute for a browser live test.
 
@@ -90,7 +92,7 @@ Bug fixes should not be described as "working" until the relevant live layer has
 
 ## Update/distribution strategy
 
-The current `update.cmd` + `update.ps1` pair exists for local unpacked development installs.
+The current updater engine is still `update.ps1` for local unpacked installs. The user-facing Windows entry point is `Обновить ChatGPT Archiver.vbs`, which runs that engine quietly; `update.cmd` remains the diagnostic fallback when console output is useful.
 
 Long term, the simpler end-user path is:
 
