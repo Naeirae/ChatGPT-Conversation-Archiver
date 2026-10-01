@@ -59,7 +59,9 @@ The first prototype does the following:
 
 ### Images
 
-Image URLs and their positions are captured. In `0.1.0`, Google Docs receives them through the rich HTML clipboard, so image insertion is **best effort**. Authenticated/blob images may not survive the paste yet. A dedicated image-blob pipeline is planned after the basic text/formatting round-trip is proven.
+Image discovery is message-level rather than text-root-only: the collector also inspects attachment images rendered as siblings inside the same virtualized turn wrapper. Tiny avatars/icons are filtered out. Image URLs and approximate positions are stored with the archive and included in the rich HTML export.
+
+Google Docs still receives images through rich HTML paste, so insertion remains **best effort** for authenticated/blob URLs. If a detected image URL cannot survive clipboard paste, a dedicated image-blob pipeline is the next layer to add.
 
 ## Install locally
 
@@ -91,7 +93,7 @@ The MVP stores the captured conversation locally in the browser extension profil
 
 - ChatGPT DOM selectors can change.
 - Very long conversations may be virtualized/lazy-loaded differently and need additional traversal logic.
-- Google Docs is not a normal contenteditable DOM; export intentionally uses physical UI interaction rather than a private Docs API.
+- Google Docs is not a normal contenteditable DOM; export intentionally uses physical UI interaction rather than a private Docs API. The rich clipboard fragment is prepared in the extension offscreen document with selection + `document.execCommand('copy')`, then Chrome Debugger focuses the Docs editor and sends the physical paste shortcut.
 - Rich clipboard image behavior differs by image URL/authentication method.
 
 ## License
