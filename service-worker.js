@@ -8,13 +8,9 @@ import {
 } from './lib/archive-store.mjs';
 
 import {
-  externalMatchSignature,
-  exportTailSignatures,
   findExportTailAnchor,
   hashText,
-  messageSignature,
-  normalizeDisplayText,
-  normalizeMatchText
+  messageSignature
 } from './lib/text.mjs';
 
 import {
@@ -23,8 +19,7 @@ import {
   googleDocTabToken,
   isChatGptHost,
   isConversationUrl,
-  normalizeGoogleDocUrl,
-  parseUrl
+  normalizeGoogleDocUrl
 } from './lib/urls.mjs';
 
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
