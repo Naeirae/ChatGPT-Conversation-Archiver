@@ -3,16 +3,23 @@
   if (window.__CHATGPT_ARCHIVER_LOADED__ === EXTENSION_VERSION) return;
   window.__CHATGPT_ARCHIVER_LOADED__ = EXTENSION_VERSION;
 
-  const TURN_SELECTOR = [
+  const ROLE_SELECTOR = [
+    '[data-message-author-role="user"]',
+    '[data-message-author-role="assistant"]',
+    '[data-role="user"]',
+    '[data-role="assistant"]',
+    '[data-message-author="user"]',
+    '[data-message-author="assistant"]'
+  ].join(',');
+  const TURN_SHELL_SELECTOR = [
     'section[data-turn="user"]',
     'section[data-turn="assistant"]',
     'article[data-turn="user"]',
     'article[data-turn="assistant"]',
     '[data-testid^="conversation-turn-"]',
-    '[data-message-author-role="user"]',
-    '[data-message-author-role="assistant"]'
+    '[data-turn-key]'
   ].join(',');
-  const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
+  const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = { running: false, jobId: null, cancel: false };
@@ -41,22 +48,52 @@
     catch (_) { return value || ''; }
   }
 
+  function isVisible(node) {
+    if (!(node instanceof Element) || !node.isConnected) return false;
+    const style = getComputedStyle(node);
+    return style.display !== 'none' && style.visibility !== 'hidden' && node.getClientRects().length > 0;
+  }
+
+  const visible = isVisible;
+
+  function getRoleNodes() {
+    const nodes = [...document.querySelectorAll(ROLE_SELECTOR)]
+      .filter(isVisible)
+      .filter(node => !node.parentElement?.closest(ROLE_SELECTOR));
+    return nodes;
+  }
+
   function getTurn(node) {
     return node.closest('[data-testid^="conversation-turn-"]') ||
       node.closest('section[data-turn]') ||
       node.closest('article[data-turn]') ||
-      node.closest('article') || node;
+      node.closest('[data-turn-key]') ||
+      node;
   }
 
   function orderedTurns() {
     const result = [];
     const seen = new Set();
-    document.querySelectorAll(TURN_SELECTOR).forEach(node => {
+
+    // Prefer a real turn shell when one exists.
+    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(shell => {
+      const role = roleOf(shell);
+      const hasRoleChild = shell.matches(ROLE_SELECTOR) || shell.querySelector(ROLE_SELECTOR);
+      if (!hasRoleChild && !role) return;
+      if (seen.has(shell)) return;
+      seen.add(shell);
+      result.push(shell);
+    });
+
+    // Current ChatGPT rollouts may have no article/section turn shell at all.
+    // In that case the role-bearing node itself is the message container.
+    getRoleNodes().forEach(node => {
       const turn = getTurn(node);
       if (seen.has(turn)) return;
       seen.add(turn);
       result.push(turn);
     });
+
     return result.sort((a, b) => {
       const pos = a.compareDocumentPosition(b);
       if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
@@ -65,22 +102,60 @@
     });
   }
 
+  async function waitForTurns(timeout = 10000) {
+    const started = Date.now();
+    while (Date.now() - started < timeout) {
+      const turns = orderedTurns();
+      if (turns.length) return turns;
+      await sleep(250);
+    }
+    return [];
+  }
+
   function roleOf(turn) {
     const roleNode = turn.matches(ROLE_SELECTOR) ? turn : turn.querySelector(ROLE_SELECTOR);
-    const role = roleNode && roleNode.getAttribute('data-message-author-role');
+    const role =
+      roleNode?.getAttribute('data-message-author-role') ||
+      roleNode?.getAttribute('data-role') ||
+      roleNode?.getAttribute('data-message-author');
     if (role === 'user' || role === 'assistant') return role;
     const dataTurn = turn.getAttribute('data-turn');
-    return dataTurn === 'user' || dataTurn === 'assistant' ? dataTurn : null;
+    if (dataTurn === 'user' || dataTurn === 'assistant') return dataTurn;
+    return null;
   }
 
   function findScrollContainer(turn) {
     let el = turn && turn.parentElement;
     while (el && el !== document.body && el !== document.documentElement) {
       const style = getComputedStyle(el);
-      if (/(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 20) return el;
+      if (/(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 80) return el;
       el = el.parentElement;
     }
-    return document.scrollingElement || document.documentElement;
+
+    const candidates = [
+      document.scrollingElement,
+      document.documentElement,
+      ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
+    ].filter((candidate, index, all) =>
+      candidate &&
+      all.indexOf(candidate) === index &&
+      candidate instanceof Element
+    ).filter(candidate => {
+      const style = getComputedStyle(candidate);
+      return /(auto|scroll|overlay)/.test(style.overflowY) &&
+        candidate.scrollHeight > candidate.clientHeight + 80;
+    });
+
+    const containing = candidates.filter(candidate => candidate.contains(turn));
+    if (containing.length) {
+      return containing.sort((a, b) =>
+        (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
+      )[0];
+    }
+
+    return candidates.sort((a, b) =>
+      (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+    )[0] || document.scrollingElement || document.documentElement;
   }
 
 
@@ -333,8 +408,13 @@
     try {
       const settings = await getSettings();
       await progress('Подготовка фонового сбора…', 0, { phase: 'starting', force: true });
-      const firstTurn = orderedTurns()[0];
-      if (!firstTurn) throw new Error('Не найден контейнер переписки. Возможно, ChatGPT еще не загрузил сообщения.');
+      const turns = await waitForTurns(10000);
+      const firstTurn = turns[0];
+      if (!firstTurn) {
+        const roleCount = document.querySelectorAll(ROLE_SELECTOR).length;
+        const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
+        throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
+      }
       scroller = findScrollContainer(firstTurn);
       originalScrollTop = scroller.scrollTop;
       await reachTop(scroller, map, order, jobId, settings);
