@@ -381,7 +381,15 @@ async function startCapture({ mode = 'full' } = {}) {
       captureTabId: captureTab?.id || null,
       status: 'error',
       message: error?.message || String(error),
-      finishedAt: Date.now()
+      finishedAt: Date.now(),
+      log: [{
+        at: Date.now(),
+        level: 'error',
+        code: 'START_FAILED',
+        message: error?.message || String(error),
+        phase: 'starting',
+        count: 0
+      }]
     });
     throw error;
   }
@@ -401,11 +409,17 @@ async function cancelCapture() {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
 
-  const next = await setJob({
+  const next = await appendRunLog({
     status: 'cancelled',
     message: 'Сбор отменен.',
     finishedAt: Date.now(),
     captureTabId: null
+  }, {
+    level: 'warn',
+    code: 'RUN_CANCELLED',
+    message: 'Сбор отменен пользователем.',
+    phase: job.phase || '',
+    count: Number(job.count || 0)
   });
   return { ok: true, job: next };
 }
@@ -418,7 +432,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
 
-  await setJob({
+  await appendRunLog({
     status,
     message,
     draftId,
@@ -426,6 +440,14 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     finishedAt: Date.now(),
     tabId: sourceTabId ?? job.sourceTabId ?? job.tabId,
     captureTabId: null
+  }, {
+    level: status === 'cancelled' ? 'warn' : 'error',
+    code: draftId ? 'RUN_FAILED_WITH_DRAFT' : 'RUN_FAILED',
+    message: draftId
+      ? ('Сбор завершился ошибкой; сохранен черновик на ' + Number(draftCount || 0) + ' сообщений.')
+      : message,
+    phase: job.phase || '',
+    count: Number(job.count || 0)
   });
 }
 
