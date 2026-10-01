@@ -305,8 +305,29 @@ async function indexArchive(conversation) {
 async function getLinkedDoc(chatUrl = '') {
   const key = conversationKey(chatUrl);
   if (!key) return null;
-  const result = await chrome.storage.local.get(DOC_LINKS_KEY);
-  return (result[DOC_LINKS_KEY] || {})[key] || null;
+
+  const result = await chrome.storage.local.get([DOC_LINKS_KEY, DOC_EXPORTS_KEY]);
+  const direct = (result[DOC_LINKS_KEY] || {})[key] || null;
+  if (direct) return direct;
+
+  // Backward compatibility: versions before linked-doc state stored only
+  // docId -> conversationKey in docExports. Recover that relationship so an
+  // already exported document can immediately become the Continue target.
+  const exports = result[DOC_EXPORTS_KEY] || {};
+  for (const [docId, entry] of Object.entries(exports)) {
+    if (entry?.conversationKey !== key) continue;
+    const recovered = {
+      url: entry.docUrl || ('https://docs.google.com/document/d/' + docId + '/edit'),
+      docId,
+      lastMessageId: entry.lastMessageId || '',
+      recoveredFromLegacyExport: true,
+      updatedAt: Date.now()
+    };
+    await setLinkedDoc(chatUrl, recovered);
+    return recovered;
+  }
+
+  return null;
 }
 
 async function setLinkedDoc(chatUrl = '', docInfo = null) {
