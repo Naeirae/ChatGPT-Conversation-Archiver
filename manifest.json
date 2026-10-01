@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Архиватор ChatGPT",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Собирает полные переписки ChatGPT с форматированием и доступными изображениями и сохраняет их в Google Docs.",
   "permissions": [
     "activeTab",
