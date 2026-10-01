@@ -31,7 +31,10 @@ The current regression suite covers:
 - duplicate-safe tail recovery after message IDs change during a rebuild;
 - fail-closed behavior when a continuation tail is missing or too short;
 - ChatGPT conversation URL parsing;
-- Google Docs document/tab key parsing.
+- Google Docs document/tab key parsing;
+- archive indexing and legacy linked-document recovery;
+- duplicate-safe export metadata persistence;
+- multi-tab Google Docs baseline parsing, including empty trailing tabs and tails crossing a tab boundary.
 
 Run the same gate locally with:
 
