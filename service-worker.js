@@ -24,13 +24,27 @@ function hashText(text = '') {
   return (hash >>> 0).toString(16);
 }
 
-function normalizeMatchText(text = '') {
+function normalizeDisplayText(text = '') {
   return String(text)
     .replace(/\u00a0/g, ' ')
     .replace(/[\u200b-\u200d\ufeff]/g, '')
     .replace(/\r\n?/g, '\n')
-    .replace(/[ \t]+/g, ' ')
+    .split('\n')
+    .map(line => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
     .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizeMatchText(text = '') {
+  return normalizeDisplayText(text)
+    .split('\n')
+    .map(line => line
+      .replace(/^\s*(?:[-*•▪◦]|\d+[.)])\s+/u, '')
+      .trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
     .trim();
 }
 
@@ -958,7 +972,7 @@ function googleDocMarkerRole(line = '') {
 }
 
 function plainMessageHtml(text = '') {
-  return normalizeMatchText(text)
+  return normalizeDisplayText(text)
     .split(/\n{2,}/)
     .map(part => '<p>' + escapeHtml(part).replace(/\n/g, '<br>') + '</p>')
     .join('');
@@ -971,7 +985,7 @@ function parseGoogleDocTabMessages(text = '', tabUrl = '', tabIndex = 0) {
 
   const flush = () => {
     if (!current) return;
-    const body = normalizeMatchText(current.lines.join('\n'));
+    const body = normalizeDisplayText(current.lines.join('\n'));
     messages.push({
       id: 'doc:' + tabIndex + ':' + messages.length + ':' + hashText(messageSignature(current.role, body)),
       role: current.role,
