@@ -2,6 +2,15 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.18
+
+- add a manual Google Docs tab export plan based on archive message numbers;
+- create additional Google Docs document tabs through physical UI interaction;
+- allow topic subheadings inside a tab with `N | подзаголовок | Тема`;
+- add a numbered message-map clipboard helper so tab boundaries can be chosen without guessing;
+- keep later continuation linked to the final tab of the exported document;
+- add pure parser/section-planner regression tests.
+
 ## 0.3.17
 
 - extract archive/link persistence into an injected storage adapter;
