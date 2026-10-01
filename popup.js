@@ -8,7 +8,8 @@ const DEFAULT_SETTINGS = {
   palette: 'ocean',
   alignUserRight: true,
   includeReasoning: false,
-  captureTarget: 'copy'
+  captureTarget: 'copy',
+  tabPlan: ''
 };
 
 const PHASE_LABELS = {
@@ -147,6 +148,8 @@ function render(data) {
   // local archive. Export is disabled only while a capture is actively running.
   $('newDoc').disabled = Boolean(running || !archive);
   $('activeDoc').disabled = Boolean(running || !archive);
+  $('copyMessageMap').disabled = Boolean(running || !archive);
+  $('tabbedDoc').disabled = Boolean(running || !archive);
 
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
@@ -189,8 +192,8 @@ function startPolling() {
   pollTimer = setInterval(() => getState().catch(() => {}), 650);
 }
 
-async function exportToDoc(type) {
-  const result = await chrome.runtime.sendMessage({ type });
+async function exportToDoc(type, payload = {}) {
+  const result = await chrome.runtime.sendMessage({ type, ...payload });
   if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить в Google Docs.');
   return result;
 }
@@ -385,6 +388,41 @@ $('copyRunLog').onclick = async () => {
 };
 
 
+$('copyMessageMap').onclick = async () => {
+  $('copyMessageMap').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_COPY_MESSAGE_MAP' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать карту реплик.');
+    setStatus('Карта реплик скопирована: ' + (result.count || 0) + ' сообщений с номерами.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('copyMessageMap').disabled = Boolean(!state?.archive);
+  }
+};
+
+$('tabbedDoc').onclick = async () => {
+  $('tabbedDoc').disabled = true;
+  setStatus('Создаю Google Doc и раскладываю архив по вкладкам…');
+  try {
+    const result = await exportToDoc('ARCHIVER_EXPORT_TABBED_NEW_DOC', {
+      planText: $('tabPlan').value
+    });
+    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
+      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+      : '';
+    setStatus(
+      `Готово: ${result.tabCount || 1} вкладок, ${result.headingCount || 0} подзаголовков, ${result.addedCount || 0} сообщений.` +
+      imagePart +
+      ' Названия вкладок можно переименовать вручную в Google Docs.'
+    );
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('tabbedDoc').disabled = Boolean(!state?.archive);
+  }
+};
+
 $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
   setStatus('Открываю Google Docs и вставляю переписку…');
@@ -430,6 +468,7 @@ $('userName').oninput = e => saveSettings({ userName: e.target.value });
 $('assistantName').oninput = e => saveSettings({ assistantName: e.target.value });
 $('alignUserRight').onchange = e => saveSettings({ alignUserRight: e.target.checked });
 $('includeReasoning').onchange = e => saveSettings({ includeReasoning: e.target.checked });
+$('tabPlan').oninput = e => saveSettings({ tabPlan: e.target.value });
 $('captureTarget').onchange = e => {
   updateCaptureTargetHint(e.target.value);
   saveSettings({ captureTarget: e.target.value });
@@ -443,6 +482,7 @@ $('palette').onchange = e => saveSettings({ palette: e.target.value });
     $('assistantName').value = settings.assistantName;
     $('alignUserRight').checked = settings.alignUserRight;
     $('includeReasoning').checked = settings.includeReasoning;
+    $('tabPlan').value = settings.tabPlan || '';
     $('captureTarget').value = settings.captureTarget === 'current' ? 'current' : 'copy';
     updateCaptureTargetHint($('captureTarget').value);
     $('palette').value = settings.palette;
