@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Архиватор переписок ChatGPT",
-  "version": "0.2.0",
-  "description": "Собирает полные переписки ChatGPT с форматированием и изображениями и сохраняет их в Google Docs.",
+  "name": "Архиватор ChatGPT",
+  "version": "0.3.0",
+  "description": "Собирает полные переписки ChatGPT с форматированием и доступными изображениями и сохраняет их в Google Docs.",
   "permissions": [
     "activeTab",
     "tabs",
@@ -11,7 +11,6 @@
     "scripting",
     "debugger",
     "offscreen",
-    "clipboardRead",
     "clipboardWrite"
   ],
   "host_permissions": [
@@ -25,7 +24,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Архиватор переписок ChatGPT",
+    "default_title": "Архиватор ChatGPT",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
@@ -51,5 +50,6 @@
     "48": "icons/icon-48.png",
     "64": "icons/icon-64.png",
     "128": "icons/icon-128.png"
-  }
+  },
+  "homepage_url": "https://github.com/Naeirae/ChatGPT-Conversation-Archiver"
 }
