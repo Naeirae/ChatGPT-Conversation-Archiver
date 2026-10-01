@@ -963,6 +963,145 @@ async function copyCurrentGoogleDocTabText(tabId) {
   await dispatchKey(tabId, 'Escape', 'Escape', 27, 0).catch(() => {});
   return text;
 }
+async function googleDocsControlRect(tabId, mode = 'add-tab') {
+  const result = await cdp(tabId, 'Runtime.evaluate', {
+    expression: `(() => {
+      const mode = ${JSON.stringify(mode)};
+      const visible = el => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const r = el.getBoundingClientRect();
+        return r.width >= 8 && r.height >= 8 && r.bottom > 0 && r.right > 0;
+      };
+
+      const labelOf = el => [
+        el.getAttribute?.('aria-label') || '',
+        el.getAttribute?.('data-tooltip') || '',
+        el.getAttribute?.('title') || '',
+        el.textContent || ''
+      ].join(' ').replace(/\\s+/g, ' ').trim();
+
+      const controls = [...document.querySelectorAll(
+        'button,[role="button"],[role="menuitem"],[aria-label],[data-tooltip],[title]'
+      )].filter(visible);
+
+      let candidate = null;
+
+      if (mode === 'add-tab') {
+        const addPattern = /(?:добавить|создать).{0,24}вкладк|(?:add|new).{0,16}tab/i;
+        candidate = controls.find(el => addPattern.test(labelOf(el))) || null;
+
+        if (!candidate) {
+          const icon = [...document.querySelectorAll('.docs-icon-add-20x20')].find(visible);
+          candidate = icon?.closest('button,[role="button"]') || icon?.parentElement || null;
+        }
+      } else if (mode === 'tabs-panel') {
+        const panelPattern = /вкладк.{0,24}(?:документ|структур)|(?:document|show).{0,24}tabs|tabs.{0,24}(?:outline|document)/i;
+        candidate = controls.find(el => panelPattern.test(labelOf(el))) || null;
+      } else if (mode === 'add-tab-menuitem') {
+        const menuPattern = /^(?:добавить|создать) вкладк|^(?:add|new) tab/i;
+        candidate = controls.find(el => menuPattern.test(labelOf(el))) || null;
+      }
+
+      if (!candidate || !visible(candidate)) return null;
+      const r = candidate.getBoundingClientRect();
+      return {
+        x: r.left + r.width / 2,
+        y: r.top + r.height / 2,
+        label: labelOf(candidate),
+        tag: candidate.tagName || ''
+      };
+    })()`,
+    returnByValue: true
+  });
+
+  return result?.result?.value || null;
+}
+
+async function physicalClick(tabId, point) {
+  if (!point) return false;
+  await cdp(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  });
+  await cdp(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  });
+  await sleep(260);
+  return true;
+}
+
+async function createNextGoogleDocsTab(tabId) {
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    await sleep(500);
+
+    const before = await googleDocPageState(tabId);
+    const beforeToken = googleDocTabToken(before.href);
+
+    let addControl = await googleDocsControlRect(tabId, 'add-tab');
+    if (!addControl) {
+      const panelControl = await googleDocsControlRect(tabId, 'tabs-panel');
+      if (panelControl) {
+        await physicalClick(tabId, panelControl);
+        await sleep(450);
+        addControl = await googleDocsControlRect(tabId, 'add-tab');
+      }
+    }
+
+    if (!addControl) {
+      throw new Error(
+        'Не удалось найти кнопку добавления вкладки Google Docs. ' +
+        'Откройте панель «Вкладки в документе» и повторите экспорт.'
+      );
+    }
+
+    await physicalClick(tabId, addControl);
+    await sleep(350);
+
+    let state = await googleDocPageState(tabId);
+    if (googleDocTabToken(state.href) === beforeToken) {
+      const menuItem = await googleDocsControlRect(tabId, 'add-tab-menuitem');
+      if (menuItem) {
+        await physicalClick(tabId, menuItem);
+        await sleep(350);
+      }
+    }
+
+    const started = Date.now();
+    while (Date.now() - started < 6000) {
+      state = await googleDocPageState(tabId);
+      const token = googleDocTabToken(state.href);
+      if (token && token !== beforeToken) {
+        await sleep(450);
+        return {
+          ok: true,
+          url: state.href,
+          token,
+          controlLabel: addControl.label || ''
+        };
+      }
+      await sleep(180);
+    }
+
+    throw new Error(
+      'Google Docs не переключился на новую вкладку после нажатия «+». ' +
+      'Документ оставлен открытым для проверки.'
+    );
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
 
 async function readGoogleDocBaseline(docUrl, sourceTabId) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
