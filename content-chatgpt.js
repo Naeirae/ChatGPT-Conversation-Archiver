@@ -17,6 +17,15 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = { running: false, jobId: null, cancel: false };
   let lastProgressAt = 0;
+  const SETTINGS_KEY = 'archiverSettings';
+  const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
+  const REASONING_LABEL_RE = /^(думаю|размышляю|thinking|reasoning|show thinking|show reasoning|показать рассуждения|показать размышления)$/i;
+  const reasoningClicked = new WeakSet();
+
+  async function getSettings() {
+    const result = await chrome.storage.local.get(SETTINGS_KEY);
+    return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+  }
 
   function hashText(text) {
     let hash = 2166136261;
@@ -74,6 +83,67 @@
     return document.scrollingElement || document.documentElement;
   }
 
+
+  function reasoningRoots(turn) {
+    const selectors = [
+      '[data-testid*="reasoning"]',
+      '[data-testid*="thinking"]',
+      '[class*="reasoning"]',
+      '[class*="thinking"]'
+    ];
+    const roots = [];
+    const seen = new Set();
+    for (const selector of selectors) {
+      for (const el of turn.querySelectorAll(selector)) {
+        if (seen.has(el) || !visible(el)) continue;
+        if (el.matches('button, [role="button"]')) continue;
+        if (el.querySelector('.markdown, [class*="markdown"], [class*="prose"]')) continue;
+        const text = String(el.innerText || el.textContent || '').trim();
+        if (text.length < 2) continue;
+        seen.add(el);
+        roots.push(el);
+      }
+    }
+    return roots;
+  }
+
+  async function expandReasoningVisible(turns) {
+    let clicks = 0;
+    for (const turn of turns || orderedTurns()) {
+      for (const el of turn.querySelectorAll('button, [role="button"]')) {
+        if (!visible(el) || el.disabled || reasoningClicked.has(el)) continue;
+        const label = String(el.innerText || el.getAttribute('aria-label') || el.getAttribute('title') || '')
+          .replace(/\s+/g, ' ').trim();
+        if (!REASONING_LABEL_RE.test(label)) continue;
+        if (el.getAttribute('aria-expanded') === 'true') {
+          reasoningClicked.add(el);
+          continue;
+        }
+        try {
+          el.click();
+          reasoningClicked.add(el);
+          clicks++;
+          await sleep(320);
+        } catch (_) {}
+      }
+    }
+    return clicks;
+  }
+
+  function captureReasoning(turn) {
+    const roots = reasoningRoots(turn);
+    if (!roots.length) return { html: '', text: '' };
+    const holder = document.createElement('div');
+    const texts = [];
+    for (const root of roots) {
+      const clone = cleanClone(root);
+      holder.appendChild(clone);
+      const text = String(root.innerText || root.textContent || '').trim();
+      if (text) texts.push(text);
+    }
+    return { html: holder.innerHTML, text: texts.join('\n\n') };
+  }
+
   function contentRoot(turn, role) {
     const roleNode = turn.matches(ROLE_SELECTOR) ? turn : turn.querySelector(ROLE_SELECTOR);
     if (role === 'user' && roleNode) return roleNode;
@@ -104,7 +174,7 @@
     return clone;
   }
 
-  function captureTurn(turn, ordinal) {
+  function captureTurn(turn, ordinal, settings) {
     const role = roleOf(turn);
     if (!role) return null;
     const root = contentRoot(turn, role);
@@ -118,13 +188,16 @@
       height: Number(img.getAttribute('height')) || null
     }));
     if (!text && !images.length) return null;
+    const reasoning = role === 'assistant' && settings?.includeReasoning ? captureReasoning(turn) : { html: '', text: '' };
     const explicitId = turn.getAttribute('data-message-id') || turn.getAttribute('data-turn-id');
     return {
       id: explicitId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       role,
       text,
       html: clone.innerHTML,
-      images
+      images,
+      reasoningHtml: reasoning.html,
+      reasoningText: reasoning.text
     };
   }
 
@@ -143,9 +216,9 @@
     return clicks;
   }
 
-  function collect(map, order) {
+  function collect(map, order, settings) {
     orderedTurns().forEach((turn, ordinal) => {
-      const message = captureTurn(turn, ordinal);
+      const message = captureTurn(turn, ordinal, settings);
       if (!message) return;
       if (!map.has(message.id)) order.push(message.id);
       map.set(message.id, message);
@@ -178,7 +251,7 @@
     }
   }
 
-  async function reachTop(scroller, map, order, jobId) {
+  async function reachTop(scroller, map, order, jobId, settings) {
     let stable = 0;
     let previousHeight = -1;
     let previousCount = -1;
@@ -188,7 +261,8 @@
       scroller.scrollTo({ top: 0, behavior: 'auto' });
       await sleep(280);
       await expandVisible();
-      collect(map, order);
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
       const top = Math.round(scroller.scrollTop);
       const height = scroller.scrollHeight;
       const count = document.querySelectorAll(TURN_SELECTOR).length;
@@ -207,7 +281,7 @@
     throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться.');
   }
 
-  async function walkDown(scroller, map, order, jobId) {
+  async function walkDown(scroller, map, order, jobId, settings) {
     let stable = 0;
     let previousHeight = -1;
     let previousCount = -1;
@@ -215,7 +289,8 @@
     for (let i = 0; i < 1600 && stable < 5; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
       await expandVisible();
-      collect(map, order);
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
       const viewport = scroller.clientHeight || innerHeight;
       const max = Math.max(0, scroller.scrollHeight - viewport);
       const current = Math.max(0, Math.round(scroller.scrollTop));
@@ -223,7 +298,8 @@
       if (next >= max - 4) {
         await sleep(520);
         await expandVisible();
-        collect(map, order);
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings);
         const height = scroller.scrollHeight;
         const count = document.querySelectorAll(TURN_SELECTOR).length;
         const top = Math.round(scroller.scrollTop);
@@ -255,15 +331,17 @@
     let scroller = null;
     let originalScrollTop = 0;
     try {
+      const settings = await getSettings();
       await progress('Подготовка фонового сбора…', 0, { phase: 'starting', force: true });
       const firstTurn = orderedTurns()[0];
       if (!firstTurn) throw new Error('Не найден контейнер переписки. Возможно, ChatGPT еще не загрузил сообщения.');
       scroller = findScrollContainer(firstTurn);
       originalScrollTop = scroller.scrollTop;
-      await reachTop(scroller, map, order, jobId);
-      await walkDown(scroller, map, order, jobId);
+      await reachTop(scroller, map, order, jobId, settings);
+      await walkDown(scroller, map, order, jobId, settings);
       await expandVisible();
-      collect(map, order);
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
       const messages = order.map(id => map.get(id)).filter(Boolean);
       if (!messages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       const conversation = {
