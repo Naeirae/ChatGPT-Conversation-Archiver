@@ -872,8 +872,14 @@ async function handleCaptureComplete(message) {
 
   if (job.pendingDocUrl) {
     if (docError) finalMessage += ' Google Doc не обновлен: ' + docError;
-    else if (docResult?.addedCount) finalMessage += ' В Google Doc добавлено ' + docResult.addedCount + '.';
-    else finalMessage += ' В Google Doc новых сообщений для вставки нет.';
+    else if (docResult?.addedCount) {
+      finalMessage += ' В Google Doc добавлено ' + docResult.addedCount + ' сообщений';
+      if (docResult.imageInsertedCount || docResult.imageFailedCount) {
+        finalMessage += ' и ' + Number(docResult.imageInsertedCount || 0) + ' изображений';
+        if (docResult.imageFailedCount) finalMessage += ' (' + Number(docResult.imageFailedCount) + ' не вставлено)';
+      }
+      finalMessage += '.';
+    } else finalMessage += ' В Google Doc новых сообщений для вставки нет.';
   }
 
   await appendRunLog({
@@ -1508,18 +1514,24 @@ async function appendMessagesToGoogleDocUrl(conversation, messages, docUrl, sour
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
-    await writeClipboard(
-      buildRichHtml(conversation, settings, { messages, includeHeader: false }),
-      buildPlainText(conversation, settings, { messages, includeHeader: false })
+    const pasted = await pasteArchiveIntoGoogleDoc(
+      tab.id,
+      conversation,
+      messages,
+      settings,
+      { includeHeader: false, appendToEnd: true }
     );
 
-    const finalTab = await pasteIntoGoogleDoc(tab.id, { appendToEnd: true });
+    const finalTab = pasted.tab;
     const linkedDoc = await recordDocExport(conversation, finalTab.url || normalizedUrl);
     return {
       docUrl: finalTab.url || normalizedUrl,
       addedCount: messages.length,
       noChanges: false,
-      linkedDoc
+      linkedDoc,
+      imageInsertedCount: pasted.imageInsertedCount || 0,
+      imageFailedCount: pasted.imageFailedCount || 0,
+      failedImages: pasted.failedImages || []
     };
   } finally {
     if (sourceTabId != null) await chrome.tabs.update(sourceTabId, { active: true }).catch(() => {});
@@ -1574,12 +1586,14 @@ async function exportConversation({ activeDoc = false } = {}) {
     await sleep(2500);
   }
 
-  await writeClipboard(
-    buildRichHtml(conversation, settings, { messages, includeHeader }),
-    buildPlainText(conversation, settings, { messages, includeHeader })
+  const pasted = await pasteArchiveIntoGoogleDoc(
+    tab.id,
+    conversation,
+    messages,
+    settings,
+    { includeHeader, appendToEnd }
   );
-
-  const finalTab = await pasteIntoGoogleDoc(tab.id, { appendToEnd });
+  const finalTab = pasted.tab;
   const linkedDoc = await recordDocExport(conversation, finalTab.url);
 
   return {
@@ -1588,6 +1602,9 @@ async function exportConversation({ activeDoc = false } = {}) {
     linkedDoc,
     exportMode,
     addedCount: messages.length,
+    imageInsertedCount: pasted.imageInsertedCount || 0,
+    imageFailedCount: pasted.imageFailedCount || 0,
+    failedImages: pasted.failedImages || [],
     noChanges: false
   };
 }
