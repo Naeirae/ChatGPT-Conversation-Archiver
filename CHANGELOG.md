@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.17
+
+- extract archive/link persistence into an injected storage adapter;
+- add regressions for archive indexing, legacy linked-document recovery and export-tail persistence;
+- extract Google Docs baseline parsing into a pure module;
+- add multi-tab baseline regressions, including empty trailing tabs and tails that cross a tab boundary;
+- keep browser/UI orchestration in the service worker while reducing direct storage/parser responsibilities.
+
 ## 0.3.16
 
 - extract browser-independent text/signature and URL helpers from the service worker;
