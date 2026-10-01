@@ -640,22 +640,31 @@
     }
   }
 
-  async function captureConversation(jobId) {
+  async function captureConversation(jobId, options = {}) {
     if (state.running) return;
     state.running = true;
     state.jobId = jobId;
     state.cancel = false;
     lastProgressAt = 0;
+
+    const mode = options.mode === 'continue' ? 'continue' : 'full';
+    const resumeAnchorId = String(options.resumeAnchorId || '');
+    const existingArchiveId = String(options.existingArchiveId || '');
     const map = new Map();
     const order = [];
-    let scroller = null;
-    let originalScrollTop = 0;
+
     try {
       const settings = await getSettings();
-      await progress('Этап 1/3: фиксирую границы снимка…', 0, { phase: 'top', force: true });
+      await progress(
+        mode === 'continue'
+          ? 'Этап 1/3: фиксирую конец нового снимка и ищу место продолжения…'
+          : 'Этап 1/3: фиксирую конец снимка…',
+        0,
+        { phase: 'top', force: true, captureMode: mode }
+      );
+
       const turns = await waitForTurns(10000);
-      const firstTurn = turns[0];
-      if (!firstTurn) {
+      if (!turns.length) {
         const roleCount = document.querySelectorAll(ROLE_SELECTOR).length;
         const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
@@ -664,28 +673,59 @@
       const boundary = makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
 
-      scroller = findScrollContainer(firstTurn);
-      originalScrollTop = scroller.scrollTop;
-      await reachTop(scroller, map, order, jobId, settings);
-      await walkDown(scroller, map, order, jobId, settings, boundary);
+      collect(map, order, settings);
+
+      if (mode === 'continue') {
+        await reachResumeAnchor(resumeAnchorId, map, order, settings);
+      } else {
+        await reachTop(map, order, settings);
+      }
+
+      await walkDown(map, order, settings, boundary);
 
       await progress('Этап 3/3: сохраняю локальный архив…', map.size, {
         phase: 'finalizing',
-        force: true
+        force: true,
+        captureMode: mode
       });
+
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
-      const messages = order.map(id => map.get(id)).filter(Boolean);
-      if (!messages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
+
+      const capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      if (!capturedMessages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
+
+      let messages = capturedMessages;
+      let archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href));
+      let addedCount = capturedMessages.length;
+      let previousCount = 0;
+
+      if (mode === 'continue') {
+        if (!existingArchiveId) throw new Error('Не найден локальный архив для продолжения.');
+        const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
+        const existing = stored['archive:' + existingArchiveId];
+        if (!existing?.messages?.length) throw new Error('Локальный архив для продолжения недоступен.');
+
+        previousCount = existing.messages.length;
+        const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+        const delta = capturedMessages.filter(item => item.id && !existingIds.has(item.id));
+        addedCount = delta.length;
+        messages = existing.messages.concat(delta);
+      }
+
       const conversation = {
         title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
         sourceUrl: location.href,
         capturedAt: new Date().toISOString(),
         messages,
-        imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0)
+        imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+        lastCaptureMode: mode,
+        lastCaptureAddedCount: addedCount,
+        previousMessageCount: previousCount,
+        lastMessageId: messages[messages.length - 1]?.id || ''
       };
-      const archiveId = String(Date.now()) + '-' + hashText(conversation.sourceUrl);
+
       const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
       await chrome.storage.local.set({
         ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
@@ -693,20 +733,41 @@
         activeCaptureJob: Object.assign({}, currentJob, {
           jobId,
           status: 'done',
-          message: 'Переписка собрана.',
+          message: mode === 'continue'
+            ? ('Архив продолжен: +' + addedCount + ' сообщений.')
+            : 'Переписка собрана.',
           count: messages.length,
+          addedCount,
           imageCount: conversation.imageCount,
           archiveId,
           finishedAt: Date.now(),
           updatedAt: Date.now()
         })
       });
-      try { await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_COMPLETE', jobId, archiveId, count: messages.length }); } catch (_) {}
+
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_CAPTURE_COMPLETE',
+          jobId,
+          archiveId,
+          count: messages.length,
+          addedCount,
+          mode
+        });
+      } catch (_) {}
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
       const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
-      await chrome.storage.local.set({ activeCaptureJob: Object.assign({}, current, { jobId, status, message, finishedAt: Date.now(), updatedAt: Date.now() }) });
+      await chrome.storage.local.set({
+        activeCaptureJob: Object.assign({}, current, {
+          jobId,
+          status,
+          message,
+          finishedAt: Date.now(),
+          updatedAt: Date.now()
+        })
+      });
       if (status === 'error') {
         try {
           await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_FAILED', jobId, error: message });
@@ -716,7 +777,6 @@
       state.running = false;
       state.jobId = null;
       state.cancel = false;
-      if (scroller) scroller.scrollTo({ top: originalScrollTop, behavior: 'auto' });
     }
   }
 
@@ -726,7 +786,11 @@
         sendResponse({ ok: true, running: true, jobId: state.jobId });
         return false;
       }
-      captureConversation(message.jobId).catch(() => {});
+      captureConversation(message.jobId, {
+        mode: message.mode,
+        resumeAnchorId: message.resumeAnchorId,
+        existingArchiveId: message.existingArchiveId
+      }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId });
       return false;
     }
