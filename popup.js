@@ -162,8 +162,8 @@ $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
   setStatus('Открываю Google Docs и вставляю переписку…');
   try {
-    await exportToDoc('ARCHIVER_EXPORT_NEW_DOC');
-    setStatus('Готово. Переписка вставлена в новый Google Doc.');
+    const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC');
+    setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.`);
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -173,10 +173,16 @@ $('newDoc').onclick = async () => {
 
 $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
-  setStatus('Вставляю переписку в открытый Google Doc…');
+  setStatus('Проверяю, что уже вставлено в этот Google Doc…');
   try {
-    await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC');
-    setStatus('Готово. Переписка вставлена в открытый Google Doc.');
+    const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC');
+    if (result.noChanges) {
+      setStatus('В этом Google Doc уже есть все сообщения из локального архива.');
+    } else if (result.exportMode === 'delta') {
+      setStatus(`Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.`);
+    } else {
+      setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.`);
+    }
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
