@@ -68,21 +68,14 @@
       <button id="copyArchive">Скопировать архив</button>
     </section>
 
-    <details class="tab-export">
-      <summary>Разбивка Google Doc по вкладкам</summary>
+    <section class="tab-export">
+      <div class="archive-label">Структура Google Doc</div>
+      <strong>Разбить архив по вкладкам и темам</strong>
       <div class="muted tab-help">
-        Первая вкладка уже существует. Границу ставим перед номером реплики:
-        <code>41 | вкладка</code>. Тему внутри вкладки:
-        <code>57 | подзаголовок | Картинки</code>.
-        Названия самих вкладок можно переименовать вручную в Google Docs.
+        Откроется отдельная страница разметки: можно прокручивать архив, ставить границы новых вкладок и подзаголовки прямо у нужных реплик.
       </div>
-      <label class="field">
-        <span>План разбивки</span>
-        <textarea id="tabPlan" rows="5" placeholder="41 | вкладка&#10;57 | подзаголовок | Картинки"></textarea>
-      </label>
-      <button id="copyMessageMap" disabled>Скопировать карту реплик с номерами</button>
-      <button id="tabbedDoc" disabled>Сохранить в новый Google Doc по вкладкам</button>
-    </details>
+      <button id="openPlanner" disabled>Разметить архив</button>
+    </section>
 
     <div class="actions">
       <button id="newDoc" disabled>Сохранить в новый Google Doc</button>
