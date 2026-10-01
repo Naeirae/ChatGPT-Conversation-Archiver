@@ -1484,17 +1484,47 @@ async function pasteArchiveIntoGoogleDoc(
   };
 }
 
+function exportTailSignatures(messages = [], limit = 4) {
+  return messages
+    .filter(item => normalizeMatchText(item?.text || ''))
+    .slice(-limit)
+    .map(item => messageSignature(item.role, item.text));
+}
+
+function findExportTailAnchor(messages = [], tailSignatures = []) {
+  const tail = (tailSignatures || []).filter(Boolean);
+  if (tail.length < 2) return -1;
+
+  const signatures = messages.map(item => messageSignature(item.role, item.text));
+  for (let start = signatures.length - tail.length; start >= 0; start--) {
+    let same = true;
+    for (let offset = 0; offset < tail.length; offset++) {
+      if (signatures[start + offset] !== tail[offset]) {
+        same = false;
+        break;
+      }
+    }
+    if (same) return start + tail.length - 1;
+  }
+  return -1;
+}
+
 async function recordDocExport(conversation, docUrl) {
   const docKey = googleDocKey(docUrl);
   if (!docKey || !conversation) return null;
 
   const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
   const exports = result[DOC_EXPORTS_KEY] || {};
-  const lastMessageId = conversation.messages?.[conversation.messages.length - 1]?.id || '';
+  const messages = conversation.messages || [];
+  const lastMessage = messages[messages.length - 1] || null;
+  const lastMessageId = lastMessage?.id || '';
+  const tailSignatures = exportTailSignatures(messages);
   exports[docKey] = {
     conversationKey: conversationKey(conversation.sourceUrl),
     archiveId: conversation.id,
     lastMessageId,
+    lastMessageSignature: lastMessage ? messageSignature(lastMessage.role, lastMessage.text) : '',
+    tailSignatures,
     docUrl,
     updatedAt: Date.now()
   };
@@ -1503,7 +1533,9 @@ async function recordDocExport(conversation, docUrl) {
   return setLinkedDoc(conversation.sourceUrl, {
     url: docUrl,
     docId: docKey,
-    lastMessageId
+    lastMessageId,
+    lastMessageSignature: lastMessage ? messageSignature(lastMessage.role, lastMessage.text) : '',
+    tailSignatures
   });
 }
 
@@ -1571,14 +1603,28 @@ async function exportConversation({ activeDoc = false } = {}) {
     const previous = exports[docKey];
     const currentConversationKey = conversationKey(conversation.sourceUrl);
 
-    if (previous?.conversationKey === currentConversationKey && previous.lastMessageId) {
-      const anchorIndex = messages.findIndex(item => item.id === previous.lastMessageId);
-      if (anchorIndex >= 0) {
-        messages = messages.slice(anchorIndex + 1);
-        includeHeader = false;
-        appendToEnd = true;
-        exportMode = 'delta';
+    if (previous?.conversationKey === currentConversationKey) {
+      let anchorIndex = -1;
+
+      if (previous.lastMessageId) {
+        anchorIndex = messages.findIndex(item => item.id === previous.lastMessageId);
       }
+
+      if (anchorIndex < 0 && Array.isArray(previous.tailSignatures) && previous.tailSignatures.length >= 2) {
+        anchorIndex = findExportTailAnchor(messages, previous.tailSignatures);
+      }
+
+      if (anchorIndex < 0) {
+        throw new Error(
+          'Документ уже связан с этим чатом, но точку продолжения подтвердить не удалось. ' +
+          'Полный архив не вставлен повторно. Используйте «Сверить».'
+        );
+      }
+
+      messages = messages.slice(anchorIndex + 1);
+      includeHeader = false;
+      appendToEnd = true;
+      exportMode = 'delta';
     }
 
     if (!messages.length) {
