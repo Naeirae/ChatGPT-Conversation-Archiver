@@ -17,10 +17,10 @@
     'article[data-turn="user"]',
     'article[data-turn="assistant"]',
     '[data-testid^="conversation-turn-"]',
-    '[data-turn-key]',
     '[data-chatgpt-search-unit-key$=":user"]',
     '[data-chatgpt-search-unit-key$=":assistant"]'
   ].join(',');
+  const TURN_WRAPPER_SELECTOR = '[data-turn-key]';
   const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -66,11 +66,11 @@
   }
 
   function getTurn(node) {
-    return node.closest('[data-testid^="conversation-turn-"]') ||
+    return node.closest('[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]') ||
+      node.closest('[data-testid^="conversation-turn-"]') ||
       node.closest('section[data-turn]') ||
       node.closest('article[data-turn]') ||
       node.closest('[data-turn-key]') ||
-      node.closest('[data-chatgpt-search-unit-key]') ||
       node;
   }
 
@@ -78,24 +78,35 @@
     const result = [];
     const seen = new Set();
 
-    // Prefer a real turn shell when one exists.
+    // Current ChatGPT virtualizes the conversation. A data-turn-key wrapper can
+    // contain both the user and assistant message, so it is not itself a message.
     document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(shell => {
-      const role = roleOf(shell);
-      const hasRoleChild = shell.matches(ROLE_SELECTOR) || shell.querySelector(ROLE_SELECTOR);
-      if (!hasRoleChild && !role) return;
-      if (seen.has(shell)) return;
+      if (!roleOf(shell) || seen.has(shell)) return;
       seen.add(shell);
       result.push(shell);
     });
 
-    // Current ChatGPT rollouts may have no article/section turn shell at all.
-    // In that case the role-bearing node itself is the message container.
     getRoleNodes().forEach(node => {
       const turn = getTurn(node);
-      if (seen.has(turn)) return;
+      if (!roleOf(turn) || seen.has(turn)) return;
       seen.add(turn);
       result.push(turn);
     });
+
+    // Fallback only for rollouts that expose a single message directly under a
+    // data-turn-key wrapper and no more specific message shell.
+    if (!result.length) {
+      document.querySelectorAll(TURN_WRAPPER_SELECTOR).forEach(wrapper => {
+        const role = roleOf(wrapper);
+        if (!role) return;
+        const units = wrapper.querySelectorAll(
+          '[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]'
+        );
+        if (units.length > 1 || seen.has(wrapper)) return;
+        seen.add(wrapper);
+        result.push(wrapper);
+      });
+    }
 
     return result.sort((a, b) => {
       const pos = a.compareDocumentPosition(b);
