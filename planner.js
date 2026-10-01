@@ -81,10 +81,13 @@ async function loadArchive() {
   archive = result['archive:' + archiveId] || null;
   if (!archive) throw new Error('Архив ' + archiveId + ' не найден в локальном хранилище.');
 
-  markers = normalizeStoredMarkers(result[PLAN_PREFIX + archiveId]);
+  const planKey = PLAN_PREFIX + archiveId;
+  const hasStoredPlan = Object.prototype.hasOwnProperty.call(result, planKey);
+  markers = normalizeStoredMarkers(result[planKey]);
 
   // One-time migration from the short-lived 0.3.18 text-plan field.
-  if (!markers.length) {
+  // An explicitly saved empty marker array must not resurrect that legacy plan.
+  if (!hasStoredPlan) {
     const legacy = String(result.archiverSettings?.tabPlan || '').trim();
     if (legacy) {
       try {
@@ -95,6 +98,10 @@ async function loadArchive() {
             title: item.title || ''
           }));
         await saveMarkers();
+
+        const nextSettings = { ...(result.archiverSettings || {}) };
+        delete nextSettings.tabPlan;
+        await chrome.storage.local.set({ archiverSettings: nextSettings });
       } catch (_) {}
     }
   }
@@ -181,7 +188,8 @@ function render() {
 
     const body = fragment.querySelector('.message-body');
     const text = String(message.text || '').trim();
-    body.textContent = text || (imageCount ? '[сообщение с изображением]' : '[пустая реплика]');
+    const collapsedText = text.length > 1600 ? text.slice(0, 1600) + '…' : text;
+    body.textContent = collapsedText || (imageCount ? '[сообщение с изображением]' : '[пустая реплика]');
 
     const tabButton = fragment.querySelector('.marker-tab');
     tabButton.classList.toggle('active', Boolean(tabMark));
@@ -203,10 +211,11 @@ function render() {
     addImagePreviews(fragment.querySelector('.image-preview'), message);
 
     const expand = fragment.querySelector('.expand-message');
-    if (text.length > 900) {
+    if (text.length > 1600) {
       expand.classList.remove('hidden');
       expand.addEventListener('click', () => {
         const expanded = card.classList.toggle('expanded');
+        body.textContent = expanded ? text : collapsedText;
         expand.textContent = expanded ? 'Свернуть' : 'Показать полностью';
       });
     }
