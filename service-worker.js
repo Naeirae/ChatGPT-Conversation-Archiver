@@ -276,6 +276,12 @@ async function startCapture() {
   const tab = await getActiveTab();
   if (!tab?.id) throw new Error('Не удалось определить активную вкладку.');
 
+  // Do not even touch the debugger on an unrelated site. The tab URL is a cheap
+  // host preflight; the debugger then confirms the live URL inside the page.
+  if (!isChatGptHost(tab.url || '')) {
+    throw makeCaptureError('WRONG_SITE', 'Откройте ChatGPT в активной вкладке.');
+  }
+
   const current = await getJob();
   if (current && ['starting', 'running'].includes(current.status)) {
     if (current.tabId === tab.id) return { ok: true, job: current, alreadyRunning: true };
