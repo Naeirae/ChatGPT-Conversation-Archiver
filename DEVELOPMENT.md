@@ -16,9 +16,28 @@ The repository intentionally has no build step yet. The first automated quality 
 node scripts/verify.mjs
 ```
 
-It checks JavaScript syntax, parses `manifest.json`, verifies the extension version format and rejects accidental private/updater artifacts.
+It checks runtime/module syntax, parses `manifest.json`, verifies the extension version format, rejects accidental private/updater artifacts and runs the dependency-free Node regression tests in `tests/`.
 
 GitHub Actions runs the same checks on pushes and pull requests. A Windows job also parses `update.ps1` with PowerShell because updater syntax regressions have previously caused real failures.
+
+## Regression tests
+
+Pure logic should move out of browser adapters when it can be tested without Chrome/DOM state.
+
+The current regression suite covers:
+
+- display vs matching normalization;
+- role-aware message signatures;
+- duplicate-safe tail recovery after message IDs change during a rebuild;
+- fail-closed behavior when a continuation tail is missing or too short;
+- ChatGPT conversation URL parsing;
+- Google Docs document/tab key parsing.
+
+Run the same gate locally with:
+
+```bash
+node scripts/verify.mjs
+```
 
 ## Manual smoke matrix
 
