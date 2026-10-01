@@ -1,41 +1,79 @@
+param(
+  [string]$InstallPath = $PSScriptRoot
+)
+
 $ErrorActionPreference = 'Stop'
-Set-Location -LiteralPath $PSScriptRoot
+Set-Location -LiteralPath $InstallPath
 
-if (-not (Test-Path -LiteralPath '.git')) {
-  throw 'This folder is not a Git repository.'
+$repo = 'Naeirae/ChatGPT-Conversation-Archiver'
+$branch = 'main'
+$api = "https://api.github.com/repos/$repo/contents"
+$headers = @{ 'User-Agent' = 'ChatGPT-Conversation-Archiver-Updater' }
+
+function Get-RemoteFiles([string]$Path) {
+  $url = if ($Path) { $api + '/' + $Path + '?ref=' + $branch } else { $api + '?ref=' + $branch }
+  $items = Invoke-RestMethod -Uri $url -Headers $headers -Method Get
+  $result = @()
+  foreach ($item in @($items)) {
+    if ($item.type -eq 'file') { $result += $item }
+    elseif ($item.type -eq 'dir') { $result += Get-RemoteFiles $item.path }
+  }
+  return $result
 }
 
-if ((git branch --show-current).Trim() -ne 'main') {
-  throw 'Current branch is not main.'
+function Get-GitBlobSha([string]$RelativePath) {
+  $full = Join-Path $InstallPath ($RelativePath -replace '/', '')
+  $bytes = [IO.File]::ReadAllBytes($full)
+  $header = [Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
+  $all = New-Object byte[] ($header.Length + $bytes.Length)
+  [Buffer]::BlockCopy($header, 0, $all, 0, $header.Length)
+  [Buffer]::BlockCopy($bytes, 0, $all, $header.Length, $bytes.Length)
+  $sha1 = [Security.Cryptography.SHA1]::Create()
+  try { return (($sha1.ComputeHash($all) | ForEach-Object { $_.ToString('x2') }) -join '') }
+  finally { $sha1.Dispose() }
 }
 
-if ((git status --porcelain)) {
-  throw 'Local changes found. Update stopped.'
-}
+$localManifest = Join-Path $InstallPath 'manifest.json'
+if (-not (Test-Path -LiteralPath $localManifest)) { throw 'manifest.json not found.' }
 
-$remote = 'https://github.com/Naeirae/ChatGPT-Conversation-Archiver.git'
-$before = (git rev-parse HEAD).Trim()
+$localVersion = (Get-Content -Raw -LiteralPath $localManifest | ConvertFrom-Json).version
+$files = @(Get-RemoteFiles '')
+$remoteManifest = $files | Where-Object { $_.path -eq 'manifest.json' } | Select-Object -First 1
+if (-not $remoteManifest) { throw 'Remote manifest.json not found.' }
+$remoteManifest = Invoke-RestMethod -Uri $remoteManifest.download_url -Headers $headers -Method Get
+$remoteVersion = $remoteManifest.version
 
-Write-Host 'Checking GitHub...'
-git fetch $remote main --quiet
-if ($LASTEXITCODE -ne 0) {
-  throw 'GitHub fetch failed.'
-}
-
-$after = (git rev-parse FETCH_HEAD).Trim()
-
-if ($before -eq $after) {
-  Write-Host 'Already up to date.'
+if ($localVersion -eq $remoteVersion) {
+  Write-Host "Already up to date: $localVersion"
   exit 0
 }
 
-Write-Host 'Changes:'
-git diff --stat HEAD..FETCH_HEAD
-git merge --ff-only FETCH_HEAD
-if ($LASTEXITCODE -ne 0) {
-  throw 'Fast-forward update failed.'
+Write-Host "Updating $localVersion -> $remoteVersion"
+
+foreach ($item in $files) {
+  $relative = $item.path
+  $target = Join-Path $InstallPath ($relative -replace '/', '')
+  $directory = Split-Path -Parent $target
+  if ($directory -and -not (Test-Path -LiteralPath $directory)) {
+    New-Item -ItemType Directory -Path $directory -Force | Out-Null
+  }
+
+  if (Test-Path -LiteralPath $target) {
+    $localSha = Get-GitBlobSha $relative
+    if ($localSha -ne $item.sha) {
+      throw "Local file changed: $relative. Update stopped."
+    }
+  }
+
+  if ($relative -eq 'update.cmd') {
+    $target = $target + '.new'
+  }
+
+  $temporary = "$target.download"
+  Invoke-WebRequest -Uri $item.download_url -Headers $headers -OutFile $temporary -UseBasicParsing
+  Move-Item -LiteralPath $temporary -Destination $target -Force
+  Write-Host "Updated $relative"
 }
 
-$version = (Get-Content -Raw -LiteralPath 'manifest.json' | ConvertFrom-Json).version
-Write-Host "Updated to version $version."
+Write-Host "Update complete: $remoteVersion"
 Write-Host 'Reload the extension at chrome://extensions.'
