@@ -8,7 +8,8 @@ const jsFiles = [
   'offscreen.js',
   'lib/text.mjs',
   'lib/urls.mjs',
-  'lib/archive-store.mjs'
+  'lib/archive-store.mjs',
+  'lib/google-docs-baseline.mjs'
 ];
 
 const forbiddenArtifacts = [
@@ -63,7 +64,8 @@ const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
   'tests/urls.test.mjs',
-  'tests/archive-store.test.mjs'
+  'tests/archive-store.test.mjs',
+  'tests/google-docs-baseline.test.mjs'
 ], {
   encoding: 'utf8'
 });
