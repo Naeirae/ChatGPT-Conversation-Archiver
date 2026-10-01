@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.16
+
+- extract browser-independent text/signature and URL helpers from the service worker;
+- add regression tests for continuation tail recovery and URL parsing;
+- run regression tests as part of the repository verification gate;
+- add clean extension packaging to `dist/extension`;
+- publish a verified extension package as a GitHub Actions artifact.
+
 ## 0.3.15
 
 - fail closed when continuation splice disappears during the chronological pass;
