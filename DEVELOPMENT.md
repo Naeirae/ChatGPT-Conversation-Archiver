@@ -66,6 +66,7 @@ Before calling a release live-verified, test at least:
 - continuation with a small delta;
 - duplicate protection against an already linked Google Doc;
 - Google Doc sync from a multi-tab document;
+- visual planner: scroll a long archive, place/remove a tab marker and an H2 marker, close/reopen the planner and confirm persistence;
 - new multi-tab export with at least two document tabs and one topic subheading;
 - text-only export;
 - image-only message export;
