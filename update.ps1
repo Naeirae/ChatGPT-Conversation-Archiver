@@ -58,7 +58,9 @@ foreach ($item in $files) {
     New-Item -ItemType Directory -Path $directory -Force | Out-Null
   }
 
-  if (Test-Path -LiteralPath $target) {
+  $isUpdaterFile = $relative -in @('update.ps1', 'update.cmd')
+
+  if ((-not $isUpdaterFile) -and (Test-Path -LiteralPath $target)) {
     $localSha = Get-GitBlobSha $relative
     if ($localSha -ne $item.sha) {
       throw "Local file changed: $relative. Update stopped."
