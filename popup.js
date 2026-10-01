@@ -72,28 +72,42 @@ function render(data) {
   $('cancel').classList.toggle('hidden', !running);
   renderCaptureProgress(job, running);
 
-  if (done) {
-    $('archive').classList.remove('hidden');
-    $('archiveTitle').textContent = archive.title || 'Переписка ChatGPT';
-    $('archiveMeta').textContent = `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений`;
-    $('newDoc').disabled = false;
-    $('activeDoc').disabled = false;
-  } else {
-    $('archive').classList.toggle('hidden', !archive);
-    $('archiveTitle').textContent = archive?.title || '';
-    $('archiveMeta').textContent = archive ? `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` : '';
-    $('newDoc').disabled = true;
-    $('activeDoc').disabled = true;
-  }
+  $('archive').classList.toggle('hidden', !archive);
+  $('archiveTitle').textContent = archive?.title || '';
+  $('archiveMeta').textContent = archive
+    ? `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений`
+    : '';
 
-  if (running) setStatus(job.message || 'Сбор идет в фоне…');
-  else if (job?.status === 'error') setStatus(job.message || 'Сбор не выполнен.', true);
-  else if (job?.status === 'cancelled') setStatus('Сбор отменен.');
-  else if (done) {
+  // A failed new capture must not hide or disable the previously completed
+  // local archive. Export is disabled only while a capture is actively running.
+  $('newDoc').disabled = Boolean(running || !archive);
+  $('activeDoc').disabled = Boolean(running || !archive);
+
+  if (running) {
+    setStatus(job.message || 'Сбор идет в фоне…');
+  } else if (job?.status === 'error') {
+    const attempted = Number(job.count || 0);
+    const saved = Number(archive?.messageCount || 0);
+    const attemptText = attempted
+      ? `Текущий запуск остановился после ${attempted} собранных сообщений. Этот неполный проход не заменил архив.`
+      : 'Текущий запуск завершился с ошибкой до сохранения нового архива.';
+    const savedText = archive
+      ? ` Последний завершенный локальный архив: ${saved} сообщений.`
+      : ' Завершенного локального архива пока нет.';
+    setStatus(attemptText + savedText + ' ' + (job.message || ''), true);
+  } else if (job?.status === 'cancelled') {
+    const attempted = Number(job.count || 0);
+    setStatus(attempted
+      ? `Сбор отменен. В текущем проходе было собрано ${attempted} сообщений; завершенный локальный архив не изменен.`
+      : 'Сбор отменен. Завершенный локальный архив не изменен.');
+  } else if (done) {
     const added = archive.lastCaptureMode === 'continue' ? ` · +${archive.lastCaptureAddedCount || 0} новых` : '';
-    setStatus(`Готово: ${archive.messageCount || 0} сообщений${added}, ${archive.imageCount || 0} изображений.`);
+    setStatus(`Готово: ${archive.messageCount || 0} сообщений${added}, ${archive.imageCount || 0} изображений. Сохранено локально в Chrome.`);
+  } else if (archive) {
+    setStatus(`Локальный архив: ${archive.messageCount || 0} сообщений, ${archive.imageCount || 0} изображений.`);
+  } else {
+    setStatus('Готово.');
   }
-  else setStatus('Готово.');
 }
 
 async function getState() {
