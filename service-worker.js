@@ -315,40 +315,70 @@ async function startCapture({ mode = 'full' } = {}) {
 async function cancelCapture() {
   const job = await getJob();
   if (!job || !['starting', 'running', 'paused'].includes(job.status)) return { ok: true, job };
+
   try {
-    await chrome.tabs.sendMessage(job.tabId, { type: 'ARCHIVER_CANCEL_CAPTURE', jobId: job.jobId });
+    if (job.captureTabId != null) {
+      await chrome.tabs.sendMessage(job.captureTabId, { type: 'ARCHIVER_CANCEL_CAPTURE', jobId: job.jobId });
+    }
   } catch (_) {}
-  const next = await setJob({ status: 'cancelled', message: 'Сбор отменен.', finishedAt: Date.now() });
-  await restoreAutoDiscardable(next);
+
+  if (job.captureTabId != null) {
+    await chrome.tabs.remove(job.captureTabId).catch(() => {});
+  }
+
+  const next = await setJob({
+    status: 'cancelled',
+    message: 'Сбор отменен.',
+    finishedAt: Date.now(),
+    captureTabId: null
+  });
   return { ok: true, job: next };
 }
 
-async function restoreAutoDiscardable(job) {
-  if (!job?.tabId || job.previousAutoDiscardable == null) return;
-  await chrome.tabs.update(job.tabId, { autoDiscardable: job.previousAutoDiscardable }).catch(() => {});
-}
-
-async function finishJobWithError(jobId, tabId, message) {
+async function finishJobWithError(jobId, sourceTabId, message) {
   const job = await getJob();
   if (job?.jobId !== jobId) return;
-  const next = await setJob({ status: 'error', message, finishedAt: Date.now(), tabId });
-  await restoreAutoDiscardable(next);
+
+  if (job.captureTabId != null) {
+    await chrome.tabs.remove(job.captureTabId).catch(() => {});
+  }
+
+  await setJob({
+    status: 'error',
+    message,
+    finishedAt: Date.now(),
+    tabId: sourceTabId ?? job.sourceTabId ?? job.tabId,
+    captureTabId: null
+  });
 }
 
 async function handleCaptureComplete(message) {
   const job = await getJob();
   if (!job || job.jobId !== message.jobId) return;
+
   const archive = await getArchive(message.archiveId);
-  if (!archive) return finishJobWithError(message.jobId, job.tabId, 'Архив не найден после завершения сбора.');
-  const next = await setJob({
+  if (!archive) {
+    return finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, 'Архив не найден после завершения сбора.');
+  }
+
+  await indexArchive(archive);
+
+  if (job.captureTabId != null) {
+    await chrome.tabs.remove(job.captureTabId).catch(() => {});
+  }
+
+  await setJob({
     status: 'done',
-    message: 'Переписка собрана.',
+    message: message.mode === 'continue'
+      ? ('Архив продолжен: +' + (message.addedCount || 0) + ' сообщений.')
+      : 'Переписка собрана.',
     count: archive.messages?.length || 0,
+    addedCount: message.addedCount || archive.lastCaptureAddedCount || 0,
     imageCount: archive.imageCount || 0,
     archiveId: archive.id,
-    finishedAt: Date.now()
+    finishedAt: Date.now(),
+    captureTabId: null
   });
-  await restoreAutoDiscardable(next);
 }
 
 function escapeHtml(value) {
@@ -437,6 +467,55 @@ async function waitForTabComplete(tabId, timeout = 30000) {
 
 async function cdp(tabId, method, params = {}) {
   return chrome.debugger.sendCommand({ tabId }, method, params);
+}
+
+async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
+  let attached = false;
+  const count = Math.max(1, Math.min(16, Number(bursts) || 7));
+  const sign = direction === 'up' ? -1 : 1;
+
+  try {
+    const targets = await chrome.debugger.getTargets();
+    const target = targets.find(item => item.tabId === tabId);
+    if (target?.attached) {
+      throw new Error('Фоновая вкладка уже занята Chrome debugger.');
+    }
+
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+
+    const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
+      expression: '({width: innerWidth, height: innerHeight})',
+      returnByValue: true
+    });
+    const viewport = viewportResult?.result?.value || {};
+    const width = Math.max(640, Number(viewport.width) || 1280);
+    const height = Math.max(480, Number(viewport.height) || 720);
+    const x = Math.round(width * 0.68);
+    const y = Math.round(height * 0.48);
+
+    await cdp(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x,
+      y,
+      button: 'none'
+    }).catch(() => {});
+
+    for (let i = 0; i < count; i++) {
+      await cdp(tabId, 'Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        x,
+        y,
+        deltaX: 0,
+        deltaY: sign * 860
+      });
+      await sleep(90);
+    }
+
+    return { ok: true, direction, bursts: count };
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
 }
 
 async function dispatchKey(tabId, key, code, windowsVirtualKeyCode, modifiers = 0) {
