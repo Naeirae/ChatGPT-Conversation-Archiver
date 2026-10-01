@@ -1536,14 +1536,13 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   if (!job || !['starting', 'running', 'paused'].includes(job.status)) return;
 
   if (job.captureTabId === tabId) {
-    await setJob({
-      status: 'error',
-      message: job.captureTarget === 'current'
+    await finishJobWithError(
+      job.jobId,
+      job.sourceTabId ?? job.tabId,
+      job.captureTarget === 'current'
         ? 'Текущая вкладка с перепиской была закрыта.'
-        : 'Рабочая копия с перепиской была закрыта. Можно повторить в обычном режиме.',
-      finishedAt: Date.now(),
-      captureTabId: null
-    });
+        : 'Рабочая копия с перепиской была закрыта. Можно повторить в обычном режиме.'
+    );
   }
 });
 
