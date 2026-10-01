@@ -99,7 +99,7 @@ Responsibilities:
 
 ### `popup.js` / `popup.html` / `popup.css`
 
-User-facing control plane.
+Compact user-facing control plane.
 
 Responsibilities:
 
@@ -110,6 +110,20 @@ Responsibilities:
 - stores presentation/user preferences.
 
 The popup is not the owner of long-running state. Closing it must not cancel a running job.
+
+### `planner.js` / `planner.html` / `planner.css`
+
+Full-page manual organization surface for completed archives.
+
+Responsibilities:
+
+- render the archived conversation as a scrollable sequence;
+- place new-tab and H2-topic markers directly on message boundaries;
+- persist those markers per archive in local storage;
+- show lightweight image previews and collapse very long messages;
+- serialize the visual markers into the pure `lib/tab-plan.mjs` format only at export time.
+
+The planner does not mutate the canonical archive content or message order.
 
 ## Persistent state
 
