@@ -1,4 +1,9 @@
 import {
+  createArchiveStore,
+  summarizeArchive
+} from './lib/archive-store.mjs';
+
+import {
   externalMatchSignature,
   exportTailSignatures,
   findExportTailAnchor,
@@ -18,13 +23,7 @@ import {
   parseUrl
 } from './lib/urls.mjs';
 
-const LAST_ARCHIVE_KEY = 'lastArchiveId';
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
-const ARCHIVE_PREFIX = 'archive:';
-const DRAFT_PREFIX = 'draft:';
-const ARCHIVE_INDEX_KEY = 'archiveIndex';
-const DOC_EXPORTS_KEY = 'docExports';
-const DOC_LINKS_KEY = 'docLinks';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
@@ -32,6 +31,23 @@ async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
   return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
 }
+
+const archiveStore = createArchiveStore(chrome.storage.local);
+const {
+  getArchive,
+  putArchive,
+  removeArchive,
+  getDraft,
+  getLastArchive,
+  getArchiveForUrl,
+  indexArchive,
+  getLinkedDoc,
+  setLinkedDoc,
+  getDocExport,
+  recordDocExport
+} = archiveStore;
+const summarize = summarizeArchive;
+
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function makeCaptureError(code, message) {
@@ -112,170 +128,9 @@ function isGoogleDocUrl(url = '') {
   return /^https:\/\/docs\.google\.com\/document\//i.test(url);
 }
 
-function archiveKey(id) {
-  return `${ARCHIVE_PREFIX}${id}`;
-}
-
-function summarize(conversation) {
-  if (!conversation) return null;
-  return {
-    id: conversation.id,
-    title: conversation.title,
-    sourceUrl: conversation.sourceUrl,
-    capturedAt: conversation.capturedAt,
-    messageCount: conversation.messages?.length || 0,
-    imageCount: conversation.imageCount || 0,
-    imageBinaryReady: conversation.imageBinaryReady || 0,
-    imageBinaryFailed: conversation.imageBinaryFailed || 0,
-    lastImageBinaryReady: conversation.lastImageBinaryReady || 0,
-    lastImageBinaryFailed: conversation.lastImageBinaryFailed || 0,
-    lastCaptureAddedCount: conversation.lastCaptureAddedCount || 0,
-    lastCaptureMode: conversation.lastCaptureMode || 'full',
-    lastMessageId: conversation.lastMessageId || conversation.messages?.[conversation.messages.length - 1]?.id || ''
-  };
-}
-
-async function getActiveTab() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return tab || null;
-}
-
-async function getJob() {
-  return (await chrome.storage.local.get(ACTIVE_JOB_KEY))[ACTIVE_JOB_KEY] || null;
-}
-
-async function setJob(patch) {
-  const current = await getJob();
-  const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
-  await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: next });
-  if (next.tabId != null) {
-    const running = next.status === 'running' || next.status === 'starting';
-    const phaseBadge = next.phase === 'top' ? '1/3' : next.phase === 'walk' ? '2/3' : next.phase === 'finalizing' ? '3/3' : '…';
-    const badge = running ? phaseBadge : next.status === 'done' ? '✓' : next.status === 'error' ? '!' : next.status === 'cancelled' ? '×' : '';
-    await chrome.action.setBadgeText({ tabId: next.tabId, text: badge }).catch(() => {});
-    const title = next.message ? `Архиватор ChatGPT: ${next.message}` : 'Архиватор ChatGPT';
-    await chrome.action.setTitle({ tabId: next.tabId, title }).catch(() => {});
-  }
-  return next;
-}
-
-async function appendRunLog(patch, entry = null) {
-  const current = await getJob();
-  const log = Array.isArray(current?.log) ? [...current.log] : [];
-  if (entry) {
-    log.push({
-      at: Date.now(),
-      level: entry.level || 'info',
-      code: entry.code || '',
-      message: entry.message || '',
-      phase: entry.phase || patch?.phase || current?.phase || '',
-      count: Number(entry.count ?? patch?.count ?? current?.count ?? 0)
-    });
-  }
-  return setJob({ ...(patch || {}), log: log.slice(-40) });
-}
-
-function formatRunLog(job) {
-  if (!job) return 'Нет данных о последнем запуске.';
-  const lines = [];
-  lines.push('ChatGPT Archiver run');
-  lines.push('jobId: ' + (job.jobId || ''));
-  lines.push('mode: ' + (job.captureMode || 'full'));
-  lines.push('captureTarget: ' + (job.captureTarget || 'copy'));
-  lines.push('status: ' + (job.status || ''));
-  lines.push('phase: ' + (job.phase || ''));
-  lines.push('count: ' + Number(job.count || 0));
-  if (job.draftCount) lines.push('draftCount: ' + Number(job.draftCount || 0));
-  if (job.archiveId) lines.push('archiveId: ' + job.archiveId);
-  if (job.message) lines.push('message: ' + job.message);
-  lines.push('');
-  for (const item of job.log || []) {
-    const time = item.at ? new Date(item.at).toLocaleTimeString('ru-RU') : '--:--:--';
-    const meta = [item.phase, Number.isFinite(item.count) ? item.count + ' msg' : ''].filter(Boolean).join(' · ');
-    lines.push('[' + time + '] ' + (item.level || 'info').toUpperCase() + ' ' + (item.code || '') +
-      (meta ? ' · ' + meta : '') + (item.message ? ' — ' + item.message : ''));
-  }
-  return lines.join('\n');
-}
-
-async function getArchive(id) {
-  if (!id) return null;
-  const result = await chrome.storage.local.get(archiveKey(id));
-  return result[archiveKey(id)] || null;
-}
-
-async function getDraft(id) {
-  if (!id) return null;
-  const result = await chrome.storage.local.get(DRAFT_PREFIX + id);
-  return result[DRAFT_PREFIX + id] || null;
-}
-
 async function cleanupTemporaryBaseline(job) {
   if (!job?.baselineArchiveId) return;
-  await chrome.storage.local.remove(archiveKey(job.baselineArchiveId)).catch(() => {});
-}
-
-async function getLastArchive() {
-  const result = await chrome.storage.local.get(LAST_ARCHIVE_KEY);
-  return getArchive(result[LAST_ARCHIVE_KEY]);
-}
-
-async function getArchiveForUrl(url = '') {
-  const key = conversationKey(url);
-  if (!key) return null;
-  const result = await chrome.storage.local.get(ARCHIVE_INDEX_KEY);
-  const index = result[ARCHIVE_INDEX_KEY] || {};
-  return getArchive(index[key]);
-}
-
-async function indexArchive(conversation) {
-  const key = conversationKey(conversation?.sourceUrl || '');
-  if (!key || !conversation?.id) return;
-  const result = await chrome.storage.local.get(ARCHIVE_INDEX_KEY);
-  const index = { ...(result[ARCHIVE_INDEX_KEY] || {}), [key]: conversation.id };
-  await chrome.storage.local.set({ [ARCHIVE_INDEX_KEY]: index });
-}
-
-async function getLinkedDoc(chatUrl = '') {
-  const key = conversationKey(chatUrl);
-  if (!key) return null;
-
-  const result = await chrome.storage.local.get([DOC_LINKS_KEY, DOC_EXPORTS_KEY]);
-  const direct = (result[DOC_LINKS_KEY] || {})[key] || null;
-  if (direct) return direct;
-
-  // Backward compatibility: versions before linked-doc state stored only
-  // docId -> conversationKey in docExports. Recover that relationship so an
-  // already exported document can immediately become the Continue target.
-  const exports = result[DOC_EXPORTS_KEY] || {};
-  for (const [docId, entry] of Object.entries(exports)) {
-    if (entry?.conversationKey !== key) continue;
-    const recovered = {
-      url: entry.docUrl || ('https://docs.google.com/document/d/' + docId + '/edit'),
-      docId,
-      lastMessageId: entry.lastMessageId || '',
-      recoveredFromLegacyExport: true,
-      updatedAt: Date.now()
-    };
-    await setLinkedDoc(chatUrl, recovered);
-    return recovered;
-  }
-
-  return null;
-}
-
-async function setLinkedDoc(chatUrl = '', docInfo = null) {
-  const key = conversationKey(chatUrl);
-  if (!key || !docInfo?.url) return null;
-  const result = await chrome.storage.local.get(DOC_LINKS_KEY);
-  const links = { ...(result[DOC_LINKS_KEY] || {}) };
-  links[key] = {
-    ...docInfo,
-    url: normalizeGoogleDocUrl(docInfo.url) || docInfo.url,
-    updatedAt: Date.now()
-  };
-  await chrome.storage.local.set({ [DOC_LINKS_KEY]: links });
-  return links[key];
+  await removeArchive(job.baselineArchiveId).catch(() => {});
 }
 
 function makeJobId() {
@@ -448,9 +303,7 @@ async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
 
   // Keep the imported Google Doc as a temporary baseline only. It must not
   // replace/index the current archive until the ChatGPT tail has been verified.
-  await chrome.storage.local.set({
-    [archiveKey(archiveId)]: archive
-  });
+  await putArchive(archive);
   return archive;
 }
 
@@ -674,7 +527,7 @@ async function startCapture({
     }
 
     if (mode === 'sync' && existingArchive?.id) {
-      await chrome.storage.local.remove(archiveKey(existingArchive.id)).catch(() => {});
+      await removeArchive(existingArchive.id).catch(() => {});
     }
 
     const rawMessage = error?.message || String(error);
@@ -1413,36 +1266,6 @@ async function pasteArchiveIntoGoogleDoc(
   };
 }
 
-async function recordDocExport(conversation, docUrl) {
-  const docKey = googleDocKey(docUrl);
-  if (!docKey || !conversation) return null;
-
-  const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
-  const exports = result[DOC_EXPORTS_KEY] || {};
-  const messages = conversation.messages || [];
-  const lastMessage = messages[messages.length - 1] || null;
-  const lastMessageId = lastMessage?.id || '';
-  const tailSignatures = exportTailSignatures(messages);
-  exports[docKey] = {
-    conversationKey: conversationKey(conversation.sourceUrl),
-    archiveId: conversation.id,
-    lastMessageId,
-    lastMessageSignature: lastMessage ? messageSignature(lastMessage.role, lastMessage.text) : '',
-    tailSignatures,
-    docUrl,
-    updatedAt: Date.now()
-  };
-  await chrome.storage.local.set({ [DOC_EXPORTS_KEY]: exports });
-
-  return setLinkedDoc(conversation.sourceUrl, {
-    url: docUrl,
-    docId: docKey,
-    lastMessageId,
-    lastMessageSignature: lastMessage ? messageSignature(lastMessage.role, lastMessage.text) : '',
-    tailSignatures
-  });
-}
-
 async function appendMessagesToGoogleDocUrl(conversation, messages, docUrl, sourceTabId = null) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
   if (!normalizedUrl) throw new Error('Некорректная ссылка на Google Doc.');
@@ -1502,9 +1325,7 @@ async function exportConversation({ activeDoc = false } = {}) {
     const docKey = googleDocKey(tab.url);
     if (!docKey) throw new Error('Не удалось определить ID открытого Google Doc.');
 
-    const result = await chrome.storage.local.get(DOC_EXPORTS_KEY);
-    const exports = result[DOC_EXPORTS_KEY] || {};
-    const previous = exports[docKey];
+    const previous = await getDocExport(docKey);
     const currentConversationKey = conversationKey(conversation.sourceUrl);
 
     if (previous?.conversationKey === currentConversationKey) {
