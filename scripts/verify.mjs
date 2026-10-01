@@ -58,7 +58,11 @@ for (const path of forbiddenArtifacts) {
   }
 }
 
-const tests = spawnSync(process.execPath, ['--test', 'tests'], {
+const tests = spawnSync(process.execPath, [
+  '--test',
+  'tests/text.test.mjs',
+  'tests/urls.test.mjs'
+], {
   encoding: 'utf8'
 });
 if (tests.status !== 0) {
