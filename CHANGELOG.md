@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.20
+
+- add a quiet Windows updater launcher, `Обновить ChatGPT Archiver.vbs`, as the user-facing entry point;
+- keep the proven `update.ps1` engine and `update.cmd` diagnostic fallback unchanged;
+- run the launcher without a visible console, show a short start notification and a final success/error dialog;
+- offer to open `updater-last.log` automatically when the hidden updater fails;
+- smoke-test the VBS launcher on the Windows CI job.
+
 ## 0.3.19
 
 - replace the copied message-map/text-plan workflow with a dedicated full-page visual archive planner;
