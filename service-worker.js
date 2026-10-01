@@ -590,12 +590,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_GET_STATE': {
         const job = await getJob();
         const tab = await getActiveTab();
-        let archive = null;
+        let currentArchive = null;
         if (tab?.url && isConversationUrl(tab.url)) {
-          archive = await getArchiveForUrl(tab.url);
+          currentArchive = await getArchiveForUrl(tab.url);
         }
-        if (!archive) archive = await getLastArchive();
-        return { ok: true, job, archive: summarize(archive) };
+        const archive = currentArchive || await getLastArchive();
+        return {
+          ok: true,
+          job,
+          archive: summarize(archive),
+          canContinue: Boolean(currentArchive?.messages?.length)
+        };
       }
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
