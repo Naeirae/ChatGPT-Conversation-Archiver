@@ -29,8 +29,15 @@ if errorlevel 1 (
 
 echo [2/2] Running updater...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { & '%TEMP_UPDATER%' -InstallPath '%~dp0' 2^>^&1 ^| Tee-Object -FilePath '%UPDATER_LOG%'; if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 0 } } catch { Write-Host ('ERROR: ' + $_.Exception.Message); ($_ ^| Out-String) ^| Out-File -FilePath '%UPDATER_LOG%' -Append -Encoding utf8; exit 1 }"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0" > "%UPDATER_LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
+
+if exist "%UPDATER_LOG%" (
+  type "%UPDATER_LOG%"
+) else (
+  echo ERROR: updater log was not created.
+)
 
 echo.
 if not "%RC%"=="0" (
