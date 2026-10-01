@@ -4,6 +4,7 @@ const ARCHIVE_PREFIX = 'archive:';
 const DRAFT_PREFIX = 'draft:';
 const ARCHIVE_INDEX_KEY = 'archiveIndex';
 const DOC_EXPORTS_KEY = 'docExports';
+const DOC_LINKS_KEY = 'docLinks';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
@@ -21,6 +22,20 @@ function hashText(text = '') {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(16);
+}
+
+function normalizeMatchText(text = '') {
+  return String(text)
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u200b-\u200d\ufeff]/g, '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function messageSignature(role, text = '') {
+  return String(role || 'unknown') + ':' + hashText(normalizeMatchText(text));
 }
 
 
@@ -55,6 +70,20 @@ function googleDocKey(url = '') {
   if (!parsed || parsed.hostname !== 'docs.google.com') return '';
   const match = parsed.pathname.match(/\/document\/d\/([^/]+)/);
   return match?.[1] || '';
+}
+
+function googleDocTabToken(url = '') {
+  const parsed = parseUrl(url);
+  if (!parsed) return '';
+  return parsed.searchParams.get('tab') || 't.0';
+}
+
+function normalizeGoogleDocUrl(url = '') {
+  const parsed = parseUrl(String(url).trim());
+  if (!parsed || parsed.protocol !== 'https:' || parsed.hostname !== 'docs.google.com') return '';
+  const docId = googleDocKey(parsed.href);
+  if (!docId) return '';
+  return parsed.href;
 }
 
 function makeCaptureError(code, message) {
@@ -247,6 +276,27 @@ async function indexArchive(conversation) {
   const result = await chrome.storage.local.get(ARCHIVE_INDEX_KEY);
   const index = { ...(result[ARCHIVE_INDEX_KEY] || {}), [key]: conversation.id };
   await chrome.storage.local.set({ [ARCHIVE_INDEX_KEY]: index });
+}
+
+async function getLinkedDoc(chatUrl = '') {
+  const key = conversationKey(chatUrl);
+  if (!key) return null;
+  const result = await chrome.storage.local.get(DOC_LINKS_KEY);
+  return (result[DOC_LINKS_KEY] || {})[key] || null;
+}
+
+async function setLinkedDoc(chatUrl = '', docInfo = null) {
+  const key = conversationKey(chatUrl);
+  if (!key || !docInfo?.url) return null;
+  const result = await chrome.storage.local.get(DOC_LINKS_KEY);
+  const links = { ...(result[DOC_LINKS_KEY] || {}) };
+  links[key] = {
+    ...docInfo,
+    url: normalizeGoogleDocUrl(docInfo.url) || docInfo.url,
+    updatedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [DOC_LINKS_KEY]: links });
+  return links[key];
 }
 
 function makeJobId() {
