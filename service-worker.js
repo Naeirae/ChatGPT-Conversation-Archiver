@@ -693,6 +693,13 @@ async function writeClipboard(html, text) {
   if (!result?.ok) throw new Error(result?.error || 'Не удалось записать переписку в буфер обмена.');
 }
 
+async function readClipboardText() {
+  await ensureOffscreen();
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OFFSCREEN_READ', target: 'offscreen' });
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось прочитать текст из буфера обмена.');
+  return String(result.text || '');
+}
+
 async function waitForTabComplete(tabId, timeout = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -778,6 +785,185 @@ async function editorPoint(tabId) {
     returnByValue: true
   });
   return result?.result?.value || { x: 500, y: 300 };
+}
+
+async function googleDocPageState(tabId) {
+  const result = await cdp(tabId, 'Runtime.evaluate', {
+    expression: `({
+      href: location.href,
+      title: document.title,
+      readyState: document.readyState
+    })`,
+    returnByValue: true
+  });
+  return result?.result?.value || {};
+}
+
+async function focusGoogleDocEditor(tabId) {
+  const point = await editorPoint(tabId);
+  await cdp(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  });
+  await cdp(tabId, 'Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: point.x,
+    y: point.y,
+    button: 'left',
+    clickCount: 1
+  });
+  await sleep(250);
+}
+
+async function copyCurrentGoogleDocTabText(tabId) {
+  await focusGoogleDocEditor(tabId);
+  await dispatchKey(tabId, 'a', 'KeyA', 65, 2);
+  await sleep(120);
+  await dispatchKey(tabId, 'c', 'KeyC', 67, 2);
+  await sleep(220);
+  const text = await readClipboardText();
+  await dispatchKey(tabId, 'Escape', 'Escape', 27, 0).catch(() => {});
+  return text;
+}
+
+function googleDocMarkerRole(line = '') {
+  const value = normalizeMatchText(line);
+  if (/^Пользователь(?:\s*\/\s*[^:]+)?:$/i.test(value)) return 'user';
+  if (/^ChatGPT(?:\s*\/\s*[^:]+)?:$/i.test(value)) return 'assistant';
+  return '';
+}
+
+function plainMessageHtml(text = '') {
+  return normalizeMatchText(text)
+    .split(/\n{2,}/)
+    .map(part => '<p>' + escapeHtml(part).replace(/\n/g, '<br>') + '</p>')
+    .join('');
+}
+
+function parseGoogleDocTabMessages(text = '', tabUrl = '', tabIndex = 0) {
+  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+  const messages = [];
+  let current = null;
+
+  const flush = () => {
+    if (!current) return;
+    const body = normalizeMatchText(current.lines.join('\n'));
+    messages.push({
+      id: 'doc:' + tabIndex + ':' + messages.length + ':' + hashText(messageSignature(current.role, body)),
+      role: current.role,
+      text: body,
+      html: plainMessageHtml(body),
+      images: [],
+      reasoningHtml: '',
+      reasoningText: '',
+      reasoningLabel: '',
+      reasoningCount: 0,
+      baselineTabUrl: tabUrl
+    });
+    current = null;
+  };
+
+  for (const raw of lines) {
+    const line = normalizeMatchText(raw);
+    const role = googleDocMarkerRole(line);
+    if (role) {
+      flush();
+      current = { role, lines: [] };
+      continue;
+    }
+    if (!current) continue;
+    if (/^ChatGPT сказал:$/i.test(line) || /^ChatGPT said:$/i.test(line)) continue;
+    current.lines.push(raw);
+  }
+  flush();
+  return messages;
+}
+
+async function readGoogleDocBaseline(docUrl, sourceTabId) {
+  const normalizedUrl = normalizeGoogleDocUrl(docUrl);
+  if (!normalizedUrl) throw new Error('Нужна ссылка на Google Doc вида docs.google.com/document/d/...');
+
+  let tab = null;
+  let attached = false;
+  try {
+    tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
+    if (!tab?.id) throw new Error('Не удалось открыть Google Doc для сверки.');
+    await waitForTabComplete(tab.id);
+    await sleep(1800);
+
+    await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+    attached = true;
+    await focusGoogleDocEditor(tab.id);
+
+    // Go to the first document tab. Google Docs officially maps Ctrl+Shift+PgUp/PgDown
+    // to previous/next document tab while the editor has focus.
+    let state = await googleDocPageState(tab.id);
+    for (let i = 0; i < 100; i++) {
+      const before = googleDocTabToken(state.href);
+      await dispatchKey(tab.id, 'PageUp', 'PageUp', 33, 10);
+      await sleep(220);
+      const next = await googleDocPageState(tab.id);
+      if (googleDocTabToken(next.href) === before) {
+        state = next;
+        break;
+      }
+      state = next;
+    }
+
+    const tabs = [];
+    const seen = new Set();
+    for (let i = 0; i < 100; i++) {
+      state = await googleDocPageState(tab.id);
+      const token = googleDocTabToken(state.href);
+      if (seen.has(token)) break;
+      seen.add(token);
+
+      const text = await copyCurrentGoogleDocTabText(tab.id);
+      tabs.push({
+        index: tabs.length,
+        token,
+        url: state.href,
+        title: state.title || '',
+        text
+      });
+
+      await focusGoogleDocEditor(tab.id);
+      await dispatchKey(tab.id, 'PageDown', 'PageDown', 34, 10);
+      await sleep(260);
+      const after = await googleDocPageState(tab.id);
+      if (googleDocTabToken(after.href) === token) break;
+    }
+
+    const messages = [];
+    for (const item of tabs) {
+      messages.push(...parseGoogleDocTabMessages(item.text, item.url, item.index));
+    }
+
+    const meaningful = messages.filter(item => normalizeMatchText(item.text));
+    if (meaningful.length < 2) {
+      throw new Error('В Google Doc не удалось найти достаточно реплик для надежной сверки.');
+    }
+
+    const tail = meaningful.slice(-6);
+    const target = tail[tail.length - 1];
+    return {
+      docId: googleDocKey(normalizedUrl),
+      inputUrl: normalizedUrl,
+      tabs,
+      messages,
+      meaningfulCount: meaningful.length,
+      tailSignatures: tail.map(item => messageSignature(item.role, item.text)),
+      targetTabUrl: target?.baselineTabUrl || tabs[tabs.length - 1]?.url || normalizedUrl,
+      title: String(tab.title || '').replace(/\s*[–—-]\s*Google Docs\s*$/i, '').trim()
+    };
+  } finally {
+    if (attached && tab?.id) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
+    if (tab?.id) await chrome.tabs.remove(tab.id).catch(() => {});
+    if (sourceTabId != null) await chrome.tabs.update(sourceTabId, { active: true }).catch(() => {});
+  }
 }
 
 async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
