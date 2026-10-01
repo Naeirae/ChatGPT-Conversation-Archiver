@@ -13,7 +13,7 @@ test('display normalization preserves meaningful paragraph breaks', () => {
   const input = '  Первый абзац  \r\n\r\n\r\nВторой\u00a0абзац  ';
   assert.equal(
     normalizeDisplayText(input),
-    '  Первый абзац\n\nВторой абзац'
+    'Первый абзац\n\nВторой абзац'
   );
 });
 
