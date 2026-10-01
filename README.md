@@ -4,6 +4,8 @@ Chrome extension for archiving complete ChatGPT conversations — including rich
 
 > Work in progress. No license has been selected yet.
 
+Project docs: [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md)
+
 ## Goal
 
 Save a ChatGPT conversation as an editable document rather than a screenshot:
@@ -112,6 +114,20 @@ From 0.3.14 the archive stores more than the source URL. During finalization the
 Google Docs export no longer asks Docs to fetch private ChatGPT image URLs from rich HTML. Text is pasted as rich HTML with image tags removed. When an archived message contains a prepared binary image, the debugger keeps the Docs tab active, writes the real image to the clipboard (ClipboardItem first, selected-image execCommand fallback), and performs a physical Ctrl+V at that point in the message sequence.
 
 The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. Old archives created before 0.3.14 do not contain binary image data; run **Собрать заново** to repair their images.
+
+## Engineering status
+
+The repository is pre-1.0 and optimized for explicit failure handling rather than silent success claims.
+
+Current quality gates:
+
+- dependency-free JavaScript/manifest verification;
+- GitHub Actions verification on pushes and pull requests;
+- Windows PowerShell parser check for the updater;
+- documented architecture, permission boundary and manual smoke matrix;
+- duplicate-safe continuation that fails closed when a Google Docs splice cannot be verified.
+
+The largest remaining engineering debt is modularization plus regression tests around capture/continuation behavior. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Install locally
 
