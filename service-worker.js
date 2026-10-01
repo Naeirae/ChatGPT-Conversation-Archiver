@@ -474,20 +474,14 @@ async function startCapture({
       captureTab = await chrome.tabs.get(sourceTab.id);
       domProbe = await waitForChatDomReady(sourceTab.id, 15000);
     } else {
-      // Prefer duplicating the already-loaded conversation. Directly opening the
-      // same URL in a fresh tab sometimes makes ChatGPT show
-      // "Failed to load this conversation" even while the source tab is healthy.
-      try {
-        captureTab = await chrome.tabs.duplicate(sourceTab.id);
-      } catch (_) {
-        captureTab = null;
-      }
-      if (!captureTab?.id) {
-        captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
-      }
-      if (!captureTab?.id) throw new Error('Не удалось открыть рабочую копию для сбора.');
+      // Restore the last live-proven background capture path (0.3.10):
+      // open a dedicated ChatGPT tab in the foreground long enough to hydrate
+      // the virtualized conversation DOM, then return focus to the source chat
+      // after the collector has started.
+      captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
+      if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для фонового сбора.');
 
-      await chrome.tabs.update(captureTab.id, { active: true, autoDiscardable: false }).catch(() => {});
+      await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
       captureTab = await waitForChatTabComplete(captureTab.id);
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
@@ -552,24 +546,17 @@ async function startCapture({
     });
 
     if (captureTarget === 'copy') {
-      // Current ChatGPT can stop hydrating/virtualizing older turns when the
-      // duplicated conversation loses foreground focus. Keep the working copy
-      // active during physical wheel traversal; the source tab remains untouched
-      // and is restored when the capture ends.
-      await chrome.tabs.update(captureTab.id, {
-        active: true,
-        autoDiscardable: false
-      }).catch(() => {});
+      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
       await appendRunLog({
         status: 'running',
         message: mode === 'full'
-          ? 'Сбор идет в рабочей копии; вкладка остается активной…'
-          : 'Добираю сообщения в рабочей копии; вкладка остается активной…',
+          ? 'Фоновый сбор идет в рабочей вкладке…'
+          : 'Фоново добираю сообщения после найденного стыка…',
         phase: 'top'
       }, {
         level: 'info',
-        code: 'CAPTURE_TAB_KEPT_ACTIVE',
-        message: 'Рабочая копия остается активной для надежной физической прокрутки ChatGPT.',
+        code: 'SOURCE_TAB_RESTORED',
+        message: 'Фокус возвращен в исходный чат; рабочая вкладка продолжает сбор в фоне.',
         phase: 'top',
         count: 0
       });

@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.23
+
+- roll the default capture path back to the last live-proven 0.3.10 background architecture instead of continuing the failed 0.3.22 foreground-copy experiment;
+- open a fresh dedicated ChatGPT capture tab, hydrate it in the foreground, start the collector, then restore focus to the source chat while collection continues in the working tab;
+- restore the user-facing “Фоновый режим — рабочая копия” terminology and the README description of the background workflow;
+- keep the later archive, Google Docs, planner, updater, CI and portfolio layers intact;
+- 0.3.22 is explicitly treated as a failed live experiment, not as the new product architecture.
+
 ## 0.3.22
 
 - keep the duplicated ChatGPT working-copy tab active during physical wheel traversal instead of returning focus to the source chat immediately;
