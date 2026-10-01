@@ -19,6 +19,17 @@
     <button id="capture" class="primary">Собрать заново</button>
     <button id="continue" class="hidden">Продолжить</button>
 
+    <section class="capture-mode">
+      <label class="field">
+        <span>Режим сбора</span>
+        <select id="captureTarget">
+          <option value="current">Текущая вкладка — прокрутка будет видна</option>
+          <option value="copy">Рабочая копия — собирать отдельно</option>
+        </select>
+      </label>
+      <div id="captureTargetHint" class="muted"></div>
+    </section>
+
     <section class="doc-link">
       <label class="field doc-link-field">
         <span>Google Doc архива</span>
@@ -108,7 +119,7 @@
       <a href="https://github.com/Naeirae/ChatGPT-Conversation-Archiver" target="_blank" rel="noreferrer">GitHub</a>
     </section>
 
-    <p class="note">Сбор продолжает работать в открытой вкладке ChatGPT после закрытия этого окна. Размышления сохраняются только если соответствующий блок доступен в интерфейсе страницы.</p>
+    <p class="note">В режиме «Текущая вкладка» архиватор физически прокручивает открытый чат, поэтому до завершения лучше его не трогать. В режиме «Рабочая копия» исходный чат остается свободным. Размышления сохраняются только если соответствующий блок доступен в интерфейсе страницы.</p>
   </main>
   <script src="popup.js"></script>
 </body>
