@@ -427,11 +427,11 @@ async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
     lastMessageId: messages[messages.length - 1]?.id || ''
   };
 
+  // Keep the imported Google Doc as a temporary baseline only. It must not
+  // replace/index the current archive until the ChatGPT tail has been verified.
   await chrome.storage.local.set({
-    [archiveKey(archiveId)]: archive,
-    [LAST_ARCHIVE_KEY]: archiveId
+    [archiveKey(archiveId)]: archive
   });
-  await indexArchive(archive);
   return archive;
 }
 
