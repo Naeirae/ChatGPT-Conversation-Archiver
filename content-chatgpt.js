@@ -130,6 +130,51 @@
     return null;
   }
 
+  function turnStableKey(turn) {
+    const nodes = [turn, turn?.matches?.(ROLE_SELECTOR) ? turn : turn?.querySelector?.(ROLE_SELECTOR)].filter(Boolean);
+    const attrs = ['data-message-id', 'data-turn-id', 'data-turn-key', 'data-testid', 'data-chatgpt-search-unit-key'];
+    for (const node of nodes) {
+      for (const attr of attrs) {
+        const value = String(node.getAttribute?.(attr) || '').trim();
+        if (value) return attr + ':' + value;
+      }
+    }
+    return '';
+  }
+
+  function turnTextSignature(turn) {
+    const role = roleOf(turn) || 'unknown';
+    const root = contentRoot(turn, role);
+    const text = String(root?.innerText || root?.textContent || '').trim();
+    return role + ':' + hashText(text);
+  }
+
+  function makeCaptureBoundary(turns) {
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const key = turnStableKey(turns[i]);
+      if (key) return { kind: 'stable', key, role: roleOf(turns[i]) || '', ordinal: i };
+    }
+
+    for (let i = turns.length - 1; i >= 0; i--) {
+      if (roleOf(turns[i]) === 'user') {
+        return { kind: 'signature', key: turnTextSignature(turns[i]), role: 'user', ordinal: i };
+      }
+    }
+
+    const last = turns[turns.length - 1];
+    return last ? { kind: 'signature', key: turnTextSignature(last), role: roleOf(last) || '', ordinal: turns.length - 1 } : null;
+  }
+
+  function matchesBoundary(turn, boundary) {
+    if (!boundary || !turn) return false;
+    if (boundary.kind === 'stable') return turnStableKey(turn) === boundary.key;
+    return turnTextSignature(turn) === boundary.key;
+  }
+
+  function boundaryIsVisible(boundary) {
+    return Boolean(boundary && orderedTurns().some(turn => matchesBoundary(turn, boundary)));
+  }
+
   function findScrollContainer(turn) {
     let el = turn && turn.parentElement;
     while (el && el !== document.body && el !== document.documentElement) {
@@ -393,7 +438,16 @@
     const now = Date.now();
     if (now - lastProgressAt < 500 && !(extra && extra.force)) return;
     lastProgressAt = now;
-    await updateJob(Object.assign({ status: 'running', message, count }, extra || {}));
+    const patch = Object.assign({ status: 'running', message, count }, extra || {});
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_PROGRESS',
+        jobId: state.jobId,
+        patch
+      });
+      if (result?.ok) return result;
+    } catch (_) {}
+    return updateJob(patch);
   }
 
   async function waitForDomQuiet(scroller, timeout) {
@@ -422,7 +476,12 @@
       const top = Math.round(scroller.scrollTop);
       const height = scroller.scrollHeight;
       const count = document.querySelectorAll(TURN_SELECTOR).length;
-      await progress('Отматываю в начало и загружаю старые сообщения… ' + map.size, map.size, { phase: 'top' });
+      await progress('Этап 1/3: иду к началу · собрано ' + map.size + ' сообщений', map.size, {
+        phase: 'top',
+        iteration: i + 1,
+        scrollTop: top,
+        scrollHeight: height
+      });
       if (top <= 2 && height === previousHeight && count === previousCount && previousTop <= 2) stable++;
       else stable = 0;
       previousHeight = height;
@@ -437,25 +496,49 @@
     throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться.');
   }
 
-  async function walkDown(scroller, map, order, jobId, settings) {
+  async function walkDown(scroller, map, order, jobId, settings, boundary) {
     let stable = 0;
     let previousHeight = -1;
     let previousCount = -1;
     let previousTop = -1;
+
     for (let i = 0; i < 1600 && stable < 5; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
+
+      if (boundaryIsVisible(boundary)) {
+        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          force: true
+        });
+        return;
+      }
+
       const viewport = scroller.clientHeight || innerHeight;
       const max = Math.max(0, scroller.scrollHeight - viewport);
       const current = Math.max(0, Math.round(scroller.scrollTop));
       const next = Math.min(max, current + Math.max(420, Math.floor(viewport * 0.68)));
+
       if (next >= max - 4) {
         await sleep(520);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
+
+        if (boundaryIsVisible(boundary)) {
+          await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            force: true
+          });
+          return;
+        }
+
         const height = scroller.scrollHeight;
         const count = document.querySelectorAll(TURN_SELECTOR).length;
         const top = Math.round(scroller.scrollTop);
@@ -471,9 +554,19 @@
         await sleep(240);
         await waitForDomQuiet(scroller, 1000);
       }
-      if (i % 3 === 0) await progress('Собираю переписку… ' + map.size + ' сообщений', map.size, { phase: 'walk', position: Math.round(scroller.scrollTop) });
+
+      if (i % 3 === 0) {
+        await progress('Этап 2/3: прохожу вниз · собрано ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          position: Math.round(scroller.scrollTop)
+        });
+      }
     }
-    if (stable < 5) throw new Error('Не удалось надежно дойти до конца переписки.');
+
+    if (!boundaryIsVisible(boundary)) {
+      throw new Error('Не удалось дойти до конца снимка переписки.');
+    }
   }
 
   async function captureConversation(jobId) {
@@ -488,7 +581,7 @@
     let originalScrollTop = 0;
     try {
       const settings = await getSettings();
-      await progress('Подготовка фонового сбора…', 0, { phase: 'starting', force: true });
+      await progress('Этап 1/3: фиксирую границы снимка…', 0, { phase: 'top', force: true });
       const turns = await waitForTurns(10000);
       const firstTurn = turns[0];
       if (!firstTurn) {
@@ -496,10 +589,19 @@
         const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
       }
+
+      const boundary = makeCaptureBoundary(turns);
+      if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
+
       scroller = findScrollContainer(firstTurn);
       originalScrollTop = scroller.scrollTop;
       await reachTop(scroller, map, order, jobId, settings);
-      await walkDown(scroller, map, order, jobId, settings);
+      await walkDown(scroller, map, order, jobId, settings, boundary);
+
+      await progress('Этап 3/3: сохраняю локальный архив…', map.size, {
+        phase: 'finalizing',
+        force: true
+      });
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
@@ -534,6 +636,11 @@
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
       const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
       await chrome.storage.local.set({ activeCaptureJob: Object.assign({}, current, { jobId, status, message, finishedAt: Date.now(), updatedAt: Date.now() }) });
+      if (status === 'error') {
+        try {
+          await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_FAILED', jobId, error: message });
+        } catch (_) {}
+      }
     } finally {
       state.running = false;
       state.jobId = null;
