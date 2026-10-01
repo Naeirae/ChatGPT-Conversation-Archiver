@@ -2,6 +2,12 @@ const LAST_ARCHIVE_KEY = 'lastArchiveId';
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const ARCHIVE_PREFIX = 'archive:';
 const DOCS_NEW_URL = 'https://docs.new';
+const SETTINGS_KEY = 'archiverSettings';
+const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
+async function getSettings() {
+  const result = await chrome.storage.local.get(SETTINGS_KEY);
+  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+}
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function isChatGptUrl(url = '') {
@@ -160,30 +166,43 @@ function escapeHtml(value) {
     .replace(/"/g, '&quot;');
 }
 
-function roleTitle(role) {
-  return role === 'user' ? 'Пользователь' : 'ChatGPT';
+function speakerLabel(role, settings) {
+  if (role === 'user') return settings.userName ? `Пользователь / ${settings.userName}:` : 'Пользователь:';
+  return settings.assistantName ? `ChatGPT / ${settings.assistantName}:` : 'ChatGPT:';
 }
 
-function buildRichHtml(conversation) {
+function buildRichHtml(conversation, settings) {
   const chunks = [];
   chunks.push(`<h1>${escapeHtml(conversation.title || 'ChatGPT conversation')}</h1>`);
   if (conversation.sourceUrl) chunks.push(`<p><a href="${escapeHtml(conversation.sourceUrl)}">Исходная переписка ChatGPT</a></p>`);
   chunks.push(`<p><em>Сохранено: ${escapeHtml(new Date(conversation.capturedAt || Date.now()).toLocaleString('ru-RU'))}</em></p>`);
   chunks.push('<hr>');
   for (const msg of conversation.messages || []) {
-    chunks.push(`<p><strong>${roleTitle(msg.role)}</strong></p>`);
+    const align = msg.role === 'user' && settings.alignUserRight ? 'right' : 'left';
+    chunks.push(`<div style="text-align:${align};">`);
+    chunks.push(`<p><strong>${escapeHtml(speakerLabel(msg.role, settings))}</strong></p>`);
+    if (settings.includeReasoning && msg.reasoningHtml) {
+      chunks.push('<div><p><strong>Размышления:</strong></p>');
+      chunks.push(msg.reasoningHtml);
+      chunks.push('</div>');
+    }
     chunks.push(`<div>${msg.html || `<p>${escapeHtml(msg.text || '')}</p>`}</div>`);
+    chunks.push('</div>');
     chunks.push('<p><br></p>');
   }
   return chunks.join('\n');
 }
 
-function buildPlainText(conversation) {
+function buildPlainText(conversation, settings) {
   const lines = [conversation.title || 'ChatGPT conversation'];
   if (conversation.sourceUrl) lines.push(conversation.sourceUrl);
   lines.push('');
   for (const msg of conversation.messages || []) {
-    lines.push(`${roleTitle(msg.role)}:`);
+    lines.push(speakerLabel(msg.role, settings));
+    if (settings.includeReasoning && msg.reasoningText) {
+      lines.push('Размышления:');
+      lines.push(msg.reasoningText);
+    }
     lines.push(msg.text || '');
     lines.push('');
   }
@@ -271,7 +290,8 @@ async function pasteIntoGoogleDoc(tabId) {
 async function exportConversation({ activeDoc = false } = {}) {
   const conversation = await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
-  await writeClipboard(buildRichHtml(conversation), buildPlainText(conversation));
+  const settings = await getSettings();
+  await writeClipboard(buildRichHtml(conversation, settings), buildPlainText(conversation, settings));
 
   let tab;
   if (activeDoc) {
