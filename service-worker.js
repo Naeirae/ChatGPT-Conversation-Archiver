@@ -24,7 +24,7 @@ function isChatGptHost(url = '') {
 function isConversationUrl(url = '') {
   const parsed = parseUrl(url);
   if (!parsed || !isChatGptHost(url)) return false;
-  if (/(?:^|\\/)c\\/[^/]+(?:\\/|$)/.test(parsed.pathname)) return true;
+  if (/(?:^|\/)c\/[^/]+(?:\/|$)/.test(parsed.pathname)) return true;
   if (parsed.searchParams.has('conversationId') && parsed.searchParams.get('conversationId')) return true;
   return false;
 }
