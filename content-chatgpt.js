@@ -396,6 +396,98 @@
     return turn.querySelector('.markdown, [class*="markdown"], [class*="prose"], [id^="textdoc-message-"] .ProseMirror') || turn;
   }
 
+  function imageSource(img) {
+    if (!(img instanceof HTMLImageElement)) return '';
+    const direct =
+      img.currentSrc ||
+      img.getAttribute('src') ||
+      img.getAttribute('data-src') ||
+      img.getAttribute('data-original') ||
+      '';
+    if (direct) return absUrl(direct);
+
+    const srcset = String(img.getAttribute('srcset') || '').trim();
+    if (srcset) {
+      const first = srcset.split(',')[0]?.trim().split(/\s+/)[0] || '';
+      if (first) return absUrl(first);
+    }
+    return '';
+  }
+
+  function imageSize(img) {
+    const rect = img.getBoundingClientRect?.() || { width: 0, height: 0 };
+    return {
+      width: Math.round(
+        Number(img.naturalWidth) ||
+        Number(img.getAttribute?.('width')) ||
+        Number(rect.width) ||
+        0
+      ),
+      height: Math.round(
+        Number(img.naturalHeight) ||
+        Number(img.getAttribute?.('height')) ||
+        Number(rect.height) ||
+        0
+      )
+    };
+  }
+
+  function isLikelyContentImage(img) {
+    const src = imageSource(img);
+    if (!src) return false;
+
+    const size = imageSize(img);
+    const label = [
+      img.getAttribute?.('alt') || '',
+      img.getAttribute?.('aria-label') || '',
+      img.className || '',
+      img.closest?.('[data-testid]')?.getAttribute?.('data-testid') || ''
+    ].join(' ').toLowerCase();
+
+    // Do not treat tiny avatars/icons/emoji as conversation attachments.
+    if (size.width && size.height && size.width <= 40 && size.height <= 40) return false;
+    if (/(avatar|profile|favicon|emoji|icon)/i.test(label) &&
+        (!size.width || size.width <= 64) &&
+        (!size.height || size.height <= 64)) return false;
+
+    return true;
+  }
+
+  function turnImageNodes(turn, role) {
+    const nodes = [];
+    const seen = new Set();
+
+    const add = img => {
+      if (!(img instanceof HTMLImageElement) || seen.has(img) || !isLikelyContentImage(img)) return;
+      seen.add(img);
+      nodes.push(img);
+    };
+
+    turn.querySelectorAll('img').forEach(add);
+
+    // Current ChatGPT may render uploaded/generated attachments as siblings of
+    // the role-bearing text node inside a shared data-turn-key wrapper. Include
+    // those siblings, but exclude images that belong to the opposite message.
+    const wrapper = turn.closest?.('[data-turn-key]');
+    if (wrapper && wrapper !== turn) {
+      const oppositeSelector = role === 'user'
+        ? '[data-chatgpt-search-unit-key$=":assistant"], [data-message-author-role="assistant"], [data-role="assistant"]'
+        : '[data-chatgpt-search-unit-key$=":user"], [data-message-author-role="user"], [data-role="user"]';
+
+      wrapper.querySelectorAll('img').forEach(img => {
+        const opposite = img.closest(oppositeSelector);
+        if (!opposite) add(img);
+      });
+    }
+
+    return nodes.sort((a, b) => {
+      const pos = a.compareDocumentPosition(b);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+      if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      return 0;
+    });
+  }
+
   function cleanClone(root) {
     const clone = root.cloneNode(true);
     clone.querySelectorAll('script, style, button, textarea, form, [role="button"], [aria-hidden="true"]')
@@ -405,10 +497,11 @@
     });
     clone.querySelectorAll('a[href]').forEach(a => a.setAttribute('href', absUrl(a.getAttribute('href'))));
     clone.querySelectorAll('img').forEach((img, index) => {
-      const src = img.getAttribute('src') || img.currentSrc || '';
-      if (src) img.setAttribute('src', absUrl(src));
+      const src = imageSource(img);
+      if (src) img.setAttribute('src', src);
       img.setAttribute('data-archiver-image-index', String(index));
       img.removeAttribute('loading');
+      img.removeAttribute('srcset');
     });
     return clone;
   }
@@ -416,24 +509,67 @@
   function captureTurn(turn, ordinal, settings) {
     const role = roleOf(turn);
     if (!role) return null;
+
     const root = contentRoot(turn, role);
     const clone = cleanClone(root);
     const text = String(root.innerText || root.textContent || '').trim();
-    const images = [...clone.querySelectorAll('img[src]')].map((img, index) => ({
-      index,
-      src: img.getAttribute('src') || '',
-      alt: img.getAttribute('alt') || '',
-      width: Number(img.getAttribute('width')) || null,
-      height: Number(img.getAttribute('height')) || null
-    }));
+
+    const imageNodes = turnImageNodes(turn, role);
+    const images = [];
+    const extraBefore = [];
+    const extraAfter = [];
+    const seenSrc = new Set();
+
+    imageNodes.forEach(img => {
+      const src = imageSource(img);
+      if (!src || seenSrc.has(src)) return;
+      seenSrc.add(src);
+
+      const size = imageSize(img);
+      const index = images.length;
+      const item = {
+        index,
+        src,
+        alt: img.getAttribute('alt') || '',
+        width: size.width || null,
+        height: size.height || null
+      };
+      images.push(item);
+
+      // Images already inside the text root are present in clone.innerHTML.
+      if (root.contains(img)) return;
+
+      const escapedSrc = src.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const escapedAlt = String(item.alt || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+      const html = '<p data-archiver-attachment="true"><img src="' + escapedSrc +
+        '" alt="' + escapedAlt + '" data-archiver-image-index="' + index + '"></p>';
+
+      const pos = img.compareDocumentPosition(root);
+      if (pos & Node.DOCUMENT_POSITION_FOLLOWING) extraBefore.push(html);
+      else extraAfter.push(html);
+    });
+
+    // Re-index images that were already present in the cloned root so metadata
+    // and exported HTML use one message-level index space.
+    const cloneImages = [...clone.querySelectorAll('img')];
+    cloneImages.forEach(img => {
+      const src = imageSource(img);
+      const index = images.findIndex(item => item.src === src);
+      if (index >= 0) img.setAttribute('data-archiver-image-index', String(index));
+    });
+
     if (!text && !images.length) return null;
-    const reasoning = role === 'assistant' && settings?.includeReasoning ? captureReasoning(turn) : { html: '', text: '', label: '', count: 0 };
+
+    const reasoning = role === 'assistant' && settings?.includeReasoning
+      ? captureReasoning(turn)
+      : { html: '', text: '', label: '', count: 0 };
+
     const stableId = turnStableKey(turn);
     return {
       id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       role,
       text,
-      html: clone.innerHTML,
+      html: extraBefore.join('') + clone.innerHTML + extraAfter.join(''),
       images,
       reasoningHtml: reasoning.html,
       reasoningText: reasoning.text,
