@@ -32,6 +32,70 @@ function Get-StateSha($State, [string]$RelativePath) {
   return [string]$property.Value
 }
 
+function Get-TreeMap($Tree) {
+  $map = @{}
+  foreach ($item in @($Tree.tree | Where-Object { $_.type -eq 'blob' })) {
+    $map[[string]$item.path] = [string]$item.sha
+  }
+  return $map
+}
+
+function Get-FileTextAtRef([string]$RelativePath, [string]$Ref) {
+  $encoded = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
+  $url = $script:apiBase + '/contents/' + $encoded + '?ref=' + [Uri]::EscapeDataString($Ref)
+  $response = Invoke-RestMethod -Uri $url -Headers $script:headers -Method Get -TimeoutSec $script:timeout
+  if (-not $response.content) {
+    throw "GitHub did not return content for $RelativePath at $Ref."
+  }
+  $base64 = ([string]$response.content) -replace '\s', ''
+  $bytes = [Convert]::FromBase64String($base64)
+  return [Text.Encoding]::UTF8.GetString($bytes)
+}
+
+function Get-BaselineTreeForVersion([string]$Version) {
+  Write-Host ("  Resolving official baseline for local version " + $Version + '...')
+  [Console]::Out.Flush()
+
+  $commitsUrl = $script:apiBase + '/commits?path=manifest.json&sha=' + $script:branch + '&per_page=100'
+  try {
+    $commits = @(Invoke-RestMethod -Uri $commitsUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout)
+  } catch {
+    throw "Could not read manifest history from GitHub. $($_.Exception.Message)"
+  }
+
+  foreach ($commit in $commits) {
+    $commitSha = [string]$commit.sha
+    try {
+      $manifestText = Get-FileTextAtRef 'manifest.json' $commitSha
+      $manifestData = $manifestText | ConvertFrom-Json
+    } catch {
+      continue
+    }
+
+    if ([string]$manifestData.version -ne $Version) {
+      continue
+    }
+
+    $gitCommitUrl = $script:apiBase + '/git/commits/' + $commitSha
+    $gitCommit = Invoke-RestMethod -Uri $gitCommitUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
+    $treeSha = [string]$gitCommit.tree.sha
+    if (-not $treeSha) {
+      throw "Could not resolve the Git tree for version $Version."
+    }
+
+    $treeUrl = $script:apiBase + '/git/trees/' + $treeSha + '?recursive=1'
+    $baselineTree = Invoke-RestMethod -Uri $treeUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
+    if ($baselineTree.truncated) {
+      throw "GitHub returned a truncated baseline tree for version $Version."
+    }
+
+    Write-Host ("  Baseline commit: " + $commitSha.Substring(0, 12))
+    return Get-TreeMap $baselineTree
+  }
+
+  throw "Could not find an official GitHub baseline for local version $Version. Update stopped without changing extension files."
+}
+
 function Download-RemoteFile([string]$RelativePath, [string]$Target) {
   $encoded = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
   $url = $script:apiBase + '/contents/' + $encoded + '?ref=' + $script:branch
@@ -146,16 +210,22 @@ try {
     try {
       $state = Get-Content -Raw -LiteralPath $statePath | ConvertFrom-Json
     } catch {
-      throw 'Updater state file is damaged. Remove .chatgpt-archiver-updater-state.json and run again.'
+      throw 'Updater state file is damaged. Update stopped without changing extension files.'
     }
+  }
+
+  $baselineTree = $null
+  if (-not $state) {
+    $baselineTree = Get-BaselineTreeForVersion $localVersion
   }
 
   $changed = @()
   $conflicts = @()
+
   foreach ($item in $remoteFiles) {
     $relative = [string]$item.path
 
-    # update.cmd is the stable bootstrap. It must never replace itself while running.
+    # update.cmd is a stable bootstrap. Never replace the currently running CMD file.
     if ($relative -eq 'update.cmd') {
       continue
     }
@@ -166,7 +236,6 @@ try {
         Path = $relative
         Sha = [string]$item.sha
         Reason = 'missing'
-        Exists = $false
       }
       continue
     }
@@ -181,45 +250,46 @@ try {
         Path = $relative
         Sha = [string]$item.sha
         Reason = 'updater'
-        Exists = $true
       }
       continue
     }
 
     if ($state) {
       $baselineSha = Get-StateSha $state $relative
-      if (-not $baselineSha -or $localSha -ne $baselineSha) {
-        $conflicts += [pscustomobject]@{
-          Path = $relative
-          LocalSha = $localSha
-          BaselineSha = $baselineSha
-          RemoteSha = [string]$item.sha
-        }
-        continue
+    } else {
+      $baselineSha = $baselineTree[$relative]
+    }
+
+    if (-not $baselineSha -or $localSha -ne $baselineSha) {
+      $conflicts += [pscustomobject]@{
+        Path = $relative
+        LocalSha = $localSha
+        BaselineSha = $baselineSha
+        RemoteSha = [string]$item.sha
       }
+      continue
     }
 
     $changed += [pscustomobject]@{
       Path = $relative
       Sha = [string]$item.sha
-      Reason = $(if ($state) { 'remote' } else { 'first-run' })
-      Exists = $true
+      Reason = 'remote'
     }
   }
 
   if ($conflicts.Count -gt 0) {
-    Write-Step '[2/4] Local changes detected. Update stopped before writing files.'
+    Write-Step '[2/4] Local changes detected. Update stopped before writing extension files.'
     foreach ($item in $conflicts) {
       Write-Host ('  Local change: ' + $item.Path)
     }
-    Write-Host 'Keep the local files, restore them, or remove the updater state only if you intentionally want a new baseline.'
+    Write-Host 'These files were not overwritten.'
     throw 'Local changes would be overwritten.'
   }
 
   if ($changed.Count -eq 0) {
     Write-Step "[2/4] Already up to date: $localVersion"
     Save-UpdaterState $remoteFiles $remoteVersion $statePath
-    Write-Step '[3/4] State refreshed.'
+    Write-Step '[3/4] Updater state saved.'
     Write-Step '[4/4] No files to update.'
     return
   }
@@ -227,29 +297,11 @@ try {
   Write-Step "[2/4] Updating $localVersion -> $remoteVersion"
   Write-Host ('Files to update: ' + $changed.Count)
 
-  $backupRoot = $null
-  if (-not $state -and @($changed | Where-Object { $_.Exists -and $_.Path -ne 'update.ps1' }).Count -gt 0) {
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $backupRoot = Join-Path $InstallPath ('.archiver-update-backup\' + $stamp)
-    New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
-    Write-Host ('First safe update: replacing files will be backed up under ' + $backupRoot)
-  }
-
   foreach ($item in $changed) {
     $target = Join-Path $InstallPath ($item.Path -replace '/', '\')
     $directory = Split-Path -Parent $target
     if ($directory -and -not (Test-Path -LiteralPath $directory)) {
       New-Item -ItemType Directory -Path $directory -Force | Out-Null
-    }
-
-    if ($backupRoot -and $item.Exists -and $item.Path -ne 'update.ps1') {
-      $backupTarget = Join-Path $backupRoot ($item.Path -replace '/', '\')
-      $backupDirectory = Split-Path -Parent $backupTarget
-      if ($backupDirectory -and -not (Test-Path -LiteralPath $backupDirectory)) {
-        New-Item -ItemType Directory -Path $backupDirectory -Force | Out-Null
-      }
-      Copy-Item -LiteralPath $target -Destination $backupTarget -Force
-      Write-Host ('  Backed up: ' + $item.Path)
     }
 
     Download-RemoteFile $item.Path $target
