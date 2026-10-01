@@ -17,6 +17,32 @@ Current responsibilities:
 - recover a continuation/export tail after message IDs change;
 - parse ChatGPT and Google Docs URLs/keys.
 
+### `lib/archive-store.mjs`
+
+Storage adapter for completed archives and ChatGPT ↔ Google Doc linkage.
+
+Responsibilities:
+
+- read/write/remove archive records through an injected storage area;
+- maintain the conversation -> archive index;
+- recover legacy linked-document metadata;
+- store duplicate-safe export tails;
+- expose small UI summaries without leaking full message payloads.
+
+Because the storage area is injected, this layer is regression-tested with an in-memory fake instead of a real Chrome profile.
+
+### `lib/google-docs-baseline.mjs`
+
+Pure parser for Google Docs continuation baselines.
+
+Responsibilities:
+
+- recognize `Пользователь:` / `ChatGPT:` markers;
+- ignore the legacy `ChatGPT сказал:` artifact;
+- combine multiple Google Docs tabs into one chronological message stream;
+- select the real last-message tab even when a later document tab is empty;
+- build multi-message tail fingerprints for sync.
+
 These modules are intentionally free of `chrome.*` and DOM dependencies so real continuation bugs can be reproduced with small fixtures.
 
 ### `content-chatgpt.js`
@@ -136,9 +162,9 @@ The project is still pre-1.0.
 
 The largest debt items are:
 
-- `service-worker.js` and `content-chatgpt.js` are still too large; the first pure text/URL helpers have been extracted, but orchestration, Docs adapter and ChatGPT DOM adapter still need further separation;
+- `service-worker.js` and `content-chatgpt.js` are still large; text/URL helpers, archive storage and Google Docs baseline parsing are extracted, but browser orchestration, physical Docs UI automation and the ChatGPT DOM/traversal adapter still need further separation;
 - DOM adapters are necessarily sensitive to ChatGPT/Google Docs UI changes;
-- automated checks now include pure regression tests for continuation signatures/URL parsing, but browser-level capture/export regression coverage is still missing;
+- automated checks now include pure regression tests for continuation signatures, URL parsing, archive/link persistence and multi-tab Google Docs baseline parsing, but browser-level capture/export regression coverage is still missing;
 - reasoning capture remains best-effort against visible DOM;
 - the local ZIP updater is a development distribution mechanism, not the desired long-term user update channel.
 
