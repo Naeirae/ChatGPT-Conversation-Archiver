@@ -50,7 +50,7 @@ function renderRunLog(job) {
   $('runLogTitle').textContent = statusLabels[job.status] || job.status || 'Последний запуск';
 
   const meta = [];
-  meta.push(job.captureMode === 'continue' ? 'продолжение' : 'полный сбор');
+  meta.push(job.captureMode === 'sync' ? 'сверка' : job.captureMode === 'continue' ? 'продолжение' : 'полный сбор');
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
   if (job.draftCount) meta.push(job.draftCount + ' в черновике');
@@ -144,7 +144,9 @@ function render(data) {
       ? `Сбор отменен. В текущем проходе было собрано ${attempted} сообщений; завершенный локальный архив не изменен.`
       : 'Сбор отменен. Завершенный локальный архив не изменен.');
   } else if (done) {
-    const added = archive.lastCaptureMode === 'continue' ? ` · +${archive.lastCaptureAddedCount || 0} новых` : '';
+    const added = archive.lastCaptureMode === 'continue' || archive.lastCaptureMode === 'sync'
+      ? ` · +${archive.lastCaptureAddedCount || 0} новых`
+      : '';
     setStatus(`Готово: ${archive.messageCount || 0} сообщений${added}, ${archive.imageCount || 0} изображений. Сохранено локально в Chrome.`);
   } else if (archive) {
     setStatus(`Локальный архив: ${archive.messageCount || 0} сообщений, ${archive.imageCount || 0} изображений.`);
