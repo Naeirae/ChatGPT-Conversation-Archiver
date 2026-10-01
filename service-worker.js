@@ -383,7 +383,8 @@ function buildRichHtml(conversation, settings) {
     chunks.push(`<div style="text-align:${align};">`);
     chunks.push(`<p><strong>${escapeHtml(speakerLabel(msg.role, settings))}</strong></p>`);
     if (settings.includeReasoning && msg.reasoningHtml) {
-      chunks.push('<div><p><strong>Размышления:</strong></p>');
+      const reasoningTitle = msg.reasoningLabel || 'Размышления';
+      chunks.push('<div><p><strong>' + escapeHtml(reasoningTitle) + ':</strong></p>');
       chunks.push(msg.reasoningHtml);
       chunks.push('</div>');
     }
@@ -401,7 +402,7 @@ function buildPlainText(conversation, settings) {
   for (const msg of conversation.messages || []) {
     lines.push(speakerLabel(msg.role, settings));
     if (settings.includeReasoning && msg.reasoningText) {
-      lines.push('Размышления:');
+      lines.push((msg.reasoningLabel || 'Размышления') + ':');
       lines.push(msg.reasoningText);
     }
     lines.push(msg.text || '');
