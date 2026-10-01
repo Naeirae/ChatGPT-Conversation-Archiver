@@ -7,7 +7,8 @@ const DEFAULT_SETTINGS = {
   assistantName: '',
   palette: 'ocean',
   alignUserRight: true,
-  includeReasoning: false
+  includeReasoning: false,
+  captureTarget: 'current'
 };
 
 const PHASE_LABELS = {
@@ -51,6 +52,7 @@ function renderRunLog(job) {
 
   const meta = [];
   meta.push(job.captureMode === 'sync' ? 'сверка' : job.captureMode === 'continue' ? 'продолжение' : 'полный сбор');
+  if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
   if (job.draftCount) meta.push(job.draftCount + ' в черновике');
@@ -78,6 +80,16 @@ function applyPalette(palette) {
   document.documentElement.dataset.palette = palette || 'ocean';
 }
 
+function captureTargetLabel(value) {
+  return value === 'copy' ? 'рабочая копия' : 'текущая вкладка';
+}
+
+function updateCaptureTargetHint(value) {
+  $('captureTargetHint').textContent = value === 'copy'
+    ? 'Исходный чат не прокручивается. Если ChatGPT не загрузит копию разговора, попробуйте режим «Текущая вкладка».'
+    : 'Архиватор будет физически прокручивать этот чат. До завершения лучше не писать и не прокручивать его вручную.';
+}
+
 async function loadSettings() {
   const result = await chrome.storage.local.get('archiverSettings');
   return { ...DEFAULT_SETTINGS, ...(result.archiverSettings || {}) };
@@ -102,11 +114,14 @@ function render(data) {
   const done = job?.status === 'done' && archive;
 
   $('capture').disabled = Boolean(running);
-  $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать заново';
+  $('capture').textContent = running
+    ? (job?.captureTarget === 'copy' ? 'Сбор идет в рабочей копии…' : 'Сбор идет в текущей вкладке…')
+    : 'Собрать заново';
   $('continue').classList.toggle('hidden', running || !state.canContinue);
   $('continue').disabled = Boolean(running);
   $('syncDoc').disabled = Boolean(running);
   $('docUrl').disabled = Boolean(running);
+  $('captureTarget').disabled = Boolean(running);
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
@@ -175,9 +190,15 @@ async function exportToDoc(type) {
 
 $('capture').onclick = async () => {
   $('capture').disabled = true;
-  setStatus('Запускаю сбор в фоне…');
+  const captureTarget = $('captureTarget').value;
+  setStatus(captureTarget === 'copy'
+    ? 'Запускаю сбор в рабочей копии…'
+    : 'Запускаю сбор в текущей вкладке…');
   try {
-    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CAPTURE_CURRENT' });
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CAPTURE_CURRENT',
+      captureTarget
+    });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
     render({
       ...state,
@@ -198,7 +219,8 @@ $('continue').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CONTINUE_CURRENT',
-      docUrl: $('docUrl').value.trim()
+      docUrl: $('docUrl').value.trim(),
+      captureTarget: $('captureTarget').value
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить архив.');
     render({
@@ -231,7 +253,8 @@ $('syncDoc').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_SYNC_CURRENT',
-      docUrl
+      docUrl,
+      captureTarget: $('captureTarget').value
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить Google Doc с чатом.');
     render({
@@ -344,6 +367,10 @@ $('userName').oninput = e => saveSettings({ userName: e.target.value });
 $('assistantName').oninput = e => saveSettings({ assistantName: e.target.value });
 $('alignUserRight').onchange = e => saveSettings({ alignUserRight: e.target.checked });
 $('includeReasoning').onchange = e => saveSettings({ includeReasoning: e.target.checked });
+$('captureTarget').onchange = e => {
+  updateCaptureTargetHint(e.target.value);
+  saveSettings({ captureTarget: e.target.value });
+};
 $('palette').onchange = e => saveSettings({ palette: e.target.value });
 
 (async () => {
@@ -353,6 +380,8 @@ $('palette').onchange = e => saveSettings({ palette: e.target.value });
     $('assistantName').value = settings.assistantName;
     $('alignUserRight').checked = settings.alignUserRight;
     $('includeReasoning').checked = settings.includeReasoning;
+    $('captureTarget').value = settings.captureTarget === 'copy' ? 'copy' : 'current';
+    updateCaptureTargetHint($('captureTarget').value);
     $('palette').value = settings.palette;
     applyPalette(settings.palette);
     const result = await getState();
