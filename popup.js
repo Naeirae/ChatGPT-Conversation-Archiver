@@ -8,7 +8,7 @@ const DEFAULT_SETTINGS = {
   palette: 'ocean',
   alignUserRight: true,
   includeReasoning: false,
-  captureTarget: 'current'
+  captureTarget: 'copy'
 };
 
 const PHASE_LABELS = {
@@ -81,13 +81,13 @@ function applyPalette(palette) {
 }
 
 function captureTargetLabel(value) {
-  return value === 'copy' ? 'рабочая копия' : 'текущая вкладка';
+  return value === 'copy' ? 'фоновый режим' : 'обычный режим';
 }
 
 function updateCaptureTargetHint(value) {
   $('captureTargetHint').textContent = value === 'copy'
-    ? 'Исходный чат не прокручивается. Если ChatGPT не загрузит копию разговора, попробуйте режим «Текущая вкладка».'
-    : 'Архиватор будет физически прокручивать этот чат. До завершения лучше не писать и не прокручивать его вручную.';
+    ? 'По умолчанию. Архиватор работает в отдельной копии и не прокручивает исходный чат.'
+    : 'Резервный режим. Архиватор физически прокручивает этот чат; до завершения лучше его не трогать.';
 }
 
 async function loadSettings() {
@@ -122,6 +122,12 @@ function render(data) {
   $('syncDoc').disabled = Boolean(running);
   $('docUrl').disabled = Boolean(running);
   $('captureTarget').disabled = Boolean(running);
+  const canRetryCurrent = Boolean(
+    !running &&
+    job?.status === 'error' &&
+    job?.captureTarget === 'copy'
+  );
+  $('retryCurrent').classList.toggle('hidden', !canRetryCurrent);
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
@@ -274,6 +280,54 @@ $('syncDoc').onclick = async () => {
   }
 };
 
+$('retryCurrent').onclick = async () => {
+  const previousMode = state?.job?.captureMode || 'full';
+  $('retryCurrent').disabled = true;
+  $('captureTarget').value = 'current';
+  updateCaptureTargetHint('current');
+  await saveSettings({ captureTarget: 'current' });
+
+  try {
+    let result;
+    if (previousMode === 'sync') {
+      const docUrl = $('docUrl').value.trim();
+      if (!docUrl) throw new Error('Для повторной сверки нужна ссылка на Google Doc.');
+      setStatus('Повторяю сверку в обычном режиме…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_SYNC_CURRENT',
+        docUrl,
+        captureTarget: 'current'
+      });
+    } else if (previousMode === 'continue') {
+      setStatus('Повторяю продолжение в обычном режиме…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CONTINUE_CURRENT',
+        docUrl: $('docUrl').value.trim(),
+        captureTarget: 'current'
+      });
+    } else {
+      setStatus('Повторяю полный сбор в обычном режиме…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_CURRENT',
+        captureTarget: 'current'
+      });
+    }
+
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить обычный режим.');
+    render({
+      ...state,
+      job: result.job,
+      archive: state?.archive || null,
+      draft: null
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('retryCurrent').disabled = false;
+  }
+};
+
 $('cancel').onclick = async () => {
   $('cancel').disabled = true;
   try {
@@ -380,7 +434,7 @@ $('palette').onchange = e => saveSettings({ palette: e.target.value });
     $('assistantName').value = settings.assistantName;
     $('alignUserRight').checked = settings.alignUserRight;
     $('includeReasoning').checked = settings.includeReasoning;
-    $('captureTarget').value = settings.captureTarget === 'copy' ? 'copy' : 'current';
+    $('captureTarget').value = settings.captureTarget === 'current' ? 'current' : 'copy';
     updateCaptureTargetHint($('captureTarget').value);
     $('palette').value = settings.palette;
     applyPalette(settings.palette);
