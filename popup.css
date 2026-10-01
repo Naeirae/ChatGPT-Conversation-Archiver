@@ -32,6 +32,7 @@ button:disabled { opacity:.45; cursor:default; }
 .capture-progress { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--panel); }
 .capture-progress strong { display:block; font-size:12px; }
 .archive { margin-top:12px; padding:11px 12px; border:1px solid var(--border); border-radius:12px; background:var(--soft); }
+.archive-label { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin-bottom:4px; }
 .archive strong { display:block; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .muted { color:var(--muted); font-size:11px; margin-top:3px; }
 .hidden { display:none !important; }
