@@ -4,7 +4,8 @@ import assert from 'node:assert/strict';
 import {
   buildMessageMap,
   buildTabbedSections,
-  parseTabPlan
+  parseTabPlan,
+  serializeTabPlan
 } from '../lib/tab-plan.mjs';
 
 test('parseTabPlan accepts Russian and reversed forms', () => {
@@ -62,4 +63,18 @@ test('buildMessageMap includes role, number, and image-only marker', () => {
   ]);
   assert.match(map, /^1 · Пользователь · Привет/m);
   assert.match(map, /^2 · ChatGPT · \[изображение\]/m);
+});
+
+
+test('serializeTabPlan keeps tab before heading at the same message', () => {
+  const text = serializeTabPlan([
+    { type: 'heading', messageNumber: 7, title: 'Картинки' },
+    { type: 'tab', messageNumber: 7 },
+    { type: 'tab', messageNumber: 12 }
+  ]);
+
+  assert.equal(
+    text,
+    '7 | вкладка\n7 | подзаголовок | Картинки\n12 | вкладка'
+  );
 });
