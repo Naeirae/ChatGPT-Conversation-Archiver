@@ -1,4 +1,8 @@
 import {
+  buildGoogleDocBaseline
+} from './lib/google-docs-baseline.mjs';
+
+import {
   createArchiveStore,
   summarizeArchive
 } from './lib/archive-store.mjs';
@@ -950,59 +954,6 @@ async function copyCurrentGoogleDocTabText(tabId) {
   return text;
 }
 
-function googleDocMarkerRole(line = '') {
-  const value = normalizeMatchText(line);
-  if (/^Пользователь(?:\s*\/\s*[^:]+)?:$/i.test(value)) return 'user';
-  if (/^ChatGPT(?:\s*\/\s*[^:]+)?:$/i.test(value)) return 'assistant';
-  return '';
-}
-
-function plainMessageHtml(text = '') {
-  return normalizeDisplayText(text)
-    .split(/\n{2,}/)
-    .map(part => '<p>' + escapeHtml(part).replace(/\n/g, '<br>') + '</p>')
-    .join('');
-}
-
-function parseGoogleDocTabMessages(text = '', tabUrl = '', tabIndex = 0) {
-  const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
-  const messages = [];
-  let current = null;
-
-  const flush = () => {
-    if (!current) return;
-    const body = normalizeDisplayText(current.lines.join('\n'));
-    messages.push({
-      id: 'doc:' + tabIndex + ':' + messages.length + ':' + hashText(messageSignature(current.role, body)),
-      role: current.role,
-      text: body,
-      html: plainMessageHtml(body),
-      images: [],
-      reasoningHtml: '',
-      reasoningText: '',
-      reasoningLabel: '',
-      reasoningCount: 0,
-      baselineTabUrl: tabUrl
-    });
-    current = null;
-  };
-
-  for (const raw of lines) {
-    const line = normalizeMatchText(raw);
-    const role = googleDocMarkerRole(line);
-    if (role) {
-      flush();
-      current = { role, lines: [] };
-      continue;
-    }
-    if (!current) continue;
-    if (/^ChatGPT сказал:$/i.test(line) || /^ChatGPT said:$/i.test(line)) continue;
-    current.lines.push(raw);
-  }
-  flush();
-  return messages;
-}
-
 async function readGoogleDocBaseline(docUrl, sourceTabId) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
   if (!normalizedUrl) throw new Error('Нужна ссылка на Google Doc вида docs.google.com/document/d/...');
@@ -1058,26 +1009,19 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
       if (googleDocTabToken(after.href) === token) break;
     }
 
-    const messages = [];
-    for (const item of tabs) {
-      messages.push(...parseGoogleDocTabMessages(item.text, item.url, item.index));
-    }
-
-    const meaningful = messages.filter(item => normalizeMatchText(item.text));
-    if (meaningful.length < 2) {
+    const baseline = buildGoogleDocBaseline(tabs, { tailLimit: 6 });
+    if (baseline.meaningfulCount < 2) {
       throw new Error('В Google Doc не удалось найти достаточно реплик для надежной сверки.');
     }
 
-    const tail = meaningful.slice(-6);
-    const target = tail[tail.length - 1];
     return {
       docId: googleDocKey(normalizedUrl),
       inputUrl: normalizedUrl,
       tabs,
-      messages,
-      meaningfulCount: meaningful.length,
-      tailSignatures: tail.map(item => externalMatchSignature(item.role, item.text)),
-      targetTabUrl: target?.baselineTabUrl || tabs[tabs.length - 1]?.url || normalizedUrl,
+      messages: baseline.messages,
+      meaningfulCount: baseline.meaningfulCount,
+      tailSignatures: baseline.tailSignatures,
+      targetTabUrl: baseline.targetTabUrl || normalizedUrl,
       title: String(tab.title || '').replace(/\s*[–—-]\s*Google Docs\s*$/i, '').trim()
     };
   } finally {
