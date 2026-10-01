@@ -13,24 +13,23 @@ if not exist "%~dp0manifest.json" (
   exit /b 1
 )
 
-if not exist "%~dp0update.ps1" (
-  echo ERROR: update.ps1 not found in this folder.
+echo [1/2] Getting updater from GitHub...
+echo.
+set "TEMP_UPDATER=%TEMP%\ChatGPT-Conversation-Archiver-update.ps1"
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; $u='https://api.github.com/repos/Naeirae/ChatGPT-Conversation-Archiver/contents/update.ps1?ref=main'; $h=@{'User-Agent'='ChatGPT-Conversation-Archiver-Updater'; 'Accept'='application/vnd.github.raw+json'; 'X-GitHub-Api-Version'='2026-03-10'}; try { Invoke-WebRequest -Uri $u -Headers $h -OutFile '%TEMP_UPDATER%' -UseBasicParsing -TimeoutSec 20 -MaximumRedirection 5; Write-Host 'Updater downloaded.' } catch { Write-Host ('ERROR: ' + $_.Exception.Message); exit 1 }"
+if errorlevel 1 (
+  echo.
+  echo Could not get the updater from GitHub.
+  echo The request is limited by a timeout, so it will not hang indefinitely.
   pause
   exit /b 1
 )
 
-echo Starting local updater...
+echo [2/2] Running updater...
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0update.ps1" -InstallPath "%~dp0"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0"
 set "RC=%ERRORLEVEL%"
-
-echo.
-if not "%RC%"=="0" (
-  echo Update failed. Error code %RC%.
-  echo If GitHub is unreachable, check the network connection and try again.
-  pause
-  exit /b %RC%
-)
 
 if exist "%~dp0update.ps1.new" (
   move /y "%~dp0update.ps1.new" "%~dp0update.ps1" >nul
@@ -43,6 +42,12 @@ if exist "%~dp0update.cmd.new" (
 )
 
 echo.
+if not "%RC%"=="0" (
+  echo Update failed. Error code %RC%.
+  pause
+  exit /b %RC%
+)
+
 echo Updater finished.
 pause
 exit /b 0
