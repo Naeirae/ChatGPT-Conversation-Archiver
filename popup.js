@@ -390,7 +390,10 @@ $('newDoc').onclick = async () => {
   setStatus('Открываю Google Docs и вставляю переписку…');
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC');
-    setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.`);
+    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
+      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+      : '';
+    setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.` + imagePart);
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -406,9 +409,15 @@ $('activeDoc').onclick = async () => {
     if (result.noChanges) {
       setStatus('В этом Google Doc уже есть все сообщения из локального архива.');
     } else if (result.exportMode === 'delta') {
-      setStatus(`Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.`);
+      const imagePart = (result.imageInsertedCount || result.imageFailedCount)
+        ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+        : '';
+      setStatus(`Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` + imagePart);
     } else {
-      setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.`);
+      const imagePart = (result.imageInsertedCount || result.imageFailedCount)
+        ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+        : '';
+      setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.` + imagePart);
     }
   } catch (error) {
     setStatus(error.message || String(error), true);
