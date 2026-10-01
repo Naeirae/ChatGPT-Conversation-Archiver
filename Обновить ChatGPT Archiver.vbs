@@ -5,14 +5,17 @@ Dim shell, fso, baseDir, updaterPath, manifestPath, logPath, command, rc, versio
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
-If HasArgument("--self-test") Then
-  WScript.Quit 0
-End If
-
 baseDir = fso.GetParentFolderName(WScript.ScriptFullName)
 updaterPath = fso.BuildPath(baseDir, "update.ps1")
 manifestPath = fso.BuildPath(baseDir, "manifest.json")
 logPath = fso.BuildPath(baseDir, "updater-last.log")
+
+If HasArgument("--self-test") Then
+  If Not fso.FileExists(updaterPath) Then WScript.Quit 2
+  If Not fso.FileExists(manifestPath) Then WScript.Quit 3
+  If ReadManifestVersion(manifestPath) = "" Then WScript.Quit 4
+  WScript.Quit 0
+End If
 
 If Not fso.FileExists(updaterPath) Then
   MsgBox "Не найден update.ps1 рядом с оболочкой обновления." & vbCrLf & _
