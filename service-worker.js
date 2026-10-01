@@ -1,6 +1,7 @@
 const LAST_ARCHIVE_KEY = 'lastArchiveId';
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const ARCHIVE_PREFIX = 'archive:';
+const DRAFT_PREFIX = 'draft:';
 const ARCHIVE_INDEX_KEY = 'archiveIndex';
 const DOC_EXPORTS_KEY = 'docExports';
 const DOCS_NEW_URL = 'https://docs.new';
@@ -183,6 +184,12 @@ async function getArchive(id) {
   return result[archiveKey(id)] || null;
 }
 
+async function getDraft(id) {
+  if (!id) return null;
+  const result = await chrome.storage.local.get(DRAFT_PREFIX + id);
+  return result[DRAFT_PREFIX + id] || null;
+}
+
 async function getLastArchive() {
   const result = await chrome.storage.local.get(LAST_ARCHIVE_KEY);
   return getArchive(result[LAST_ARCHIVE_KEY]);
@@ -350,7 +357,7 @@ async function cancelCapture() {
   return { ok: true, job: next };
 }
 
-async function finishJobWithError(jobId, sourceTabId, message) {
+async function finishJobWithError(jobId, sourceTabId, message, draftId = '', draftCount = 0, status = 'error') {
   const job = await getJob();
   if (job?.jobId !== jobId) return;
 
@@ -359,8 +366,10 @@ async function finishJobWithError(jobId, sourceTabId, message) {
   }
 
   await setJob({
-    status: 'error',
+    status,
     message,
+    draftId,
+    draftCount,
     finishedAt: Date.now(),
     tabId: sourceTabId ?? job.sourceTabId ?? job.tabId,
     captureTabId: null
@@ -686,10 +695,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           currentArchive = await getArchiveForUrl(tab.url);
         }
         const archive = currentArchive || await getLastArchive();
+        const draft = job?.draftId ? await getDraft(job.draftId) : null;
         return {
           ok: true,
           job,
           archive: summarize(archive),
+          draft: summarize(draft),
           canContinue: Boolean(currentArchive?.messages?.length)
         };
       }
@@ -719,8 +730,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_CAPTURE_FAILED': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: true };
-        await finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, message.error || 'Сбор не выполнен.');
+        await finishJobWithError(
+          message.jobId,
+          job.sourceTabId ?? job.tabId,
+          message.error || 'Сбор не выполнен.',
+          message.draftId || '',
+          Number(message.draftCount || 0),
+          message.status === 'cancelled' ? 'cancelled' : 'error'
+        );
         return { ok: true };
+      }
+      case 'ARCHIVER_COPY_ARCHIVE': {
+        const archive = await getArchive(message.archiveId) || await getLastArchive();
+        if (!archive) throw new Error('Нет завершенного архива для копирования.');
+        const settings = await getSettings();
+        await writeClipboard(buildRichHtml(archive, settings), buildPlainText(archive, settings));
+        return { ok: true, count: archive.messages?.length || 0 };
+      }
+      case 'ARCHIVER_COPY_DRAFT': {
+        const draft = await getDraft(message.draftId);
+        if (!draft) throw new Error('Черновик текущего прохода не найден.');
+        const settings = await getSettings();
+        await writeClipboard(
+          buildRichHtml(draft, settings, { includeHeader: true }),
+          buildPlainText(draft, settings, { includeHeader: true })
+        );
+        return { ok: true, count: draft.messages?.length || 0 };
       }
       case 'ARCHIVER_CAPTURE_COMPLETE':
         await handleCaptureComplete(message);
