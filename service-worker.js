@@ -12,6 +12,16 @@ async function getSettings() {
 }
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function hashText(text = '') {
+  let hash = 2166136261;
+  const value = String(text);
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
 
 function parseUrl(url = '') {
   try { return new URL(url); } catch (_) { return null; }
@@ -204,7 +214,8 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     jobId,
     mode: options.mode || 'full',
     resumeAnchorId: options.resumeAnchorId || '',
-    existingArchiveId: options.existingArchiveId || ''
+    existingArchiveId: options.existingArchiveId || '',
+    resumeAnchorSignature: options.resumeAnchorSignature || ''
   };
 
   try {
@@ -281,12 +292,16 @@ async function startCapture({ mode = 'full' } = {}) {
       startedAt: Date.now()
     });
 
-    const resumeAnchorId = existingArchive?.lastMessageId ||
-      existingArchive?.messages?.[existingArchive.messages.length - 1]?.id || '';
+    const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
+    const resumeAnchorId = existingArchive?.lastMessageId || lastExistingMessage?.id || '';
+    const resumeAnchorSignature = lastExistingMessage
+      ? ((lastExistingMessage.role || 'unknown') + ':' + hashText(lastExistingMessage.text || ''))
+      : '';
 
     await ensureChatGptContentScript(captureTab.id, jobId, {
       mode,
       resumeAnchorId,
+      resumeAnchorSignature,
       existingArchiveId: existingArchive?.id || ''
     });
 
