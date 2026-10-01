@@ -96,9 +96,13 @@ The first prototype does the following:
 
 ### Images
 
-Image discovery is message-level rather than text-root-only: the collector also inspects attachment images rendered as siblings inside the same virtualized turn wrapper. Tiny avatars/icons are filtered out. Image URLs and approximate positions are stored with the archive and included in the rich HTML export.
+Image discovery is message-level rather than text-root-only: the collector also inspects attachment images rendered as siblings inside the same virtualized turn wrapper. Tiny avatars/icons are filtered out.
 
-Google Docs still receives images through rich HTML paste, so insertion remains **best effort** for authenticated/blob URLs. If a detected image URL cannot survive clipboard paste, a dedicated image-blob pipeline is the next layer to add.
+From 0.3.14 the archive stores more than the source URL. During finalization the collector tries to fetch every detected image while the ChatGPT page/session is still available, converts it to a clipboard-friendly image blob (normally PNG), and stores a data URL plus MIME type/size/status in the local archive.
+
+Google Docs export no longer asks Docs to fetch private ChatGPT image URLs from rich HTML. Text is pasted as rich HTML with image tags removed. When an archived message contains a prepared binary image, the debugger keeps the Docs tab active, writes the real image to the clipboard (ClipboardItem first, selected-image execCommand fallback), and performs a physical Ctrl+V at that point in the message sequence.
+
+The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. Old archives created before 0.3.14 do not contain binary image data; run **Собрать заново** to repair their images.
 
 ## Install locally
 
