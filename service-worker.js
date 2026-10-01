@@ -198,63 +198,116 @@ function makeJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-async function ensureChatGptContentScript(tabId, jobId) {
+async function ensureChatGptContentScript(tabId, jobId, options = {}) {
+  const payload = {
+    type: 'ARCHIVER_START_CAPTURE',
+    jobId,
+    mode: options.mode || 'full',
+    resumeAnchorId: options.resumeAnchorId || '',
+    existingArchiveId: options.existingArchiveId || ''
+  };
+
   try {
-    const result = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_START_CAPTURE', jobId });
+    const result = await chrome.tabs.sendMessage(tabId, payload);
     if (result?.ok) return result;
     throw new Error(result?.error || 'Content script не запустил сбор.');
   } catch (firstError) {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
-    const result = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_START_CAPTURE', jobId });
+    const result = await chrome.tabs.sendMessage(tabId, payload);
     if (!result?.ok) throw new Error(result?.error || firstError?.message || 'Не удалось запустить сбор.');
     return result;
   }
 }
 
-async function startCapture() {
-  const tab = await getActiveTab();
-  if (!tab?.id) throw new Error('Не удалось определить активную вкладку.');
+async function waitForChatTabComplete(tabId, timeout = 30000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status === 'complete' && isConversationUrl(tab.url || '')) return tab;
+    await sleep(250);
+  }
+  throw new Error('Фоновая вкладка ChatGPT не загрузилась за 30 секунд.');
+}
 
-  // Do not even touch the debugger on an unrelated site. The tab URL is a cheap
-  // host preflight; the debugger then confirms the live URL inside the page.
-  if (!isChatGptHost(tab.url || '')) {
+async function startCapture({ mode = 'full' } = {}) {
+  const sourceTab = await getActiveTab();
+  if (!sourceTab?.id) throw new Error('Не удалось определить активную вкладку.');
+
+  if (!isChatGptHost(sourceTab.url || '')) {
     throw makeCaptureError('WRONG_SITE', 'Откройте ChatGPT в активной вкладке.');
   }
 
   const current = await getJob();
-  if (current && ['starting', 'running'].includes(current.status)) {
-    if (current.tabId === tab.id) return { ok: true, job: current, alreadyRunning: true };
+  if (current && ['starting', 'running', 'paused'].includes(current.status)) {
+    if (current.tabId === sourceTab.id) return { ok: true, job: current, alreadyRunning: true };
     throw new Error('Другой сбор переписки уже выполняется.');
   }
 
-  // The debugger only validates the live page URL. The content script owns all
-  // scrolling so two independent loops cannot fight over the same conversation.
-  const inspection = await inspectAndKickScroll(tab.id);
+  const inspection = await inspectAndKickScroll(sourceTab.id);
 
-  if (tab.discarded) throw new Error('Вкладка ChatGPT сейчас выгружена из памяти. Откройте ее и повторите запуск.');
-  if (tab.frozen) throw new Error('Вкладка ChatGPT сейчас заморожена. Активируйте ее и повторите запуск.');
+  let existingArchive = null;
+  if (mode === 'continue') {
+    existingArchive = await getArchiveForUrl(inspection.href);
+    if (!existingArchive?.messages?.length) {
+      throw new Error('Для этого чата еще нет локального архива. Сначала выполните полный сбор.');
+    }
+  }
 
   const jobId = makeJobId();
-  const job = await setJob({
-    jobId,
-    tabId: tab.id,
-    status: 'starting',
-    phase: 'top',
-    message: 'Прокручиваю диалог к началу в фоне…',
-    count: 0,
-    imageCount: 0,
-    startedAt: Date.now(),
-    previousAutoDiscardable: tab.autoDiscardable,
-    debugUrl: inspection.href
-  });
+  let captureTab = null;
 
-  if (tab.autoDiscardable !== false) await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
   try {
-    await ensureChatGptContentScript(tab.id, jobId);
-    await setJob({ status: 'running', message: 'Сбор идет в фоне…', phase: 'top' });
+    captureTab = await chrome.tabs.create({ url: inspection.href, active: false });
+    if (!captureTab?.id) throw new Error('Не удалось открыть фоновую вкладку для сбора.');
+
+    await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
+    captureTab = await waitForChatTabComplete(captureTab.id);
+
+    await setJob({
+      jobId,
+      tabId: sourceTab.id,
+      sourceTabId: sourceTab.id,
+      captureTabId: captureTab.id,
+      sourceUrl: inspection.href,
+      status: 'starting',
+      phase: 'top',
+      captureMode: mode,
+      message: mode === 'continue'
+        ? 'Открываю фоновую копию и ищу место продолжения…'
+        : 'Открываю фоновую копию и иду к началу…',
+      count: 0,
+      addedCount: 0,
+      imageCount: 0,
+      startedAt: Date.now()
+    });
+
+    const resumeAnchorId = existingArchive?.lastMessageId ||
+      existingArchive?.messages?.[existingArchive.messages.length - 1]?.id || '';
+
+    await ensureChatGptContentScript(captureTab.id, jobId, {
+      mode,
+      resumeAnchorId,
+      existingArchiveId: existingArchive?.id || ''
+    });
+
+    await setJob({
+      status: 'running',
+      message: mode === 'continue' ? 'Продолжаю архив в фоне…' : 'Сбор идет в фоновой вкладке…',
+      phase: 'top'
+    });
+
     return { ok: true, job: await getJob() };
   } catch (error) {
-    await finishJobWithError(jobId, tab.id, error?.message || String(error));
+    if (captureTab?.id) await chrome.tabs.remove(captureTab.id).catch(() => {});
+    await setJob({
+      jobId,
+      tabId: sourceTab.id,
+      sourceTabId: sourceTab.id,
+      captureTabId: captureTab?.id || null,
+      status: 'error',
+      message: error?.message || String(error),
+      finishedAt: Date.now()
+    });
     throw error;
   }
 }
