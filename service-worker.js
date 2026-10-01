@@ -600,9 +600,15 @@ async function startCapture({
 
   const requestedDocUrl = normalizeGoogleDocUrl(docUrl);
   const currentLink = await getLinkedDoc(inspection.href);
-  const pendingDocUrl = requestedDocUrl || currentLink?.url || '';
 
-  if (requestedDocUrl && mode !== 'sync') {
+  // A full rebuild refreshes the local archive only. It must never append the
+  // whole rebuilt archive to an already-linked Google Doc. Automatic Docs
+  // append is reserved for verified continuation/sync deltas.
+  const pendingDocUrl = mode === 'full'
+    ? ''
+    : (requestedDocUrl || currentLink?.url || '');
+
+  if (requestedDocUrl && mode === 'continue') {
     await setLinkedDoc(inspection.href, {
       ...(currentLink || {}),
       url: requestedDocUrl,
@@ -851,7 +857,10 @@ async function handleCaptureComplete(message) {
   let docResult = null;
   let docError = '';
 
-  if (job.pendingDocUrl) {
+  const isContinuation = message.mode === 'continue' || message.mode === 'sync';
+  const shouldAutoAppend = Boolean(isContinuation && job.pendingDocUrl);
+
+  if (shouldAutoAppend) {
     try {
       const delta = addedCount > 0 ? archive.messages.slice(-addedCount) : [];
       docResult = await appendMessagesToGoogleDocUrl(
@@ -865,12 +874,11 @@ async function handleCaptureComplete(message) {
     }
   }
 
-  const isContinuation = message.mode === 'continue' || message.mode === 'sync';
   let finalMessage = isContinuation
     ? ('Архив продолжен: +' + addedCount + ' сообщений.')
     : 'Переписка собрана.';
 
-  if (job.pendingDocUrl) {
+  if (shouldAutoAppend) {
     if (docError) finalMessage += ' Google Doc не обновлен: ' + docError;
     else if (docResult?.addedCount) {
       finalMessage += ' В Google Doc добавлено ' + docResult.addedCount + ' сообщений';
@@ -890,13 +898,15 @@ async function handleCaptureComplete(message) {
     addedCount,
     imageCount: archive.imageCount || 0,
     archiveId: archive.id,
-    docUrl: docResult?.docUrl || job.pendingDocUrl || '',
+    docUrl: docResult?.docUrl || (shouldAutoAppend ? job.pendingDocUrl : '') || '',
     docExportError: docError,
     finishedAt: Date.now(),
     captureTabId: null
   }, {
     level: docError ? 'warn' : 'info',
-    code: docError ? 'ARCHIVE_SAVED_DOC_APPEND_FAILED' : (job.pendingDocUrl ? 'ARCHIVE_SAVED_AND_DOC_APPENDED' : 'ARCHIVE_SAVED'),
+    code: docError
+      ? 'ARCHIVE_SAVED_DOC_APPEND_FAILED'
+      : (shouldAutoAppend ? 'ARCHIVE_SAVED_AND_DOC_APPENDED' : 'ARCHIVE_SAVED'),
     message: finalMessage,
     phase: 'done',
     count: archive.messages?.length || 0
