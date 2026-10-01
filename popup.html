@@ -23,8 +23,8 @@
       <label class="field">
         <span>Режим сбора</span>
         <select id="captureTarget">
-          <option value="current">Текущая вкладка — прокрутка будет видна</option>
-          <option value="copy">Рабочая копия — собирать отдельно</option>
+          <option value="copy">Фоновый режим — рабочая копия</option>
+          <option value="current">Обычный режим — текущая вкладка</option>
         </select>
       </label>
       <div id="captureTargetHint" class="muted"></div>
@@ -74,6 +74,7 @@
     </div>
 
     <p id="status" class="status">Готово.</p>
+    <button id="retryCurrent" class="hidden">Повторить в обычном режиме</button>
 
     <details class="settings" open>
       <summary>Настройки оформления</summary>
