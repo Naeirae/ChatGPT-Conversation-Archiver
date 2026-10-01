@@ -769,7 +769,7 @@ async function cancelCapture() {
     }
   } catch (_) {}
 
-  if (job.captureTabId != null) {
+  if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
   await cleanupTemporaryBaseline(job);
@@ -793,7 +793,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   const job = await getJob();
   if (job?.jobId !== jobId) return;
 
-  if (job.captureTabId != null) {
+  if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
   await cleanupTemporaryBaseline(job);
@@ -828,7 +828,7 @@ async function handleCaptureComplete(message) {
 
   await indexArchive(archive);
 
-  if (job.captureTabId != null) {
+  if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
 
@@ -1393,11 +1393,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     switch (message?.type) {
       case 'ARCHIVER_CAPTURE_CURRENT':
-        return await startCapture({ mode: 'full' });
+        return await startCapture({
+          mode: 'full',
+          captureTarget: message.captureTarget || 'copy'
+        });
       case 'ARCHIVER_CONTINUE_CURRENT':
-        return await startCapture({ mode: 'continue', docUrl: message.docUrl || '' });
+        return await startCapture({
+          mode: 'continue',
+          docUrl: message.docUrl || '',
+          captureTarget: message.captureTarget || 'copy'
+        });
       case 'ARCHIVER_SYNC_CURRENT':
-        return await syncCurrentWithDoc(message.docUrl || '');
+        return await syncCurrentWithDoc(
+          message.docUrl || '',
+          message.captureTarget || 'copy'
+        );
       case 'ARCHIVER_GET_STATE': {
         const job = await getJob();
         const tab = await getActiveTab();
@@ -1427,7 +1437,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId != null && senderTabId !== job.captureTabId) {
-          return { ok: false, error: 'Прогресс пришел не из фоновой вкладки сбора.' };
+          return { ok: false, error: 'Прогресс пришел не из вкладки сбора.' };
         }
         const phaseChanged = message.patch?.phase && message.patch.phase !== job.phase;
         const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
@@ -1456,7 +1466,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
-          return { ok: false, error: 'Физическая прокрутка разрешена только фоновой вкладке сбора.' };
+          return { ok: false, error: 'Физическая прокрутка разрешена только вкладке текущего сбора.' };
         }
         return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
       }
