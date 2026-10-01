@@ -389,7 +389,11 @@ $('copyRunLog').onclick = async () => {
 $('openPlanner').onclick = async () => {
   $('openPlanner').disabled = true;
   try {
-    await chrome.tabs.create({ url: chrome.runtime.getURL('planner.html') });
+    const archiveId = state?.archive?.id || '';
+    const url = chrome.runtime.getURL(
+      'planner.html' + (archiveId ? '?archiveId=' + encodeURIComponent(archiveId) : '')
+    );
+    await chrome.tabs.create({ url });
     setStatus('Открыла разметку архива в отдельной вкладке.');
   } catch (error) {
     setStatus(error.message || String(error), true);
