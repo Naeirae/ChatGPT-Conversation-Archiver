@@ -92,7 +92,7 @@ Bug fixes should not be described as "working" until the relevant live layer has
 
 ## Update/distribution strategy
 
-The current updater engine is still `update.ps1` for local unpacked installs. The user-facing Windows entry point is `Обновить ChatGPT Archiver.vbs`, which runs that engine quietly; `update.cmd` remains the diagnostic fallback when console output is useful.
+The current updater engine is still `update.ps1` for local unpacked installs. The user-facing Windows entry point is `Update ChatGPT Archiver.vbs`, which runs that engine quietly; `update.cmd` remains the diagnostic fallback when console output is useful.
 
 Long term, the simpler end-user path is:
 
