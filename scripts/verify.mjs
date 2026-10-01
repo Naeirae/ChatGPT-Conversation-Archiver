@@ -9,7 +9,8 @@ const jsFiles = [
   'lib/text.mjs',
   'lib/urls.mjs',
   'lib/archive-store.mjs',
-  'lib/google-docs-baseline.mjs'
+  'lib/google-docs-baseline.mjs',
+  'lib/tab-plan.mjs'
 ];
 
 const forbiddenArtifacts = [
@@ -65,7 +66,8 @@ const tests = spawnSync(process.execPath, [
   'tests/text.test.mjs',
   'tests/urls.test.mjs',
   'tests/archive-store.test.mjs',
-  'tests/google-docs-baseline.test.mjs'
+  'tests/google-docs-baseline.test.mjs',
+  'tests/tab-plan.test.mjs'
 ], {
   encoding: 'utf8'
 });
