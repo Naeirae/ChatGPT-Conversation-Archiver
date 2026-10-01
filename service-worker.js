@@ -310,7 +310,8 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     mode: options.mode || 'full',
     resumeAnchorId: options.resumeAnchorId || '',
     existingArchiveId: options.existingArchiveId || '',
-    resumeAnchorSignature: options.resumeAnchorSignature || ''
+    resumeAnchorSignature: options.resumeAnchorSignature || '',
+    resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : []
   };
 
   try {
@@ -388,7 +389,83 @@ async function waitForChatDomReady(tabId, timeout = 30000) {
   throw new Error('ChatGPT не отрисовал реплики в рабочей вкладке за 30 секунд.' + detail);
 }
 
-async function startCapture({ mode = 'full' } = {}) {
+async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
+  const archiveId = 'doc-baseline-' + baseline.docId + '-' + hashText(chatUrl + ':' + Date.now());
+  const messages = baseline.messages.map((item, index) => ({
+    ...item,
+    id: item.id || ('doc:' + index + ':' + hashText(messageSignature(item.role, item.text)))
+  }));
+  const archive = {
+    id: archiveId,
+    kind: 'google-doc-baseline',
+    title: baseline.title || 'Google Doc archive',
+    sourceUrl: chatUrl,
+    capturedAt: new Date().toISOString(),
+    messages,
+    imageCount: 0,
+    externalDocUrl: baseline.targetTabUrl || baseline.inputUrl,
+    baselineDocId: baseline.docId,
+    baselineTabCount: baseline.tabs.length,
+    baselineMeaningfulCount: baseline.meaningfulCount,
+    lastCaptureMode: 'sync-baseline',
+    lastCaptureAddedCount: 0,
+    previousMessageCount: messages.length,
+    lastMessageId: messages[messages.length - 1]?.id || ''
+  };
+
+  await chrome.storage.local.set({
+    [archiveKey(archiveId)]: archive,
+    [LAST_ARCHIVE_KEY]: archiveId
+  });
+  await indexArchive(archive);
+  return archive;
+}
+
+async function syncCurrentWithDoc(docUrl) {
+  const sourceTab = await getActiveTab();
+  if (!sourceTab?.id || !isConversationUrl(sourceTab.url || '')) {
+    throw new Error('Откройте нужный диалог ChatGPT перед сверкой.');
+  }
+
+  const inspection = await inspectAndKickScroll(sourceTab.id);
+  const baseline = await readGoogleDocBaseline(docUrl, sourceTab.id);
+  const archive = await createBaselineArchiveFromGoogleDoc(inspection.href, baseline);
+  const linkedDoc = await setLinkedDoc(inspection.href, {
+    url: baseline.targetTabUrl || baseline.inputUrl,
+    docId: baseline.docId,
+    tabCount: baseline.tabs.length,
+    baselineMessageCount: baseline.messages.length,
+    baselineMeaningfulCount: baseline.meaningfulCount
+  });
+
+  await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+  await sleep(120);
+
+  const result = await startCapture({
+    mode: 'sync',
+    docUrl: linkedDoc?.url || baseline.targetTabUrl || baseline.inputUrl,
+    existingArchive: archive,
+    resumeTailSignatures: baseline.tailSignatures
+  });
+
+  return {
+    ...result,
+    archive: summarize(archive),
+    linkedDoc,
+    baseline: {
+      tabCount: baseline.tabs.length,
+      messageCount: baseline.messages.length,
+      meaningfulCount: baseline.meaningfulCount
+    }
+  };
+}
+
+async function startCapture({
+  mode = 'full',
+  docUrl = '',
+  existingArchive: providedArchive = null,
+  resumeTailSignatures = []
+} = {}) {
   const sourceTab = await getActiveTab();
   if (!sourceTab?.id) throw new Error('Не удалось определить активную вкладку.');
 
@@ -403,22 +480,32 @@ async function startCapture({ mode = 'full' } = {}) {
   }
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
+  let existingArchive = providedArchive;
 
-  let existingArchive = null;
-  if (mode === 'continue') {
+  if ((mode === 'continue' || mode === 'sync') && !existingArchive) {
     existingArchive = await getArchiveForUrl(inspection.href);
-    if (!existingArchive?.messages?.length) {
-      throw new Error('Для этого чата еще нет локального архива. Сначала выполните полный сбор.');
-    }
+  }
+
+  if (mode === 'continue' && !existingArchive?.messages?.length) {
+    throw new Error('Для этого чата нет локальной точки продолжения. Используйте «Сверить» с Google Doc.');
+  }
+
+  const requestedDocUrl = normalizeGoogleDocUrl(docUrl);
+  const currentLink = await getLinkedDoc(inspection.href);
+  const pendingDocUrl = requestedDocUrl || currentLink?.url || '';
+
+  if (requestedDocUrl) {
+    await setLinkedDoc(inspection.href, {
+      ...(currentLink || {}),
+      url: requestedDocUrl,
+      docId: googleDocKey(requestedDocUrl)
+    });
   }
 
   const jobId = makeJobId();
   let captureTab = null;
 
   try {
-    // ChatGPT's current virtualized UI may not hydrate conversation turns in a
-    // never-focused tab. Warm the dedicated capture tab in the foreground first,
-    // verify that message DOM exists, then return the user to the source tab.
     captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
     if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для сбора.');
 
@@ -426,6 +513,7 @@ async function startCapture({ mode = 'full' } = {}) {
     captureTab = await waitForChatTabComplete(captureTab.id);
     const domProbe = await waitForChatDomReady(captureTab.id);
 
+    const modeLabel = mode === 'sync' ? 'сверка' : mode === 'continue' ? 'продолжение' : 'полный сбор';
     await setJob({
       jobId,
       tabId: sourceTab.id,
@@ -435,9 +523,10 @@ async function startCapture({ mode = 'full' } = {}) {
       status: 'starting',
       phase: 'top',
       captureMode: mode,
-      message: mode === 'continue'
-        ? 'Рабочая вкладка загружена; ищу место продолжения…'
-        : 'Рабочая вкладка загружена; иду к началу…',
+      pendingDocUrl,
+      message: mode === 'full'
+        ? 'Рабочая вкладка загружена; иду к началу…'
+        : 'Рабочая вкладка загружена; ищу последний сохраненный стык…',
       count: 0,
       addedCount: 0,
       imageCount: 0,
@@ -447,7 +536,7 @@ async function startCapture({ mode = 'full' } = {}) {
         at: Date.now(),
         level: 'info',
         code: 'RUN_STARTED',
-        message: mode === 'continue' ? 'Запущено продолжение архива.' : 'Запущен полный сбор.',
+        message: 'Запущен режим: ' + modeLabel + '.',
         phase: 'top',
         count: 0
       }, {
@@ -462,17 +551,16 @@ async function startCapture({ mode = 'full' } = {}) {
     });
 
     const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
-    const resumeAnchorId = existingArchive?.lastMessageId || lastExistingMessage?.id || '';
-    const resumeAnchorSignature = lastExistingMessage
-      ? ((lastExistingMessage.role || 'unknown') + ':' + hashText(lastExistingMessage.text || ''))
-      : '';
+    const resumeAnchorId = mode === 'sync' ? '' : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
+    const resumeAnchorSignature = mode === 'sync'
+      ? (resumeTailSignatures[resumeTailSignatures.length - 1] || '')
+      : (lastExistingMessage ? messageSignature(lastExistingMessage.role, lastExistingMessage.text) : '');
 
-    // Start the collector while the working tab is definitely hydrated. The
-    // collector continues after we restore focus to the user's original tab.
     await ensureChatGptContentScript(captureTab.id, jobId, {
       mode,
       resumeAnchorId,
       resumeAnchorSignature,
+      resumeTailSignatures,
       existingArchiveId: existingArchive?.id || ''
     });
 
@@ -480,7 +568,7 @@ async function startCapture({ mode = 'full' } = {}) {
 
     await appendRunLog({
       status: 'running',
-      message: mode === 'continue' ? 'Продолжаю архив в рабочей вкладке…' : 'Сбор идет в рабочей вкладке…',
+      message: mode === 'full' ? 'Сбор идет в рабочей вкладке…' : 'Добираю сообщения после найденного стыка…',
       phase: 'top'
     }, {
       level: 'info',
@@ -490,7 +578,11 @@ async function startCapture({ mode = 'full' } = {}) {
       count: 0
     });
 
-    return { ok: true, job: await getJob() };
+    return {
+      ok: true,
+      job: await getJob(),
+      linkedDoc: await getLinkedDoc(inspection.href)
+    };
   } catch (error) {
     if (captureTab?.id) await chrome.tabs.remove(captureTab.id).catch(() => {});
     await setJob({
