@@ -139,7 +139,8 @@ function render(data) {
   $('archive').classList.toggle('hidden', !archive);
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
-    ? `${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений`
+    ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
+      (archive.imageCount ? ` · ${archive.imageBinaryReady || 0} подготовлено · ${archive.imageBinaryFailed || 0} ошибок` : ''))
     : '';
 
   // A failed new capture must not hide or disable the previously completed
