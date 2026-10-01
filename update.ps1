@@ -211,12 +211,12 @@ try {
   $script:headers = @{
     'User-Agent' = 'ChatGPT-Conversation-Archiver-Updater'
     'Accept' = 'application/vnd.github+json'
-    'X-GitHub-Api-Version' = '2022-11-28'
+    'X-GitHub-Api-Version' = '2026-03-10'
   }
   $script:downloadHeaders = @{
     'User-Agent' = 'ChatGPT-Conversation-Archiver-Updater'
     'Accept' = 'application/vnd.github.raw+json'
-    'X-GitHub-Api-Version' = '2022-11-28'
+    'X-GitHub-Api-Version' = '2026-03-10'
   }
   $script:timeout = 20
   $script:manifestVersionCache = @{}
@@ -234,11 +234,12 @@ try {
   }
 
   Write-Step '[1/4] Checking GitHub...'
-  $treeUrl = "$script:apiBase/git/trees/$script:branch?recursive=1"
+  $treeUrl = $script:apiBase + '/git/trees/' + [Uri]::EscapeDataString($script:branch) + '?recursive=1'
+  Write-Step ('  Request: ' + $treeUrl)
   try {
     $tree = Invoke-RestMethod -Uri $treeUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
   } catch {
-    throw "Could not reach GitHub API. $($_.Exception.Message)"
+    throw "Could not reach GitHub tree endpoint $treeUrl. $($_.Exception.Message)"
   }
 
   if ($tree.truncated) {
