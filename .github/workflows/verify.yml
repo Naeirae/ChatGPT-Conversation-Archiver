@@ -46,3 +46,12 @@ jobs:
             exit 1
           }
           Write-Host 'update.ps1 syntax OK'
+
+      - name: Smoke-test quiet updater launcher
+        shell: powershell
+        run: |
+          & "$env:WINDIR\System32\cscript.exe" //nologo ".\Обновить ChatGPT Archiver.vbs" --self-test
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          Write-Host 'quiet updater launcher syntax OK'
