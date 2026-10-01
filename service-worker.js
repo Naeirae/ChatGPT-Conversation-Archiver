@@ -285,6 +285,59 @@ async function waitForChatTabComplete(tabId, timeout = 30000) {
   throw new Error('Фоновая вкладка ChatGPT не загрузилась за 30 секунд.');
 }
 
+async function probeChatDom(tabId) {
+  try {
+    const [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const roleSelector = [
+          '[data-message-author-role="user"]',
+          '[data-message-author-role="assistant"]',
+          '[data-role="user"]',
+          '[data-role="assistant"]',
+          '[data-message-author="user"]',
+          '[data-message-author="assistant"]'
+        ].join(',');
+        const shellSelector = [
+          'section[data-turn="user"]',
+          'section[data-turn="assistant"]',
+          'article[data-turn="user"]',
+          'article[data-turn="assistant"]',
+          '[data-testid^="conversation-turn-"]',
+          '[data-chatgpt-search-unit-key$=":user"]',
+          '[data-chatgpt-search-unit-key$=":assistant"]',
+          '[data-turn-key]'
+        ].join(',');
+        return {
+          href: location.href,
+          readyState: document.readyState,
+          visibility: document.visibilityState,
+          roleCount: document.querySelectorAll(roleSelector).length,
+          shellCount: document.querySelectorAll(shellSelector).length
+        };
+      }
+    });
+    return result?.result || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function waitForChatDomReady(tabId, timeout = 30000) {
+  const started = Date.now();
+  let last = null;
+  while (Date.now() - started < timeout) {
+    last = await probeChatDom(tabId);
+    if (last && (last.roleCount > 0 || last.shellCount > 0)) return last;
+    await sleep(300);
+  }
+  const detail = last
+    ? (' role-узлов: ' + last.roleCount + ', оболочек: ' + last.shellCount +
+       ', visibility: ' + last.visibility + ', readyState: ' + last.readyState + '.')
+    : '';
+  throw new Error('ChatGPT не отрисовал реплики в рабочей вкладке за 30 секунд.' + detail);
+}
+
 async function startCapture({ mode = 'full' } = {}) {
   const sourceTab = await getActiveTab();
   if (!sourceTab?.id) throw new Error('Не удалось определить активную вкладку.');
@@ -313,11 +366,15 @@ async function startCapture({ mode = 'full' } = {}) {
   let captureTab = null;
 
   try {
-    captureTab = await chrome.tabs.create({ url: inspection.href, active: false });
-    if (!captureTab?.id) throw new Error('Не удалось открыть фоновую вкладку для сбора.');
+    // ChatGPT's current virtualized UI may not hydrate conversation turns in a
+    // never-focused tab. Warm the dedicated capture tab in the foreground first,
+    // verify that message DOM exists, then return the user to the source tab.
+    captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
+    if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для сбора.');
 
     await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
     captureTab = await waitForChatTabComplete(captureTab.id);
+    const domProbe = await waitForChatDomReady(captureTab.id);
 
     await setJob({
       jobId,
@@ -329,12 +386,13 @@ async function startCapture({ mode = 'full' } = {}) {
       phase: 'top',
       captureMode: mode,
       message: mode === 'continue'
-        ? 'Открываю фоновую копию и ищу место продолжения…'
-        : 'Открываю фоновую копию и иду к началу…',
+        ? 'Рабочая вкладка загружена; ищу место продолжения…'
+        : 'Рабочая вкладка загружена; иду к началу…',
       count: 0,
       addedCount: 0,
       imageCount: 0,
       startedAt: Date.now(),
+      domProbe,
       log: [{
         at: Date.now(),
         level: 'info',
@@ -345,8 +403,9 @@ async function startCapture({ mode = 'full' } = {}) {
       }, {
         at: Date.now(),
         level: 'info',
-        code: 'BACKGROUND_TAB_READY',
-        message: 'Фоновая вкладка ChatGPT загружена.',
+        code: 'CAPTURE_TAB_HYDRATED',
+        message: 'ChatGPT отрисовал реплики в рабочей вкладке: role=' +
+          Number(domProbe?.roleCount || 0) + ', shells=' + Number(domProbe?.shellCount || 0) + '.',
         phase: 'top',
         count: 0
       }]
@@ -358,6 +417,8 @@ async function startCapture({ mode = 'full' } = {}) {
       ? ((lastExistingMessage.role || 'unknown') + ':' + hashText(lastExistingMessage.text || ''))
       : '';
 
+    // Start the collector while the working tab is definitely hydrated. The
+    // collector continues after we restore focus to the user's original tab.
     await ensureChatGptContentScript(captureTab.id, jobId, {
       mode,
       resumeAnchorId,
@@ -365,10 +426,18 @@ async function startCapture({ mode = 'full' } = {}) {
       existingArchiveId: existingArchive?.id || ''
     });
 
-    await setJob({
+    await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+
+    await appendRunLog({
       status: 'running',
-      message: mode === 'continue' ? 'Продолжаю архив в фоне…' : 'Сбор идет в фоновой вкладке…',
+      message: mode === 'continue' ? 'Продолжаю архив в рабочей вкладке…' : 'Сбор идет в рабочей вкладке…',
       phase: 'top'
+    }, {
+      level: 'info',
+      code: 'SOURCE_TAB_RESTORED',
+      message: 'Фокус возвращен в исходный чат; рабочая вкладка продолжает сбор.',
+      phase: 'top',
+      count: 0
     });
 
     return { ok: true, job: await getJob() };
