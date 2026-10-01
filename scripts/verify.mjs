@@ -5,7 +5,9 @@ const jsFiles = [
   'service-worker.js',
   'content-chatgpt.js',
   'popup.js',
-  'offscreen.js'
+  'offscreen.js',
+  'lib/text.mjs',
+  'lib/urls.mjs'
 ];
 
 const forbiddenArtifacts = [
@@ -54,6 +56,15 @@ for (const path of forbiddenArtifacts) {
   } catch (error) {
     if (error?.code !== 'ENOENT') fail(`${path}: ${error.message}`);
   }
+}
+
+const tests = spawnSync(process.execPath, ['--test', 'tests'], {
+  encoding: 'utf8'
+});
+if (tests.status !== 0) {
+  fail(`Regression tests failed\n${tests.stderr || tests.stdout}`);
+} else {
+  console.log(tests.stdout.trim());
 }
 
 if (failed) process.exit(1);
