@@ -248,6 +248,7 @@ function formatRunLog(job) {
   lines.push('ChatGPT Archiver run');
   lines.push('jobId: ' + (job.jobId || ''));
   lines.push('mode: ' + (job.captureMode || 'full'));
+  lines.push('captureTarget: ' + (job.captureTarget || 'copy'));
   lines.push('status: ' + (job.status || ''));
   lines.push('phase: ' + (job.phase || ''));
   lines.push('count: ' + Number(job.count || 0));
@@ -614,10 +615,20 @@ async function startCapture({
       captureTab = await chrome.tabs.get(sourceTab.id);
       domProbe = await waitForChatDomReady(sourceTab.id, 15000);
     } else {
-      captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
+      // Prefer duplicating the already-loaded conversation. Directly opening the
+      // same URL in a fresh tab sometimes makes ChatGPT show
+      // "Failed to load this conversation" even while the source tab is healthy.
+      try {
+        captureTab = await chrome.tabs.duplicate(sourceTab.id);
+      } catch (_) {
+        captureTab = null;
+      }
+      if (!captureTab?.id) {
+        captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
+      }
       if (!captureTab?.id) throw new Error('Не удалось открыть рабочую копию для сбора.');
 
-      await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
+      await chrome.tabs.update(captureTab.id, { active: true, autoDiscardable: false }).catch(() => {});
       captureTab = await waitForChatTabComplete(captureTab.id);
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
@@ -1527,7 +1538,9 @@ chrome.tabs.onRemoved.addListener(async tabId => {
   if (job.captureTabId === tabId) {
     await setJob({
       status: 'error',
-      message: 'Фоновая вкладка сбора была закрыта.',
+      message: job.captureTarget === 'current'
+        ? 'Текущая вкладка с перепиской была закрыта.'
+        : 'Рабочая копия с перепиской была закрыта. Можно повторить в обычном режиме.',
       finishedAt: Date.now(),
       captureTabId: null
     });
@@ -1541,18 +1554,24 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.frozen === true) {
     await setJob({
       status: 'paused',
-      message: 'Фоновая вкладка временно заморожена. Сбор продолжится после разморозки.',
+      message: 'Вкладка сбора временно заморожена. Сбор продолжится после разморозки.',
       phase: 'paused'
     });
   } else if (changeInfo.frozen === false && job.status === 'paused') {
     await setJob({
       status: 'running',
-      message: 'Фоновая вкладка снова доступна. Продолжаю сбор…',
+      message: 'Вкладка сбора снова доступна. Продолжаю сбор…',
       phase: 'walk'
     });
   }
 
   if (changeInfo.status === 'loading' && !isChatGptUrl(tab.url || '')) {
-    await finishJobWithError(job.jobId, job.sourceTabId ?? job.tabId, 'Фоновая вкладка ушла со страницы ChatGPT.');
+    await finishJobWithError(
+      job.jobId,
+      job.sourceTabId ?? job.tabId,
+      job.captureTarget === 'current'
+        ? 'Текущая вкладка ушла со страницы ChatGPT.'
+        : 'Рабочая копия ушла со страницы ChatGPT. Можно повторить в обычном режиме.'
+    );
   }
 });
