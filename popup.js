@@ -248,13 +248,16 @@ $('copyDraft').onclick = async () => {
   }
 };
 
-$('runLog').ondblclick = async () => {
+$('copyRunLog').onclick = async () => {
+  $('copyRunLog').disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_COPY_RUN_LOG' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать лог.');
     setStatus('Лог последнего запуска скопирован.');
   } catch (error) {
     setStatus(error.message || String(error), true);
+  } finally {
+    $('copyRunLog').disabled = false;
   }
 };
 
