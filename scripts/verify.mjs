@@ -5,6 +5,7 @@ const jsFiles = [
   'service-worker.js',
   'content-chatgpt.js',
   'popup.js',
+  'planner.js',
   'offscreen.js',
   'lib/text.mjs',
   'lib/urls.mjs',
