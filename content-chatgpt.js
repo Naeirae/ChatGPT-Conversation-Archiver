@@ -176,6 +176,10 @@
     return role + ':' + hashText(text);
   }
 
+  function messageTextSignature(message) {
+    return (message?.role || 'unknown') + ':' + hashText(String(message?.text || '').trim());
+  }
+
   function makeCaptureBoundary(turns) {
     for (let i = turns.length - 1; i >= 0; i--) {
       const key = turnStableKey(turns[i]);
@@ -509,11 +513,11 @@
     return result;
   }
 
-  function hasMessageId(id) {
-    if (!id) return false;
+  function hasResumeAnchor(id, signature) {
     return orderedTurns().some(turn => {
-      const key = turnStableKey(turn) || turnTextSignature(turn);
-      return key === id;
+      const key = turnStableKey(turn);
+      const textSignature = turnTextSignature(turn);
+      return Boolean((id && key === id) || (signature && textSignature === signature));
     });
   }
 
@@ -564,8 +568,8 @@
     throw new Error('Не удалось надежно дойти до начала переписки физической прокруткой.');
   }
 
-  async function reachResumeAnchor(anchorId, map, order, settings) {
-    if (!anchorId) throw new Error('У сохраненного архива нет якоря продолжения.');
+  async function reachResumeAnchor(anchorId, anchorSignature, map, order, settings) {
+    if (!anchorId && !anchorSignature) throw new Error('У сохраненного архива нет якоря продолжения.');
 
     for (let i = 0; i < 260; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
@@ -574,7 +578,7 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
-      if (hasMessageId(anchorId)) {
+      if (hasResumeAnchor(anchorId, anchorSignature)) {
         await progress('Этап 1/3: найден конец сохраненного архива · ' + map.size + ' сообщений в новом проходе', map.size, {
           phase: 'top',
           iteration: i + 1,
@@ -649,6 +653,7 @@
 
     const mode = options.mode === 'continue' ? 'continue' : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
+    const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const existingArchiveId = String(options.existingArchiveId || '');
     const map = new Map();
     const order = [];
@@ -676,7 +681,7 @@
       collect(map, order, settings);
 
       if (mode === 'continue') {
-        await reachResumeAnchor(resumeAnchorId, map, order, settings);
+        await reachResumeAnchor(resumeAnchorId, resumeAnchorSignature, map, order, settings);
       } else {
         await reachTop(map, order, settings);
       }
@@ -701,8 +706,11 @@
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       if (!capturedMessages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
 
-      if (mode === 'continue' && resumeAnchorId) {
-        const anchorIndex = capturedMessages.findIndex(item => item.id === resumeAnchorId);
+      if (mode === 'continue' && (resumeAnchorId || resumeAnchorSignature)) {
+        const anchorIndex = capturedMessages.findIndex(item =>
+          (resumeAnchorId && item.id === resumeAnchorId) ||
+          (resumeAnchorSignature && messageTextSignature(item) === resumeAnchorSignature)
+        );
         if (anchorIndex >= 0) capturedMessages = capturedMessages.slice(anchorIndex);
       }
 
@@ -719,7 +727,11 @@
 
         previousCount = existing.messages.length;
         const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-        const delta = capturedMessages.filter(item => item.id && !existingIds.has(item.id));
+        const existingSignatures = new Set(existing.messages.map(messageTextSignature));
+        const delta = capturedMessages.filter(item => {
+          if (item.id && existingIds.has(item.id)) return false;
+          return !existingSignatures.has(messageTextSignature(item));
+        });
         addedCount = delta.length;
         messages = existing.messages.concat(delta);
       }
@@ -799,7 +811,8 @@
       captureConversation(message.jobId, {
         mode: message.mode,
         resumeAnchorId: message.resumeAnchorId,
-        existingArchiveId: message.existingArchiveId
+        existingArchiveId: message.existingArchiveId,
+        resumeAnchorSignature: message.resumeAnchorSignature
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId });
       return false;
