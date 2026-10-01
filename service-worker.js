@@ -52,6 +52,11 @@ function messageSignature(role, text = '') {
   return String(role || 'unknown') + ':' + hashText(normalizeMatchText(text));
 }
 
+function externalMatchSignature(role, text = '') {
+  const normalized = normalizeMatchText(text);
+  return String(role || 'unknown') + ':p:' + hashText(normalized.slice(0, 240));
+}
+
 
 function parseUrl(url = '') {
   try { return new URL(url); } catch (_) { return null; }
@@ -1101,7 +1106,7 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
       tabs,
       messages,
       meaningfulCount: meaningful.length,
-      tailSignatures: tail.map(item => messageSignature(item.role, item.text)),
+      tailSignatures: tail.map(item => externalMatchSignature(item.role, item.text)),
       targetTabUrl: target?.baselineTabUrl || tabs[tabs.length - 1]?.url || normalizedUrl,
       title: String(tab.title || '').replace(/\s*[–—-]\s*Google Docs\s*$/i, '').trim()
     };
