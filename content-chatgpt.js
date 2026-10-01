@@ -17,7 +17,9 @@
     'article[data-turn="user"]',
     'article[data-turn="assistant"]',
     '[data-testid^="conversation-turn-"]',
-    '[data-turn-key]'
+    '[data-turn-key]',
+    '[data-chatgpt-search-unit-key$=":user"]',
+    '[data-chatgpt-search-unit-key$=":assistant"]'
   ].join(',');
   const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
@@ -68,6 +70,7 @@
       node.closest('section[data-turn]') ||
       node.closest('article[data-turn]') ||
       node.closest('[data-turn-key]') ||
+      node.closest('[data-chatgpt-search-unit-key]') ||
       node;
   }
 
@@ -121,6 +124,9 @@
     if (role === 'user' || role === 'assistant') return role;
     const dataTurn = turn.getAttribute('data-turn');
     if (dataTurn === 'user' || dataTurn === 'assistant') return dataTurn;
+    const searchUnit = turn.getAttribute('data-chatgpt-search-unit-key') || '';
+    if (searchUnit.endsWith(':user')) return 'user';
+    if (searchUnit.endsWith(':assistant')) return 'assistant';
     return null;
   }
 
