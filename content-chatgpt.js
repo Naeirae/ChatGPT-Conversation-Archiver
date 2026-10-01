@@ -1104,7 +1104,15 @@
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
         );
-        if (anchorIndex >= 0) capturedMessages = capturedMessages.slice(anchorIndex + 1);
+
+        if (anchorIndex < 0) {
+          throw new Error(
+            'Точка продолжения была найдена при навигации, но не попала в итоговый хронологический проход. ' +
+            'Продолжение остановлено без слияния, чтобы не добавить старые сообщения повторно.'
+          );
+        }
+
+        capturedMessages = capturedMessages.slice(anchorIndex + 1);
       }
 
       if (mode === 'full' && !capturedMessages.length) {
