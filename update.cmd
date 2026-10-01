@@ -30,7 +30,7 @@ if errorlevel 1 (
 echo [2/2] Running updater...
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0" > "%UPDATER_LOG%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP_UPDATER%" -InstallPath "%~dp0." > "%UPDATER_LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 if exist "%UPDATER_LOG%" (
