@@ -1,13 +1,25 @@
-param(
-  [string]$InstallPath = $PSScriptRoot
-)
-
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+
+$InstallPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$LogPath = Join-Path $InstallPath 'updater-last.log'
+
+try {
+  if (Test-Path -LiteralPath $LogPath) {
+    Remove-Item -LiteralPath $LogPath -Force
+  }
+} catch {
+  # Logging must not prevent the updater from starting.
+}
 
 function Write-Step([string]$Message) {
   Write-Host $Message
   [Console]::Out.Flush()
+  try {
+    Add-Content -LiteralPath $LogPath -Value $Message -Encoding UTF8
+  } catch {
+    # Keep console output available even if the log cannot be written.
+  }
 }
 
 function Get-GitBlobSha([string]$RelativePath) {
@@ -159,7 +171,7 @@ function Download-RemoteFile([string]$RelativePath, [string]$Target) {
 function Save-UpdaterState($RemoteFiles, [string]$RemoteVersion, [string]$StatePath) {
   $files = [ordered]@{}
   foreach ($item in $RemoteFiles) {
-    if ([string]$item.path -eq 'update.cmd') { continue }
+    if ([string]$item.path -in @('update.cmd', 'update.ps1')) { continue }
     $files[[string]$item.path] = [string]$item.sha
   }
 
@@ -271,8 +283,8 @@ try {
   foreach ($item in $remoteFiles) {
     $relative = [string]$item.path
 
-    # update.cmd is a stable bootstrap. Never replace the currently running CMD file.
-    if ($relative -eq 'update.cmd') {
+    # The updater pair is a stable control plane. It never updates or deletes itself.
+    if ($relative -in @('update.cmd', 'update.ps1')) {
       continue
     }
 
@@ -288,15 +300,6 @@ try {
 
     $localSha = Get-GitBlobSha $relative
     if ($localSha -eq [string]$item.sha) {
-      continue
-    }
-
-    if ($relative -eq 'update.ps1') {
-      $changed += [pscustomobject]@{
-        Path = $relative
-        Sha = [string]$item.sha
-        Reason = 'updater'
-      }
       continue
     }
 
@@ -366,8 +369,7 @@ try {
   Write-Step "[4/4] Update complete: $remoteVersion"
   Write-Host 'Reload the extension at chrome://extensions.'
 } catch {
-  Write-Host ''
-  Write-Host ('ERROR: ' + $_.Exception.Message)
-  [Console]::Out.Flush()
+  Write-Step ''
+  Write-Step ('ERROR: ' + $_.Exception.Message)
   exit 1
 }
