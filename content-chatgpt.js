@@ -681,6 +681,11 @@
         await reachTop(map, order, settings);
       }
 
+      // Upward traversal is only for navigation/loading. Rebuild the actual
+      // archive in chronological order while physically walking downward.
+      map.clear();
+      order.length = 0;
+
       await walkDown(map, order, settings, boundary);
 
       await progress('Этап 3/3: сохраняю локальный архив…', map.size, {
@@ -693,8 +698,13 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
-      const capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       if (!capturedMessages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
+
+      if (mode === 'continue' && resumeAnchorId) {
+        const anchorIndex = capturedMessages.findIndex(item => item.id === resumeAnchorId);
+        if (anchorIndex >= 0) capturedMessages = capturedMessages.slice(anchorIndex);
+      }
 
       let messages = capturedMessages;
       let archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href));
