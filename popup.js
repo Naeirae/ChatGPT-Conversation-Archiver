@@ -67,6 +67,8 @@ function render(data) {
 
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running ? 'Сбор идет в фоне…' : 'Собрать текущий чат';
+  $('continue').classList.toggle('hidden', running || !state.canContinue);
+  $('continue').disabled = Boolean(running);
   $('cancel').classList.toggle('hidden', !running);
   renderCaptureProgress(job, running);
 
@@ -87,7 +89,10 @@ function render(data) {
   if (running) setStatus(job.message || 'Сбор идет в фоне…');
   else if (job?.status === 'error') setStatus(job.message || 'Сбор не выполнен.', true);
   else if (job?.status === 'cancelled') setStatus('Сбор отменен.');
-  else if (done) setStatus(`Готово: ${archive.messageCount || 0} сообщений, ${archive.imageCount || 0} изображений.`);
+  else if (done) {
+    const added = archive.lastCaptureMode === 'continue' ? ` · +${archive.lastCaptureAddedCount || 0} новых` : '';
+    setStatus(`Готово: ${archive.messageCount || 0} сообщений${added}, ${archive.imageCount || 0} изображений.`);
+  }
   else setStatus('Готово.');
 }
 
@@ -120,6 +125,24 @@ $('capture').onclick = async () => {
   } catch (error) {
     setStatus(error.message || String(error), true);
     $('capture').disabled = false;
+  }
+};
+
+$('continue').onclick = async () => {
+  $('continue').disabled = true;
+  setStatus('Ищу конец сохраненного архива в фоновой вкладке…');
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CONTINUE_CURRENT' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить архив.');
+    render({
+      job: result.job,
+      archive: state?.archive || null,
+      canContinue: true
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('continue').disabled = false;
   }
 };
 
