@@ -693,6 +693,45 @@
     });
   }
 
+  function visibleMeaningfulSignatures() {
+    return orderedTurns()
+      .map(turn => ({
+        signature: turnTextSignature(turn),
+        text: turnMessageText(turn)
+      }))
+      .filter(item => item.text)
+      .map(item => item.signature);
+  }
+
+  function findResumeTailMatch(tailSignatures) {
+    const baseline = (tailSignatures || []).filter(Boolean);
+    if (baseline.length < 2) return null;
+
+    const visible = visibleMeaningfulSignatures();
+    const maxLength = Math.min(4, baseline.length, visible.length);
+
+    for (let length = maxLength; length >= 2; length--) {
+      const suffix = baseline.slice(-length);
+      for (let start = 0; start <= visible.length - length; start++) {
+        let same = true;
+        for (let offset = 0; offset < length; offset++) {
+          if (visible[start + offset] !== suffix[offset]) {
+            same = false;
+            break;
+          }
+        }
+        if (same) {
+          return {
+            signature: suffix[suffix.length - 1],
+            matchLength: length
+          };
+        }
+      }
+    }
+
+    return null;
+  }
+
   async function reachTop(map, order, settings) {
     let stable = 0;
     let previousSignature = '';
@@ -740,8 +779,10 @@
     throw new Error('Не удалось надежно дойти до начала переписки физической прокруткой.');
   }
 
-  async function reachResumeAnchor(anchorId, anchorSignature, map, order, settings) {
-    if (!anchorId && !anchorSignature) throw new Error('У сохраненного архива нет якоря продолжения.');
+  async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings) {
+    if (!anchorId && !anchorSignature && !(tailSignatures || []).length) {
+      throw new Error('У сохраненного архива нет якоря продолжения.');
+    }
 
     for (let i = 0; i < 260; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
@@ -750,6 +791,23 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
+      const tailMatch = findResumeTailMatch(tailSignatures);
+      if (tailMatch) {
+        await progress(
+          'Этап 1/3: найден стык по ' + tailMatch.matchLength + ' соседним репликам · ' +
+            map.size + ' сообщений в новом проходе',
+          map.size,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            anchorMatchLength: tailMatch.matchLength,
+            force: true
+          }
+        );
+        return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
+      }
+
       if (hasResumeAnchor(anchorId, anchorSignature)) {
         await progress('Этап 1/3: найден конец сохраненного архива · ' + map.size + ' сообщений в новом проходе', map.size, {
           phase: 'top',
@@ -757,10 +815,10 @@
           anchorReached: true,
           force: true
         });
-        return;
+        return { id: anchorId, signature: anchorSignature, matchLength: 1 };
       }
 
-      await progress('Этап 1/3: ищу конец сохраненного архива · ' + map.size + ' сообщений', map.size, {
+      await progress('Этап 1/3: ищу последний сохраненный стык · ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
@@ -768,7 +826,7 @@
       await physicalScroll('up');
     }
 
-    throw new Error('Не удалось найти последний сохраненный фрагмент. Нужен полный пересбор.');
+    throw new Error('Не удалось надежно сопоставить хвост сохраненного архива с текущим чатом.');
   }
 
   async function walkDown(map, order, settings, boundary) {
@@ -823,20 +881,25 @@
     state.cancel = false;
     lastProgressAt = 0;
 
-    const mode = options.mode === 'continue' ? 'continue' : 'full';
+    const mode = options.mode === 'continue' || options.mode === 'sync' ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
+    const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
+      ? options.resumeTailSignatures.filter(Boolean)
+      : [];
     const existingArchiveId = String(options.existingArchiveId || '');
     const map = new Map();
     const order = [];
     let chronologicalStarted = false;
+    let matchedAnchorId = resumeAnchorId;
+    let matchedAnchorSignature = resumeAnchorSignature;
 
     try {
       const settings = await getSettings();
       await progress(
-        mode === 'continue'
-          ? 'Этап 1/3: фиксирую конец нового снимка и ищу место продолжения…'
-          : 'Этап 1/3: фиксирую конец снимка…',
+        mode === 'full'
+          ? 'Этап 1/3: фиксирую конец снимка…'
+          : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
         0,
         { phase: 'top', force: true, captureMode: mode }
       );
@@ -853,14 +916,21 @@
 
       collect(map, order, settings);
 
-      if (mode === 'continue') {
-        await reachResumeAnchor(resumeAnchorId, resumeAnchorSignature, map, order, settings);
-      } else {
+      if (mode === 'full') {
         await reachTop(map, order, settings);
+      } else {
+        const matched = await reachResumeAnchor(
+          resumeAnchorId,
+          resumeAnchorSignature,
+          resumeTailSignatures,
+          map,
+          order,
+          settings
+        );
+        matchedAnchorId = matched?.id || '';
+        matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      // Upward traversal is only for navigation/loading. Rebuild the actual
-      // archive in chronological order while physically walking downward.
       map.clear();
       order.length = 0;
       chronologicalStarted = true;
@@ -878,34 +948,44 @@
       collect(map, order, settings);
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
-      if (!capturedMessages.length) throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
 
-      if (mode === 'continue' && (resumeAnchorId || resumeAnchorSignature)) {
+      if (mode !== 'full') {
         const anchorIndex = capturedMessages.findIndex(item =>
-          (resumeAnchorId && item.id === resumeAnchorId) ||
-          (resumeAnchorSignature && messageTextSignature(item) === resumeAnchorSignature)
+          (matchedAnchorId && item.id === matchedAnchorId) ||
+          (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
         );
-        if (anchorIndex >= 0) capturedMessages = capturedMessages.slice(anchorIndex);
+        if (anchorIndex >= 0) capturedMessages = capturedMessages.slice(anchorIndex + 1);
+      }
+
+      if (mode === 'full' && !capturedMessages.length) {
+        throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
       let messages = capturedMessages;
-      let archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href));
+      const archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href));
       let addedCount = capturedMessages.length;
       let previousCount = 0;
 
-      if (mode === 'continue') {
-        if (!existingArchiveId) throw new Error('Не найден локальный архив для продолжения.');
+      if (mode !== 'full' && existingArchiveId) {
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
         const existing = stored['archive:' + existingArchiveId];
-        if (!existing?.messages?.length) throw new Error('Локальный архив для продолжения недоступен.');
+        if (!existing?.messages) throw new Error('Локальный архив для продолжения недоступен.');
 
         previousCount = existing.messages.length;
         const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-        const existingSignatures = new Set(existing.messages.map(messageTextSignature));
+        const existingSignatures = new Set(
+          existing.messages
+            .filter(item => cleanMessageText(item.text || '', item.role || ''))
+            .map(messageTextSignature)
+        );
+
         const delta = capturedMessages.filter(item => {
           if (item.id && existingIds.has(item.id)) return false;
-          return !existingSignatures.has(messageTextSignature(item));
+          const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
+          if (hasText && existingSignatures.has(messageTextSignature(item))) return false;
+          return true;
         });
+
         addedCount = delta.length;
         messages = existing.messages.concat(delta);
       }
@@ -929,9 +1009,9 @@
         activeCaptureJob: Object.assign({}, currentJob, {
           jobId,
           status: 'done',
-          message: mode === 'continue'
-            ? ('Архив продолжен: +' + addedCount + ' сообщений.')
-            : 'Переписка собрана.',
+          message: mode === 'full'
+            ? 'Переписка собрана.'
+            : ('Архив продолжен: +' + addedCount + ' сообщений.'),
           count: messages.length,
           addedCount,
           imageCount: conversation.imageCount,
@@ -959,9 +1039,6 @@
       let draftId = '';
       let draftCount = 0;
 
-      // Only the downward pass is in reliable chronological order. If that pass
-      // fails, keep the already captured prefix as an explicit draft instead of
-      // leaving useful text only in an ephemeral Map.
       if (chronologicalStarted && map.size > 0) {
         const draftMessages = order.map(id => map.get(id)).filter(Boolean);
         if (draftMessages.length) {
@@ -1022,7 +1099,8 @@
         mode: message.mode,
         resumeAnchorId: message.resumeAnchorId,
         existingArchiveId: message.existingArchiveId,
-        resumeAnchorSignature: message.resumeAnchorSignature
+        resumeAnchorSignature: message.resumeAnchorSignature,
+        resumeTailSignatures: message.resumeTailSignatures
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId });
       return false;
