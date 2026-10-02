@@ -761,15 +761,6 @@ $('resetInterfaceAppearance').onclick = async () => {
 
 $('localVersion').textContent = chrome.runtime.getManifest().version || '—';
 
-$('updateExtension').addEventListener('click', async () => {
-  try {
-    await chrome.tabs.create({ url: chrome.runtime.getURL('updater.html') });
-    setStatus('Открыла страницу обновления с прогрессом и логом.');
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  }
-});
-
 $('reloadExtension').addEventListener('click', () => {
   setStatus('Перезагружаю расширение…');
   setTimeout(() => chrome.runtime.reload(), 120);

@@ -68,8 +68,11 @@ try {
 try {
   const popupHtml = await readFile('popup.html', 'utf8');
   const updaterVbs = await readFile('Update ChatGPT Archiver.vbs', 'utf8');
-  if (!popupHtml.includes('id="updateExtension"') || popupHtml.includes('chatgpt-archiver:update')) {
-    fail('popup.html: updater must open the in-browser updater page, not the legacy custom protocol');
+  if (!popupHtml.includes('id="updateExtension"') ||
+      !popupHtml.includes('href="updater.html"') ||
+      !popupHtml.includes('target="_blank"') ||
+      popupHtml.includes('chatgpt-archiver:update')) {
+    fail('popup.html: updater must use a direct new-tab link to updater.html');
   }
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');

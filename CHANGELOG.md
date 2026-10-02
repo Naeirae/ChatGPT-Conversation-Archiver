@@ -2,6 +2,14 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.29
+
+- fix the first live 0.3.28 updater-entry failure: clicking **Обновить** in the popup did not open the updater page;
+- remove the JavaScript `chrome.tabs.create()` dependency for this entry point;
+- make **Обновить** a direct extension-page link to `updater.html` with `target="_blank"`, so Chrome handles navigation natively from the popup;
+- keep the in-browser updater implementation itself unchanged pending its next live test;
+- manifest -> 0.3.29.
+
 ## 0.3.28
 
 - replace the popup custom-protocol/VBS updater launch with an in-browser updater page that shows progress and a live log;
