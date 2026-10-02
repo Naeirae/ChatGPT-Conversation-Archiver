@@ -80,7 +80,8 @@ try {
     fail('updater.html: missing update controls or live log');
   }
   if (!updaterJs.includes('showDirectoryPicker') ||
-      !updaterJs.includes('api.github.com/repos/Naeirae/ChatGPT-Conversation-Archiver') ||
+      !updaterJs.includes("const REPO='Naeirae/ChatGPT-Conversation-Archiver'") ||
+      !updaterJs.includes('api.github.com/repos/') ||
       !updaterJs.includes('raw.githubusercontent.com/')) {
     fail('updater.js: missing directory access or GitHub endpoints');
   }
