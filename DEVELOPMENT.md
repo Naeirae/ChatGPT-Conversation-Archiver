@@ -92,9 +92,9 @@ Bug fixes should not be described as "working" until the relevant live layer has
 
 ## Update/distribution strategy
 
-The current updater engine is still `update.ps1` for local unpacked installs. The user-facing Windows entry point is `Update ChatGPT Archiver.vbs`, which runs that engine quietly; `update.cmd` remains the diagnostic fallback when console output is useful.
+From 0.3.28 the primary unpacked-install updater is `updater.html` + `updater.js`, opened by the popup **Обновить** action. It uses the File System Access API to work with the explicitly selected extension directory and exposes progress/log output in Chrome.
 
-For the current unpacked Windows workflow, the VBS launcher also registers the per-user URI handler `chatgpt-archiver:` under `HKCU\Software\Classes`. The popup's **Обновить** action opens `chatgpt-archiver:update`; **Перезагрузить** calls `chrome.runtime.reload()`. This is a local/developer bridge, not the long-term distribution mechanism.
+`update.cmd` + `update.ps1` remain the external diagnostic/fallback path and are the recommended one-time migration route from 0.3.27 to 0.3.28. The VBS/custom URI bridge is retired after a live Windows Script Host permission failure and antivirus block.
 
 Long term, the simpler end-user path is:
 
