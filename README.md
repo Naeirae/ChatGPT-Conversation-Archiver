@@ -20,6 +20,16 @@ Save a ChatGPT conversation as an editable document rather than a screenshot:
 
 The project does **not** use the ChatGPT API and is not part of another extension family. It is a standalone browser extension.
 
+## Structured extraction, not screenshots
+
+The archiver deliberately treats a ChatGPT conversation as **structured data**, not as a sequence of screenshots.
+
+It physically scrolls the virtualized conversation so older messages are actually hydrated, then reads the available message DOM and preserves message order, roles, rich text structure, images where possible, and continuation anchors. That makes the result editable, searchable and suitable for further processing.
+
+This is different from screenshot-based archivers, which are often simpler and more visually faithful but produce a flat image record. A screenshot cannot directly support the features this project is built around: reliable continuation, message counting, duplicate-safe anchors, editable Google Docs export, topic/tab planning, or per-message image handling.
+
+The trade-off is intentional: structured extraction is more sensitive to ChatGPT UI/DOM changes, so the project includes fail-closed behavior, regression tests, runtime diagnostics and explicit live verification instead of treating visual capture as the source of truth.
+
 
 ## Как работает сбор
 
