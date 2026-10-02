@@ -761,10 +761,13 @@ $('resetInterfaceAppearance').onclick = async () => {
 
 $('localVersion').textContent = chrome.runtime.getManifest().version || '—';
 
-$('updateExtension').addEventListener('click', () => {
-  setStatus(
-    'Запускаю локальное обновление. После окна «Обновление завершено» снова откройте расширение и нажмите «Перезагрузить».'
-  );
+$('updateExtension').addEventListener('click', async () => {
+  try {
+    await chrome.tabs.create({ url: chrome.runtime.getURL('updater.html') });
+    setStatus('Открыла страницу обновления с прогрессом и логом.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  }
 });
 
 $('reloadExtension').addEventListener('click', () => {

@@ -2,6 +2,17 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.28
+
+- replace the popup custom-protocol/VBS updater launch with an in-browser updater page that shows progress and a live log;
+- use Chromium File System Access so the user explicitly chooses the unpacked extension folder;
+- compare local Git blob SHA-1 values against the public GitHub repository, download changed/missing files, and back up overwritten local files before writing;
+- keep `update.cmd` as the supported external fallback;
+- turn `Update ChatGPT Archiver.vbs` into a non-executing informational stub so it no longer launches hidden PowerShell;
+- add GitHub API/raw host permissions required by the updater page;
+- repair corrupted 32/64/128 PNG icon assets so Chrome can load the toolbar/action icon correctly;
+- manifest -> 0.3.28.
+
 ## 0.3.27
 
 - separate **Сверить с архивом** from **Продолжить** in the popup;

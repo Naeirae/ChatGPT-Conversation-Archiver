@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Обновление — Архиватор ChatGPT</title>
+  <link rel="stylesheet" href="updater.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="hero">
+      <img src="icons/icon-48.png" class="icon" alt="">
+      <div>
+        <h1>Обновление Архиватора ChatGPT</h1>
+        <p>Ход обновления и лог остаются видны в Chrome.</p>
+      </div>
+    </header>
+
+    <section>
+      <div id="status" class="status">Готово к проверке.</div>
+      <div class="versions">
+        <div><span>Загруженная версия</span><strong id="loadedVersion">—</strong></div>
+        <div><span>На GitHub</span><strong id="remoteVersion">—</strong></div>
+        <div><span>В выбранной папке</span><strong id="diskVersion">—</strong></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Папка расширения</h2>
+      <p id="folderState">Папка пока не выбрана.</p>
+      <div class="buttons">
+        <button id="chooseFolder" class="primary">Выбрать папку расширения</button>
+        <button id="forgetFolder">Забыть выбор</button>
+      </div>
+      <p class="hint">В первый раз выберите папку, которую Chrome загружает как распакованное расширение, например <code>ChatGPT-Conversation-Archiver-main</code>.</p>
+    </section>
+
+    <section>
+      <div class="buttons">
+        <button id="checkUpdate">Проверить обновления</button>
+        <button id="runUpdate" class="primary">Обновить</button>
+        <button id="reloadExtension">Перезагрузить расширение</button>
+      </div>
+      <p class="hint">Перед перезаписью существующие изменённые файлы копируются в <code>.archiver-update-backup/browser-...</code>. <code>update.cmd</code> остаётся резервным способом.</p>
+    </section>
+
+    <section>
+      <div class="log-head">
+        <h2>Лог</h2>
+        <button id="copyLog" class="small">Скопировать</button>
+      </div>
+      <pre id="log" aria-live="polite"></pre>
+    </section>
+
+    <section id="fallback" class="fallback hidden">
+      <strong>Chrome не дал встроенный доступ к папке.</strong>
+      <p>Запустите <code>update.cmd</code> из папки расширения. Этот способ остаётся поддержанным.</p>
+    </section>
+  </main>
+  <script src="updater.js"></script>
+</body>
+</html>

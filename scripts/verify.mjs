@@ -68,17 +68,26 @@ try {
 try {
   const popupHtml = await readFile('popup.html', 'utf8');
   const updaterVbs = await readFile('Update ChatGPT Archiver.vbs', 'utf8');
-  if (!popupHtml.includes('id="updateExtension"') || !popupHtml.includes('chatgpt-archiver:update')) {
-    fail('popup.html: missing local updater UI action');
+  if (!popupHtml.includes('id="updateExtension"') || popupHtml.includes('chatgpt-archiver:update')) {
+    fail('popup.html: updater must open the in-browser updater page, not the legacy custom protocol');
   }
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');
   }
-  if (!updaterVbs.includes('HKCU\\Software\\Classes\\chatgpt-archiver\\') ||
-      !updaterVbs.includes('URL Protocol')) {
-    fail('Update ChatGPT Archiver.vbs: missing custom updater protocol registration');
+  const updaterHtml = await readFile('updater.html', 'utf8');
+  const updaterJs = await readFile('updater.js', 'utf8');
+  if (!updaterHtml.includes('id="runUpdate"') || !updaterHtml.includes('id="log"')) {
+    fail('updater.html: missing update controls or live log');
   }
-  console.log('OK: updater UI/protocol integration');
+  if (!updaterJs.includes('showDirectoryPicker') ||
+      !updaterJs.includes('api.github.com/repos/Naeirae/ChatGPT-Conversation-Archiver') ||
+      !updaterJs.includes('raw.githubusercontent.com/')) {
+    fail('updater.js: missing directory access or GitHub endpoints');
+  }
+  if (/powershell\.exe|shell\.Run|RegWrite/i.test(updaterVbs)) {
+    fail('Update ChatGPT Archiver.vbs: legacy executable/protocol behavior must stay removed');
+  }
+  console.log('OK: in-browser updater integration');
 } catch (error) {
   fail(`Updater UI/protocol guard failed: ${error.message}`);
 }
