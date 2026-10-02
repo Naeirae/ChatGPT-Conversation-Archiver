@@ -440,12 +440,12 @@ async function startCapture({
   const inspection = await inspectAndKickScroll(sourceTab.id);
   let existingArchive = providedArchive;
 
-  if ((mode === 'continue' || mode === 'sync') && !existingArchive) {
+  if ((mode === 'continue' || mode === 'sync' || mode === 'compare') && !existingArchive) {
     existingArchive = await getArchiveForUrl(inspection.href);
   }
 
-  if (mode === 'continue' && !existingArchive?.messages?.length) {
-    throw new Error('Для этого чата нет локальной точки продолжения. Используйте «Сверить» с Google Doc.');
+  if ((mode === 'continue' || mode === 'compare') && !existingArchive?.messages?.length) {
+    throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по Google Doc.');
   }
 
   const requestedDocUrl = normalizeGoogleDocUrl(docUrl);
@@ -454,17 +454,17 @@ async function startCapture({
   // A full rebuild refreshes the local archive only. It must never append the
   // whole rebuilt archive to an already-linked Google Doc. Automatic Docs
   // append is reserved for verified continuation/sync deltas.
-  const pendingDocUrl = mode === 'full'
-    ? ''
-    : (requestedDocUrl || currentLink?.url || '');
-
-  if (requestedDocUrl && mode === 'continue') {
-    await setLinkedDoc(inspection.href, {
-      ...(currentLink || {}),
-      url: requestedDocUrl,
-      docId: googleDocKey(requestedDocUrl)
-    });
-  }
+  const currentLinkedUrl = normalizeGoogleDocUrl(currentLink?.url || '');
+  const pendingDocUrl = (mode === 'continue' || mode === 'sync')
+    ? (requestedDocUrl || currentLinkedUrl || '')
+    : '';
+  const pendingDocMode = mode === 'sync'
+    ? 'sync'
+    : mode === 'continue'
+      ? (requestedDocUrl && requestedDocUrl !== currentLinkedUrl
+          ? 'explicit'
+          : (pendingDocUrl ? 'linked' : 'local-only'))
+      : '';
 
   const jobId = makeJobId();
   let captureTab = null;
@@ -487,7 +487,13 @@ async function startCapture({
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
-    const modeLabel = mode === 'sync' ? 'сверка' : mode === 'continue' ? 'продолжение' : 'полный сбор';
+    const modeLabel = mode === 'compare'
+      ? 'сверка с локальным архивом'
+      : mode === 'sync'
+        ? 'восстановление по Google Doc'
+        : mode === 'continue'
+          ? 'продолжение'
+          : 'полный сбор';
     const targetLabel = captureTarget === 'current' ? 'текущая вкладка' : 'рабочая копия';
 
     await setJob({
@@ -502,6 +508,7 @@ async function startCapture({
       captureTarget,
       baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
       pendingDocUrl,
+      pendingDocMode,
       message: mode === 'full'
         ? (captureTarget === 'current'
             ? 'Текущая вкладка готова; иду к началу…'
@@ -609,6 +616,7 @@ async function startCapture({
       captureMode: mode,
       captureTarget,
       pendingDocUrl,
+      pendingDocMode,
       message,
       finishedAt: Date.now(),
       log: [{
@@ -697,7 +705,9 @@ async function handleCaptureComplete(message) {
     return finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, 'Архив не найден после завершения сбора.');
   }
 
-  await indexArchive(archive);
+  if (message.mode !== 'compare') {
+    await indexArchive(archive);
+  }
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
@@ -707,6 +717,32 @@ async function handleCaptureComplete(message) {
   }
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
+
+  if (message.mode === 'compare') {
+    const finalMessage = addedCount
+      ? ('Сверка завершена: +' + addedCount + ' новых сообщений относительно локального архива. Архив не изменён.')
+      : 'Сверка завершена: новых сообщений относительно локального архива нет. Архив не изменён.';
+
+    await appendRunLog({
+      status: 'done',
+      phase: 'done',
+      captureMode: 'compare',
+      message: finalMessage,
+      count: Number(message.count || archive.messages?.length || 0),
+      addedCount,
+      archiveId: archive.id,
+      finishedAt: Date.now(),
+      captureTabId: null
+    }, {
+      level: 'info',
+      code: 'ARCHIVE_COMPARE_COMPLETE',
+      message: finalMessage,
+      phase: 'done',
+      count: Number(message.count || archive.messages?.length || 0)
+    });
+    return;
+  }
+
   let docResult = null;
   let docError = '';
 
@@ -720,7 +756,8 @@ async function handleCaptureComplete(message) {
         archive,
         delta,
         job.pendingDocUrl,
-        job.sourceTabId ?? job.tabId
+        job.sourceTabId ?? job.tabId,
+        { linkTarget: job.pendingDocMode !== 'explicit' }
       );
     } catch (error) {
       docError = error?.message || String(error);
@@ -1437,12 +1474,18 @@ async function pasteArchiveIntoGoogleDoc(
   };
 }
 
-async function appendMessagesToGoogleDocUrl(conversation, messages, docUrl, sourceTabId = null) {
+async function appendMessagesToGoogleDocUrl(
+  conversation,
+  messages,
+  docUrl,
+  sourceTabId = null,
+  { linkTarget = true } = {}
+) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
   if (!normalizedUrl) throw new Error('Некорректная ссылка на Google Doc.');
 
   if (!messages?.length) {
-    const linkedDoc = await recordDocExport(conversation, normalizedUrl);
+    const linkedDoc = await recordDocExport(conversation, normalizedUrl, { link: linkTarget });
     return { docUrl: normalizedUrl, addedCount: 0, noChanges: true, linkedDoc };
   }
 
@@ -1463,7 +1506,11 @@ async function appendMessagesToGoogleDocUrl(conversation, messages, docUrl, sour
     );
 
     const finalTab = pasted.tab;
-    const linkedDoc = await recordDocExport(conversation, finalTab.url || normalizedUrl);
+    const linkedDoc = await recordDocExport(
+      conversation,
+      finalTab.url || normalizedUrl,
+      { link: linkTarget }
+    );
     return {
       docUrl: finalTab.url || normalizedUrl,
       addedCount: messages.length,
@@ -1654,6 +1701,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await startCapture({
           mode: 'continue',
           docUrl: message.docUrl || '',
+          captureTarget: message.captureTarget || 'copy'
+        });
+      case 'ARCHIVER_COMPARE_CURRENT':
+        return await startCapture({
+          mode: 'compare',
           captureTarget: message.captureTarget || 'copy'
         });
       case 'ARCHIVER_SYNC_CURRENT':

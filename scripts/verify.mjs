@@ -52,6 +52,14 @@ try {
       fail('service-worker.js: missing runtime helper declaration ' + helper);
     }
   }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_COMPARE_CURRENT'")) {
+    fail('service-worker.js: missing compare-current route');
+  }
+  const contentSource = await readFile('content-chatgpt.js', 'utf8');
+  if (!contentSource.includes("'compare'") ||
+      !contentSource.includes('Сверка завершена')) {
+    fail('content-chatgpt.js: missing non-mutating compare mode');
+  }
   console.log('OK: service-worker runtime helper declarations');
 } catch (error) {
   fail(`service-worker.js runtime helper guard failed: ${error.message}`);
@@ -96,6 +104,11 @@ try {
   }
   if (popupHtml.indexOf('id="status"') > popupHtml.indexOf('id="interfaceSettings"')) {
     fail('popup.html: service status must stay above interface settings');
+  }
+  if (!popupHtml.includes('id="compareArchive"') ||
+      !popupHtml.includes('id="continue"') ||
+      popupHtml.includes('id="continue" class="hidden"')) {
+    fail('popup.html: compare and continue must be separate visible actions');
   }
   if (!popupJs.includes('function applyInterfaceAppearance') ||
       !popupJs.includes('function normalizeInterfaceAppearance')) {

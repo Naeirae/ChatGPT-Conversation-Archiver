@@ -95,8 +95,9 @@
 
       <div class="button-grid">
         <button id="capture" class="primary">Собрать заново</button>
-        <button id="continue" class="hidden">Продолжить</button>
+        <button id="compareArchive">Сверить с архивом</button>
       </div>
+      <div id="compareResult" class="muted compare-result" aria-live="polite"></div>
 
       <label class="field">
         <span>Режим сбора</span>
@@ -111,16 +112,29 @@
     <section class="doc-link">
       <div class="section-heading">
         <div>
-          <div class="archive-label">Продолжение и сверка</div>
-          <strong>Google Doc архива</strong>
+          <div class="archive-label">Продолжение</div>
+          <strong>Добрать новое и при необходимости добавить в Google Doc</strong>
         </div>
       </div>
       <label class="field doc-link-field">
-        <span>Ссылка на документ</span>
+        <span>Google Doc для этого продолжения — необязательно</span>
         <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
       </label>
-      <div class="muted">Для «Продолжить» ссылка необязательна, если документ уже связан. «Сверить» использует фактический хвост документа как точку продолжения.</div>
-      <button id="syncDoc">Сверить</button>
+      <div id="linkedDocHint" class="muted"></div>
+      <div class="muted">
+        Если указать другую ссылку, новые сообщения добавятся именно в этот документ только в текущем запуске.
+        Основная связанная ссылка не изменится. Если поле пустое, используется связанный документ; если его нет — обновится только локальный архив.
+      </div>
+      <button id="continue">Продолжить</button>
+
+      <details class="recovery-settings">
+        <summary>Восстановить точку продолжения из Google Doc</summary>
+        <div class="muted">
+          Резервная функция для случая, когда локального архива нет или его стык потерян:
+          документ читается как исходная точка, после чего хвост сверяется с текущим чатом.
+        </div>
+        <button id="syncDoc">Восстановить стык по Google Doc</button>
+      </details>
     </section>
 
     <button id="cancel" class="cancel hidden">Остановить сбор</button>

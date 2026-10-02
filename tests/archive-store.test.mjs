@@ -120,6 +120,56 @@ test('recordDocExport stores a multi-message tail for duplicate-safe continuatio
   assert.equal(saved.tailSignatures.length, 3);
 });
 
+test('one-off doc export records target without replacing canonical link', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage, { now: () => 789 });
+  const conversation = {
+    id: 'archive-3',
+    sourceUrl: 'https://chatgpt.com/c/conv-3',
+    messages: [
+      { id: 'm1', role: 'user', text: 'Один' },
+      { id: 'm2', role: 'assistant', text: 'Два' }
+    ]
+  };
+
+  await store.recordDocExport(
+    conversation,
+    'https://docs.google.com/document/d/doc-primary/edit'
+  );
+
+  const oneOff = await store.recordDocExport(
+    conversation,
+    'https://docs.google.com/document/d/doc-other/edit',
+    { link: false }
+  );
+
+  assert.equal(oneOff.docId, 'doc-other');
+  assert.equal(oneOff.linked, false);
+  assert.equal((await store.getDocExport('doc-other')).linkEligible, false);
+
+  const linked = await store.getLinkedDoc(conversation.sourceUrl);
+  assert.equal(linked.docId, 'doc-primary');
+});
+
+test('one-off doc export never becomes the recovered canonical link', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage);
+  const conversation = {
+    id: 'archive-4',
+    sourceUrl: 'https://chatgpt.com/c/conv-4',
+    messages: [{ id: 'm1', role: 'user', text: 'Один' }]
+  };
+
+  await store.recordDocExport(
+    conversation,
+    'https://docs.google.com/document/d/doc-once/edit',
+    { link: false }
+  );
+
+  assert.equal(await store.getLinkedDoc(conversation.sourceUrl), null);
+  assert.equal((await store.getDocExport('doc-once')).linkEligible, false);
+});
+
 test('temporary archives can be removed without touching other state', async () => {
   const storage = fakeStorage({
     [STORAGE_KEYS.archivePrefix + 'temp']: { id: 'temp' },

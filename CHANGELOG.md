@@ -2,6 +2,17 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.27
+
+- separate **Сверить с архивом** from **Продолжить** in the popup;
+- keep **Продолжить** visible whenever the popup is open; disable it instead of hiding it when the current chat has no local archive;
+- add a non-mutating compare mode that counts messages newer than the current local archive and reports the count without changing that archive;
+- let **Продолжить** append its verified delta to an explicitly supplied Google Doc as a one-off destination without replacing the chat's canonical linked document;
+- prevent one-off document exports from being recovered later as the canonical linked document;
+- keep blank-target continuation behavior: use the linked document when present, otherwise update only the local archive;
+- preserve the previous Google-Doc-baseline recovery path under **Восстановить точку продолжения из Google Doc**;
+- add regression coverage for one-off document exports not stealing the canonical link.
+
 ## 0.3.26
 
 - replace the extension icon set with the new blue abstract wave mark;

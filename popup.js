@@ -79,7 +79,15 @@ function renderRunLog(job) {
   $('runLogTitle').textContent = statusLabels[job.status] || job.status || 'Последний запуск';
 
   const meta = [];
-  meta.push(job.captureMode === 'sync' ? 'сверка' : job.captureMode === 'continue' ? 'продолжение' : 'полный сбор');
+  meta.push(
+    job.captureMode === 'compare'
+      ? 'сверка с локальным архивом'
+      : job.captureMode === 'sync'
+        ? 'восстановление по Google Doc'
+        : job.captureMode === 'continue'
+          ? 'продолжение'
+          : 'полный сбор'
+  );
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
@@ -309,11 +317,22 @@ function render(data) {
   $('capture').textContent = running
     ? (job?.captureTarget === 'copy' ? 'Сбор идет в рабочей копии…' : 'Сбор идет в текущей вкладке…')
     : 'Собрать заново';
-  $('continue').classList.toggle('hidden', running || !state.canContinue);
-  $('continue').disabled = Boolean(running);
+  $('continue').disabled = Boolean(running || !state.canContinue);
+  $('compareArchive').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
   $('docUrl').disabled = Boolean(running);
   $('captureTarget').disabled = Boolean(running);
+
+  const compared = job?.status === 'done' && job?.captureMode === 'compare';
+  $('compareResult').textContent = compared
+    ? (Number(job.addedCount || 0) > 0
+        ? 'Новых сообщений относительно локального архива: ' + Number(job.addedCount || 0) + '.'
+        : 'Новых сообщений относительно локального архива нет.')
+    : '';
+
+  $('linkedDocHint').textContent = state.linkedDoc?.url
+    ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
+    : 'Связанного Google Doc для этого чата сейчас нет.';
   const canRetryCurrent = Boolean(
     !running &&
     job?.status === 'error' &&
@@ -358,6 +377,13 @@ function render(data) {
     setStatus(attempted
       ? `Сбор отменен. В текущем проходе было собрано ${attempted} сообщений; завершенный локальный архив не изменен.`
       : 'Сбор отменен. Завершенный локальный архив не изменен.');
+  } else if (job?.status === 'done' && job?.captureMode === 'compare') {
+    const added = Number(job.addedCount || 0);
+    setStatus(
+      added
+        ? `Сверка завершена: ${added} новых сообщений относительно локального архива. Архив не изменён.`
+        : 'Сверка завершена: новых сообщений относительно локального архива нет. Архив не изменён.'
+    );
   } else if (done) {
     const added = archive.lastCaptureMode === 'continue' || archive.lastCaptureMode === 'sync'
       ? ` · +${archive.lastCaptureAddedCount || 0} новых`
@@ -413,9 +439,41 @@ $('capture').onclick = async () => {
   }
 };
 
+$('compareArchive').onclick = async () => {
+  if (!state?.canContinue) {
+    setStatus('Для сверки нужен локальный архив этого чата. Сначала нажмите «Собрать заново».', true);
+    return;
+  }
+
+  $('compareArchive').disabled = true;
+  setStatus('Сверяю текущий чат с локальным архивом и считаю новые сообщения…');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_COMPARE_CURRENT',
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить чат с локальным архивом.');
+    render({
+      ...state,
+      job: result.job,
+      archive: state?.archive || null,
+      draft: null,
+      canContinue: true
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('compareArchive').disabled = false;
+  }
+};
+
 $('continue').onclick = async () => {
   $('continue').disabled = true;
-  setStatus('Ищу последний сохраненный стык и добираю только новое…');
+  setStatus(
+    $('docUrl').value.trim()
+      ? 'Ищу последний сохранённый стык; новые сообщения добавлю в указанный Google Doc…'
+      : 'Ищу последний сохранённый стык и добираю только новое…'
+  );
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CONTINUE_CURRENT',
@@ -441,14 +499,15 @@ $('continue').onclick = async () => {
 $('syncDoc').onclick = async () => {
   const docUrl = $('docUrl').value.trim();
   if (!docUrl) {
-    setStatus('Вставьте ссылку на Google Doc, который нужно сверить.', true);
+    setStatus('Для восстановления точки продолжения вставьте ссылку на Google Doc.', true);
     return;
   }
 
   $('syncDoc').disabled = true;
   $('continue').disabled = true;
   $('capture').disabled = true;
-  setStatus('Читаю хвост Google Doc по вкладкам и ищу стык с текущим чатом…');
+  $('compareArchive').disabled = true;
+  setStatus('Читаю Google Doc как резервную точку продолжения и ищу его хвост в текущем чате…');
 
   try {
     const result = await chrome.runtime.sendMessage({
@@ -456,7 +515,7 @@ $('syncDoc').onclick = async () => {
       docUrl,
       captureTarget: $('captureTarget').value
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить Google Doc с чатом.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось восстановить стык по Google Doc.');
     render({
       ...state,
       job: result.job,
@@ -471,6 +530,7 @@ $('syncDoc').onclick = async () => {
     $('syncDoc').disabled = false;
     $('continue').disabled = false;
     $('capture').disabled = false;
+    $('compareArchive').disabled = !state?.canContinue;
   }
 };
 
@@ -482,10 +542,16 @@ $('retryCurrent').onclick = async () => {
 
   try {
     let result;
-    if (previousMode === 'sync') {
+    if (previousMode === 'compare') {
+      setStatus('Повторяю сверку с локальным архивом в обычном режиме…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_COMPARE_CURRENT',
+        captureTarget: 'current'
+      });
+    } else if (previousMode === 'sync') {
       const docUrl = $('docUrl').value.trim();
-      if (!docUrl) throw new Error('Для повторной сверки нужна ссылка на Google Doc.');
-      setStatus('Повторяю сверку в обычном режиме…');
+      if (!docUrl) throw new Error('Для восстановления по Google Doc нужна ссылка.');
+      setStatus('Повторяю восстановление стыка в обычном режиме…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_SYNC_CURRENT',
         docUrl,

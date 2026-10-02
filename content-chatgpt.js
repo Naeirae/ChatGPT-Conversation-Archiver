@@ -1031,7 +1031,7 @@
     state.cancel = false;
     lastProgressAt = 0;
 
-    const mode = options.mode === 'continue' || options.mode === 'sync' ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -1087,11 +1087,17 @@
 
       await walkDown(map, order, settings, boundary);
 
-      await progress('Этап 3/3: сохраняю локальный архив…', map.size, {
-        phase: 'finalizing',
-        force: true,
-        captureMode: mode
-      });
+      await progress(
+        mode === 'compare'
+          ? 'Этап 3/3: считаю новые сообщения…'
+          : 'Этап 3/3: сохраняю локальный архив…',
+        map.size,
+        {
+          phase: 'finalizing',
+          force: true,
+          captureMode: mode
+        }
+      );
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -1146,6 +1152,41 @@
 
         addedCount = delta.length;
         messages = existing.messages.concat(delta);
+      }
+
+      if (mode === 'compare') {
+        const comparisonCount = previousCount + addedCount;
+        const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
+        const comparisonMessage = addedCount
+          ? ('Сверка завершена: +' + addedCount + ' новых сообщений относительно локального архива.')
+          : 'Сверка завершена: новых сообщений относительно локального архива нет.';
+
+        await chrome.storage.local.set({
+          activeCaptureJob: Object.assign({}, currentJob, {
+            jobId,
+            status: 'done',
+            phase: 'done',
+            captureMode: 'compare',
+            message: comparisonMessage,
+            count: comparisonCount,
+            addedCount,
+            archiveId: existingArchiveId,
+            finishedAt: Date.now(),
+            updatedAt: Date.now()
+          })
+        });
+
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_CAPTURE_COMPLETE',
+            jobId,
+            archiveId: existingArchiveId,
+            count: comparisonCount,
+            addedCount,
+            mode
+          });
+        } catch (_) {}
+        return;
       }
 
       const binaryTargetMessages = mode === 'full'
