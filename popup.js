@@ -2,13 +2,41 @@ const $ = id => document.getElementById(id);
 let pollTimer = null;
 let state = null;
 
+const DEFAULT_INTERFACE_APPEARANCE = {
+  palette: 'ocean',
+  fontPreset: 'system',
+  fontCustom: '',
+  colors: {
+    accent: '#1769e0',
+    background: '#f4f8ff',
+    panel: '#ffffff',
+    text: '#12233f'
+  }
+};
+
 const DEFAULT_SETTINGS = {
   userName: '',
   assistantName: '',
   palette: 'ocean',
+  interfaceAppearance: DEFAULT_INTERFACE_APPEARANCE,
   alignUserRight: true,
   includeReasoning: false,
   captureTarget: 'copy'
+};
+
+const INTERFACE_PALETTES = new Set([
+  'ocean', 'cobalt', 'sky', 'violet', 'rose',
+  'amber', 'forest', 'graphite', 'midnight', 'custom'
+]);
+
+const INTERFACE_FONT_STACKS = {
+  system: 'Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
+  segoe: '"Segoe UI", system-ui, sans-serif',
+  arial: 'Arial, sans-serif',
+  verdana: 'Verdana, sans-serif',
+  tahoma: 'Tahoma, sans-serif',
+  georgia: 'Georgia, serif',
+  consolas: 'Consolas, "Courier New", monospace'
 };
 
 const PHASE_LABELS = {
@@ -76,8 +104,143 @@ function setStatus(text, error = false) {
   $('status').classList.toggle('error', error);
 }
 
-function applyPalette(palette) {
-  document.documentElement.dataset.palette = palette || 'ocean';
+function normalizeHex(value, fallback) {
+  const raw = String(value || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(raw) ? raw.toLowerCase() : fallback;
+}
+
+function mixHex(foreground, background, foregroundWeight = 0.5) {
+  const fg = normalizeHex(foreground, '#000000').slice(1);
+  const bg = normalizeHex(background, '#ffffff').slice(1);
+  const weight = Math.max(0, Math.min(1, Number(foregroundWeight) || 0));
+  const channel = offset => Math.round(
+    parseInt(fg.slice(offset, offset + 2), 16) * weight +
+    parseInt(bg.slice(offset, offset + 2), 16) * (1 - weight)
+  ).toString(16).padStart(2, '0');
+  return '#' + channel(0) + channel(2) + channel(4);
+}
+
+function isDarkHex(value) {
+  const hex = normalizeHex(value, '#ffffff').slice(1);
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 < 128;
+}
+
+function normalizeInterfaceAppearance(settings = {}) {
+  const raw = settings.interfaceAppearance || {};
+  const legacyPalette = raw.palette || settings.palette || DEFAULT_INTERFACE_APPEARANCE.palette;
+  const palette = INTERFACE_PALETTES.has(legacyPalette)
+    ? legacyPalette
+    : DEFAULT_INTERFACE_APPEARANCE.palette;
+  return {
+    ...DEFAULT_INTERFACE_APPEARANCE,
+    ...raw,
+    palette,
+    colors: {
+      ...DEFAULT_INTERFACE_APPEARANCE.colors,
+      ...(raw.colors || {})
+    }
+  };
+}
+
+function customFontStack(appearance) {
+  if (appearance.fontPreset !== 'custom') {
+    return INTERFACE_FONT_STACKS[appearance.fontPreset] || INTERFACE_FONT_STACKS.system;
+  }
+  const clean = String(appearance.fontCustom || '')
+    .trim()
+    .replace(/[;{}]/g, '')
+    .replace(/"/g, '\"');
+  return clean
+    ? '"' + clean + '", "Segoe UI", system-ui, sans-serif'
+    : INTERFACE_FONT_STACKS.system;
+}
+
+function applyInterfaceAppearance(settings = {}) {
+  const appearance = normalizeInterfaceAppearance(settings);
+  const root = document.documentElement;
+  root.dataset.palette = appearance.palette;
+  root.style.setProperty('--font-ui', customFontStack(appearance));
+
+  const customVars = [
+    '--bg', '--panel', '--text', '--muted',
+    '--accent', '--accent-2', '--soft', '--border', '--shadow'
+  ];
+  for (const name of customVars) root.style.removeProperty(name);
+
+  if (appearance.palette === 'custom') {
+    const accent = normalizeHex(appearance.colors.accent, DEFAULT_INTERFACE_APPEARANCE.colors.accent);
+    const background = normalizeHex(appearance.colors.background, DEFAULT_INTERFACE_APPEARANCE.colors.background);
+    const panel = normalizeHex(appearance.colors.panel, DEFAULT_INTERFACE_APPEARANCE.colors.panel);
+    const text = normalizeHex(appearance.colors.text, DEFAULT_INTERFACE_APPEARANCE.colors.text);
+    const dark = isDarkHex(background);
+
+    root.style.setProperty('--bg', background);
+    root.style.setProperty('--panel', panel);
+    root.style.setProperty('--text', text);
+    root.style.setProperty('--accent', accent);
+    root.style.setProperty('--accent-2', mixHex(accent, dark ? '#ffffff' : '#001a4d', 0.78));
+    root.style.setProperty('--soft', mixHex(accent, background, 0.12));
+    root.style.setProperty('--border', mixHex(accent, background, 0.24));
+    root.style.setProperty('--muted', mixHex(text, background, 0.58));
+    root.style.setProperty('--shadow', '0 14px 36px ' + mixHex(accent, background, 0.18) + '55');
+    root.style.colorScheme = dark ? 'dark' : 'light';
+  } else {
+    root.style.colorScheme = appearance.palette === 'midnight' ? 'dark' : 'light';
+  }
+}
+
+function updateInterfaceControlVisibility() {
+  const palette = $('interfacePalette')?.value || 'ocean';
+  const fontPreset = $('interfaceFontPreset')?.value || 'system';
+  $('interfaceCustomColors')?.classList.toggle('hidden', palette !== 'custom');
+  $('interfaceFontCustomWrap')?.classList.toggle('hidden', fontPreset !== 'custom');
+}
+
+function readInterfaceAppearanceControls() {
+  return {
+    palette: $('interfacePalette').value,
+    fontPreset: $('interfaceFontPreset').value,
+    fontCustom: $('interfaceFontCustom').value.trim(),
+    colors: {
+      accent: $('interfaceAccent').value,
+      background: $('interfaceBackground').value,
+      panel: $('interfacePanel').value,
+      text: $('interfaceText').value
+    }
+  };
+}
+
+function renderInterfaceAppearanceControls(settings) {
+  const appearance = normalizeInterfaceAppearance(settings);
+  $('interfacePalette').value = appearance.palette;
+  $('interfaceFontPreset').value = appearance.fontPreset;
+  $('interfaceFontCustom').value = appearance.fontCustom || '';
+  $('interfaceAccent').value = normalizeHex(
+    appearance.colors.accent,
+    DEFAULT_INTERFACE_APPEARANCE.colors.accent
+  );
+  $('interfaceBackground').value = normalizeHex(
+    appearance.colors.background,
+    DEFAULT_INTERFACE_APPEARANCE.colors.background
+  );
+  $('interfacePanel').value = normalizeHex(
+    appearance.colors.panel,
+    DEFAULT_INTERFACE_APPEARANCE.colors.panel
+  );
+  $('interfaceText').value = normalizeHex(
+    appearance.colors.text,
+    DEFAULT_INTERFACE_APPEARANCE.colors.text
+  );
+  updateInterfaceControlVisibility();
+}
+
+function previewInterfaceAppearance() {
+  applyInterfaceAppearance({
+    interfaceAppearance: readInterfaceAppearanceControls()
+  });
 }
 
 function captureTargetLabel(value) {
@@ -92,17 +255,46 @@ function updateCaptureTargetHint(value) {
 
 async function loadSettings() {
   const result = await chrome.storage.local.get('archiverSettings');
-  return { ...DEFAULT_SETTINGS, ...(result.archiverSettings || {}) };
+  const merged = { ...DEFAULT_SETTINGS, ...(result.archiverSettings || {}) };
+  merged.interfaceAppearance = normalizeInterfaceAppearance(merged);
+  return merged;
 }
 
-async function saveSettings(patch) {
+async function saveSettings(patch, noticeId = 'settingsSaved') {
   const current = await loadSettings();
   const next = { ...current, ...patch };
+
+  if (patch.interfaceAppearance) {
+    next.interfaceAppearance = normalizeInterfaceAppearance({
+      ...next,
+      interfaceAppearance: {
+        ...current.interfaceAppearance,
+        ...patch.interfaceAppearance,
+        colors: {
+          ...current.interfaceAppearance.colors,
+          ...(patch.interfaceAppearance.colors || {})
+        }
+      }
+    });
+    // Keep the short-lived legacy key in sync so downgrading does not lose
+    // the selected preset. Export logic never depends on this key.
+    next.palette = next.interfaceAppearance.palette;
+  }
+
   await chrome.storage.local.set({ archiverSettings: next });
-  applyPalette(next.palette);
-  $('settingsSaved').textContent = 'Сохранено';
-  clearTimeout(saveSettings.timer);
-  saveSettings.timer = setTimeout(() => { $('settingsSaved').textContent = ''; }, 900);
+  applyInterfaceAppearance(next);
+
+  if (noticeId) {
+    const target = $(noticeId);
+    if (target) {
+      target.textContent = 'Сохранено';
+      saveSettings.timers ||= {};
+      clearTimeout(saveSettings.timers[noticeId]);
+      saveSettings.timers[noticeId] = setTimeout(() => {
+        target.textContent = '';
+      }, 900);
+    }
+  }
 }
 
 function render(data) {
@@ -448,9 +640,58 @@ $('alignUserRight').onchange = e => saveSettings({ alignUserRight: e.target.chec
 $('includeReasoning').onchange = e => saveSettings({ includeReasoning: e.target.checked });
 $('captureTarget').onchange = e => {
   updateCaptureTargetHint(e.target.value);
-  saveSettings({ captureTarget: e.target.value });
+  saveSettings({ captureTarget: e.target.value }, null);
 };
-$('palette').onchange = e => saveSettings({ palette: e.target.value });
+
+async function saveInterfaceAppearanceFromControls() {
+  const appearance = readInterfaceAppearanceControls();
+  await saveSettings(
+    { interfaceAppearance: appearance, palette: appearance.palette },
+    'interfaceSettingsSaved'
+  );
+  renderInterfaceAppearanceControls({ interfaceAppearance: appearance });
+}
+
+$('interfacePalette').onchange = async () => {
+  updateInterfaceControlVisibility();
+  previewInterfaceAppearance();
+  await saveInterfaceAppearanceFromControls();
+};
+
+$('interfaceFontPreset').onchange = async () => {
+  updateInterfaceControlVisibility();
+  previewInterfaceAppearance();
+  await saveInterfaceAppearanceFromControls();
+};
+
+for (const id of ['interfaceAccent', 'interfaceBackground', 'interfacePanel', 'interfaceText']) {
+  $(id).oninput = previewInterfaceAppearance;
+  $(id).onchange = () => saveInterfaceAppearanceFromControls().catch(error => {
+    setStatus(error.message || String(error), true);
+  });
+}
+
+$('interfaceFontCustom').oninput = () => {
+  previewInterfaceAppearance();
+  clearTimeout(saveInterfaceAppearanceFromControls.timer);
+  saveInterfaceAppearanceFromControls.timer = setTimeout(() => {
+    saveInterfaceAppearanceFromControls().catch(error => {
+      setStatus(error.message || String(error), true);
+    });
+  }, 240);
+};
+
+$('resetInterfaceAppearance').onclick = async () => {
+  const appearance = {
+    ...DEFAULT_INTERFACE_APPEARANCE,
+    colors: { ...DEFAULT_INTERFACE_APPEARANCE.colors }
+  };
+  renderInterfaceAppearanceControls({ interfaceAppearance: appearance });
+  await saveSettings(
+    { interfaceAppearance: appearance, palette: appearance.palette },
+    'interfaceSettingsSaved'
+  );
+};
 
 $('localVersion').textContent = chrome.runtime.getManifest().version || '—';
 
@@ -474,8 +715,8 @@ $('reloadExtension').addEventListener('click', () => {
     $('includeReasoning').checked = settings.includeReasoning;
     $('captureTarget').value = settings.captureTarget === 'current' ? 'current' : 'copy';
     updateCaptureTargetHint($('captureTarget').value);
-    $('palette').value = settings.palette;
-    applyPalette(settings.palette);
+    renderInterfaceAppearanceControls(settings);
+    applyInterfaceAppearance(settings);
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();

@@ -76,6 +76,47 @@ try {
 }
 
 try {
+  const popupHtml = await readFile('popup.html', 'utf8');
+  const popupJs = await readFile('popup.js', 'utf8');
+  const requiredUiIds = [
+    'status',
+    'interfaceSettings',
+    'interfacePalette',
+    'interfaceFontPreset',
+    'interfaceAccent',
+    'interfaceBackground',
+    'interfacePanel',
+    'interfaceText',
+    'settingsSaved'
+  ];
+  for (const id of requiredUiIds) {
+    if (!popupHtml.includes('id="' + id + '"')) {
+      fail('popup.html: missing UI control ' + id);
+    }
+  }
+  if (popupHtml.indexOf('id="status"') > popupHtml.indexOf('id="interfaceSettings"')) {
+    fail('popup.html: service status must stay above interface settings');
+  }
+  if (!popupJs.includes('function applyInterfaceAppearance') ||
+      !popupJs.includes('function normalizeInterfaceAppearance')) {
+    fail('popup.js: missing interface appearance layer');
+  }
+  for (const icon of [
+    'icons/icon-16.png',
+    'icons/icon-24.png',
+    'icons/icon-32.png',
+    'icons/icon-48.png',
+    'icons/icon-64.png',
+    'icons/icon-128.png'
+  ]) {
+    await access(icon);
+  }
+  console.log('OK: popup structure, appearance controls and icon assets');
+} catch (error) {
+  fail(`Popup appearance guard failed: ${error.message}`);
+}
+
+try {
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
   if (manifest.manifest_version !== 3) {
     fail('manifest.json: manifest_version must be 3');

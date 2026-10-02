@@ -2,6 +2,18 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.26
+
+- replace the extension icon set with the new blue abstract wave mark;
+- restructure the popup without removing capture, continuation, sync, planner, export, archive, updater or diagnostic actions;
+- keep service/error status at the top in a sticky status block;
+- separate archive formatting from interface appearance settings;
+- move interface appearance settings near the top of the popup;
+- add more built-in interface palettes plus a free custom color mode for accent, background, panels and text;
+- add interface font selection, including an arbitrary locally installed font name;
+- preserve the old `palette` setting as a compatibility mirror while storing richer appearance data under `interfaceAppearance`;
+- add verification guards for the popup structure, appearance layer and icon assets.
+
 ## 0.3.25
 
 - add **Обновить** directly to the extension popup;
