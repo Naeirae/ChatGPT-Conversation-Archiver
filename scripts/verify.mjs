@@ -5,6 +5,7 @@ const jsFiles = [
   'service-worker.js',
   'content-chatgpt.js',
   'popup.js',
+  'updater.js',
   'planner.js',
   'offscreen.js',
   'lib/text.mjs',
@@ -127,17 +128,29 @@ try {
       !popupJs.includes('function normalizeInterfaceAppearance')) {
     fail('popup.js: missing interface appearance layer');
   }
-  for (const icon of [
-    'icons/icon-16.png',
-    'icons/icon-24.png',
-    'icons/icon-32.png',
-    'icons/icon-48.png',
-    'icons/icon-64.png',
-    'icons/icon-128.png'
-  ]) {
+  const iconSizes = new Map([
+    ['icons/icon-16.png', 16],
+    ['icons/icon-24.png', 24],
+    ['icons/icon-32.png', 32],
+    ['icons/icon-48.png', 48],
+    ['icons/icon-64.png', 64],
+    ['icons/icon-128.png', 128]
+  ]);
+  for (const [icon, expectedSize] of iconSizes) {
     await access(icon);
+    const bytes = await readFile(icon);
+    const pngSignature = [137,80,78,71,13,10,26,10];
+    if (bytes.length < 24 || !pngSignature.every((value, index) => bytes[index] === value)) {
+      fail(icon + ': invalid PNG signature');
+      continue;
+    }
+    const width = bytes.readUInt32BE(16);
+    const height = bytes.readUInt32BE(20);
+    if (width !== expectedSize || height !== expectedSize) {
+      fail(icon + ': expected ' + expectedSize + 'x' + expectedSize + ', got ' + width + 'x' + height);
+    }
   }
-  console.log('OK: popup structure, appearance controls and icon assets');
+  console.log('OK: popup structure, appearance controls and PNG icon dimensions');
 } catch (error) {
   fail(`Popup appearance guard failed: ${error.message}`);
 }
@@ -153,9 +166,30 @@ try {
   if (!Array.isArray(manifest.permissions)) {
     fail('manifest.json: permissions must be an array');
   }
+  const requiredHosts = [
+    'https://api.github.com/*',
+    'https://raw.githubusercontent.com/*'
+  ];
+  for (const host of requiredHosts) {
+    if (!Array.isArray(manifest.host_permissions) || !manifest.host_permissions.includes(host)) {
+      fail('manifest.json: missing updater host permission ' + host);
+    }
+  }
   console.log('OK: manifest.json', manifest.version);
 } catch (error) {
   fail(`manifest.json: ${error.message}`);
+}
+
+try {
+  const packageSource = await readFile('scripts/package.mjs', 'utf8');
+  for (const requiredFile of ['updater.html', 'updater.css', 'updater.js']) {
+    if (!packageSource.includes("'" + requiredFile + "'")) {
+      fail('scripts/package.mjs: missing packaged updater file ' + requiredFile);
+    }
+  }
+  console.log('OK: packaged updater files declared');
+} catch (error) {
+  fail('scripts/package.mjs updater guard failed: ' + error.message);
 }
 
 for (const path of forbiddenArtifacts) {

@@ -2,6 +2,17 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.30
+
+- stabilization pass after the updater/icon regressions;
+- include `updater.html`, `updater.css` and `updater.js` in the deterministic packaged extension artifact;
+- add `updater.js` to JavaScript syntax verification;
+- validate PNG signatures and exact icon dimensions in CI, not only file presence;
+- verify the GitHub host permissions required by the browser updater;
+- verify the package script cannot silently omit the updater files again;
+- no capture/export behavior changed in this release;
+- manifest -> 0.3.30.
+
 ## 0.3.29
 
 - fix the first live 0.3.28 updater-entry failure: clicking **Обновить** in the popup did not open the updater page;

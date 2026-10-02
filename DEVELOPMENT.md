@@ -121,3 +121,10 @@ Treat that as a later architecture choice, not a cleanup task.
 ## License
 
 No license is intentionally selected yet. Do not add one until the commercial/open-source strategy is decided.
+
+
+### Stabilization gate (0.3.30)
+
+The release artifact must contain the browser updater pages, and verification now checks updater JavaScript syntax, required GitHub host permissions, PNG signatures/dimensions, and package membership. This specifically closes the gaps that allowed a corrupt toolbar icon and an updater page omitted from `dist/extension` to pass earlier checks.
+
+No source-acquisition or Google Docs behavior should be changed during this stabilization release unless a live test identifies a separate reproducible failure.
