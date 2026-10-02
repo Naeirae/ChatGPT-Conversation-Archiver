@@ -66,7 +66,7 @@ Responsibilities:
 
 - discovers user/assistant message units in a virtualized conversation;
 - performs full or continuation capture in chronological order;
-- expands visible truncation/reasoning controls when enabled;
+- expands visible truncation controls and, when enabled, interstitial reasoning disclosures between neighbouring messages;
 - captures rich HTML, plain text, stable message identifiers and image metadata;
 - fetches image binaries while the authenticated ChatGPT page is still available;
 - writes completed archives and incomplete drafts to `chrome.storage.local`.
@@ -192,7 +192,7 @@ The largest debt items are:
 - `service-worker.js` and `content-chatgpt.js` are still large; text/URL helpers, archive storage and Google Docs baseline parsing are extracted, but browser orchestration, physical Docs UI automation and the ChatGPT DOM/traversal adapter still need further separation;
 - DOM adapters are necessarily sensitive to ChatGPT/Google Docs UI changes;
 - automated checks now include pure regression tests for continuation signatures, URL parsing, archive/link persistence and multi-tab Google Docs baseline parsing, but browser-level capture/export regression coverage is still missing;
-- reasoning capture remains best-effort against visible DOM;
+- reasoning capture is still DOM-dependent, but 0.3.31 no longer assumes the disclosure lives inside the final assistant turn: it can associate a visible “Обработка заняла …” / equivalent interstitial block with the following assistant message;
 - the local ZIP updater is a development distribution mechanism, not the desired long-term user update channel.
 
 These are intentionally documented instead of being hidden behind a "production ready" claim.

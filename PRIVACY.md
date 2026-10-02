@@ -8,7 +8,7 @@ When the user explicitly starts a capture or sync operation, the extension may p
 
 - text and formatting visible in the selected ChatGPT conversation;
 - images visible in that conversation;
-- visible/expandable reasoning UI when the optional setting is enabled;
+- visible/expandable reasoning UI when the optional setting is enabled, including reasoning blocks rendered between neighbouring chat messages;
 - the text of a Google Doc selected for continuation/sync matching;
 - local run diagnostics such as capture phase, counts and errors.
 

@@ -17,7 +17,7 @@ The extension uses `chrome.debugger` for controlled browser interaction:
 
 Chrome therefore shows a debugger-related permission warning.
 
-The extension attaches the debugger only to tabs involved in the active operation and detaches it afterward. A future refactor should continue to keep debugger use narrow and observable.
+The extension attaches the debugger only to tabs involved in the active operation and detaches it afterward. In the current architecture this permission is a deliberate runtime dependency, not optional store-only baggage: physical ChatGPT scrolling hydrates virtualized history and attachments, and controlled Google Docs interaction is required for binary-image insertion. Do not remove it unless a replacement path is implemented and live-verified with equivalent guarantees.
 
 ### Clipboard
 
@@ -39,7 +39,7 @@ Direct Google Drive/Docs API authentication is not implemented.
 
 ## Reasoning
 
-The optional reasoning setting only attempts to capture reasoning blocks exposed by the current ChatGPT page and expandable through the visible interface. It does not attempt to access hidden browser state or authentication data.
+The optional reasoning setting only captures reasoning blocks exposed by the current ChatGPT page and expandable through the visible interface. Current ChatGPT can render the disclosure/status (for example, “Обработка заняла 7s”) between the previous message and the final assistant text, so the adapter associates visible interstitial reasoning with the following assistant reply. It does not parse hidden chain-of-thought, hidden browser state or authentication data.
 
 ## Local updater
 

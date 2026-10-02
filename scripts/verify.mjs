@@ -61,7 +61,13 @@ try {
       !contentSource.includes('Сверка завершена')) {
     fail('content-chatgpt.js: missing non-mutating compare mode');
   }
-  console.log('OK: service-worker runtime helper declarations');
+  if (!contentSource.includes('REASONING_STATUS_RE') ||
+      !contentSource.includes('обработка заняла') ||
+      !contentSource.includes('interstitialReasoningFragment') ||
+      !contentSource.includes('reasoningStatusCandidates')) {
+    fail('content-chatgpt.js: missing interstitial reasoning capture adapter');
+  }
+  console.log('OK: service-worker runtime helper declarations and reasoning adapter');
 } catch (error) {
   fail(`service-worker.js runtime helper guard failed: ${error.message}`);
 }

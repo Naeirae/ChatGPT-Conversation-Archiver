@@ -91,6 +91,7 @@ function renderRunLog(job) {
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
+  if (job.reasoningBlockCount) meta.push(job.reasoningBlockCount + ' блоков размышлений');
   if (job.draftCount) meta.push(job.draftCount + ' в черновике');
   $('runLogMeta').textContent = meta.join(' · ');
   $('runLogMessage').textContent = job.message || '';
@@ -351,6 +352,7 @@ function render(data) {
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
     ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
+      (archive.reasoningBlockCount ? ` · ${archive.reasoningBlockCount} блоков размышлений` : '') +
       (archive.imageCount ? ` · ${archive.imageBinaryReady || 0} подготовлено · ${archive.imageBinaryFailed || 0} ошибок` : ''))
     : '';
 

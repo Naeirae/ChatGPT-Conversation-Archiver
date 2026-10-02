@@ -39,6 +39,8 @@ test('summarizeArchive exposes stable UI metadata only', () => {
     imageCount: 3,
     imageBinaryReady: 2,
     imageBinaryFailed: 1,
+    reasoningMessageCount: 1,
+    reasoningBlockCount: 2,
     lastCaptureMode: 'continue',
     lastCaptureAddedCount: 1
   });
@@ -46,6 +48,8 @@ test('summarizeArchive exposes stable UI metadata only', () => {
   assert.equal(summary.messageCount, 2);
   assert.equal(summary.lastMessageId, 'm2');
   assert.equal(summary.imageBinaryReady, 2);
+  assert.equal(summary.reasoningMessageCount, 1);
+  assert.equal(summary.reasoningBlockCount, 2);
   assert.equal('messages' in summary, false);
 });
 

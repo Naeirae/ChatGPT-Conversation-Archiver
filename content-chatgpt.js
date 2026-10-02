@@ -29,6 +29,8 @@
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
   const REASONING_ACTION_EXCLUDE_RE = /copy|share|regenerate|retry|edit|like|dislike|feedback|citation|source|download|listen|read aloud|stop|поделиться|скопировать|повторить|изменить|источник|скачать|озвучить/i;
+  const REASONING_STATUS_RE = /^(?:обработка заняла|размышление заняло|размышления заняли|thought for|thinking for|reasoned for|processing took)\b/i;
+  const REASONING_ATTR_HINT_RE = /(?:reasoning|thinking|thought|analysis|cot)/i;
   const reasoningClicked = new WeakSet();
 
   async function getSettings() {
@@ -294,56 +296,147 @@
 
   function reasoningLabel(el) {
     return String(
-      el.innerText ||
-      el.getAttribute('aria-label') ||
-      el.getAttribute('title') ||
+      el?.innerText ||
+      el?.textContent ||
+      el?.getAttribute?.('aria-label') ||
+      el?.getAttribute?.('title') ||
       ''
     ).replace(/\s+/g, ' ').trim();
   }
 
+  function isReasoningStatusLabel(value = '') {
+    return REASONING_STATUS_RE.test(String(value || '').replace(/\s+/g, ' ').trim());
+  }
+
+  function nodeComesBefore(a, b) {
+    if (!a || !b || a === b) return false;
+    return Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }
+
+  function previousTurnFor(turn) {
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    return index > 0 ? turns[index - 1] : null;
+  }
+
+  function nodeIsInReasoningWindow(node, turn, messageRoot) {
+    if (!node || !turn || !messageRoot) return false;
+    if (node === messageRoot || node.contains?.(messageRoot)) return false;
+    if (!nodeComesBefore(node, messageRoot)) return false;
+
+    const previous = previousTurnFor(turn);
+    if (!previous) return true;
+    if (previous.contains?.(node)) return false;
+    return nodeComesBefore(previous, node);
+  }
+
+  function closestReasoningTrigger(node, messageRoot) {
+    let el = node instanceof Element ? node : node?.parentElement;
+    let fallback = el || null;
+
+    for (let depth = 0; el && depth < 8; depth++, el = el.parentElement) {
+      if (messageRoot?.contains?.(el)) break;
+      if (el.matches?.(ROLE_SELECTOR)) break;
+
+      const clickish = Boolean(
+        el.matches?.('button, [role="button"], [aria-expanded], [aria-controls], [data-state="open"], [data-state="closed"], [tabindex]') ||
+        el.hasAttribute?.('onclick') ||
+        getComputedStyle(el).cursor === 'pointer'
+      );
+      if (clickish) return el;
+      if (depth < 2) fallback = el;
+    }
+
+    return fallback;
+  }
+
+  function reasoningStatusCandidates(turn, messageRoot) {
+    const scope =
+      document.querySelector('[data-thread-user-message-navigation-content]') ||
+      document.querySelector('main') ||
+      document.body;
+    if (!scope) return [];
+
+    const result = [];
+    const seen = new Set();
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+
+    while (walker.nextNode()) {
+      const raw = String(walker.currentNode.nodeValue || '').replace(/\s+/g, ' ').trim();
+      if (!raw || !isReasoningStatusLabel(raw)) continue;
+
+      const trigger = closestReasoningTrigger(walker.currentNode, messageRoot);
+      if (!trigger || seen.has(trigger) || !visible(trigger)) continue;
+      if (!nodeIsInReasoningWindow(trigger, turn, messageRoot)) continue;
+
+      seen.add(trigger);
+      result.push(trigger);
+    }
+
+    return result;
+  }
+
   function isReasoningDisclosure(el, turn, messageRoot) {
     if (!visible(el) || el.disabled) return false;
-    if (!el.matches('button, [role="button"], [aria-expanded], [data-state="open"], [data-state="closed"]')) return false;
+    if (!nodeIsInReasoningWindow(el, turn, messageRoot)) return false;
+    if (messageRoot && messageRoot.contains(el)) return false;
+
+    const label = reasoningLabel(el);
+    if (isReasoningStatusLabel(label)) return true;
+
+    if (!el.matches('button, [role="button"], [aria-expanded], [aria-controls], [data-state="open"], [data-state="closed"]')) {
+      return false;
+    }
     if (el.getAttribute('aria-haspopup')) return false;
 
     const testId = String(el.getAttribute('data-testid') || '');
     if (REASONING_ACTION_EXCLUDE_RE.test(testId)) return false;
-
-    const label = reasoningLabel(el);
     if (!label && !el.hasAttribute('aria-controls')) return false;
     if (REASONING_ACTION_EXCLUDE_RE.test(label)) return false;
 
-    const buttonRect = el.getBoundingClientRect();
-    const contentRect = messageRoot?.getBoundingClientRect?.();
-    if (!buttonRect.width || !buttonRect.height) return false;
+    const attrHint = [
+      testId,
+      el.getAttribute('class') || '',
+      el.getAttribute('aria-label') || '',
+      el.getAttribute('title') || ''
+    ].join(' ');
 
-    // Reasoning/analysis controls are structurally before the final assistant
-    // message. This does not depend on the language or the visible label.
-    if (contentRect && buttonRect.top > contentRect.top + 24) return false;
-    if (messageRoot && messageRoot.contains(el)) return false;
-
-    return Boolean(
+    const structurallyExpandable = Boolean(
       el.hasAttribute('aria-expanded') ||
       el.hasAttribute('aria-controls') ||
       el.getAttribute('data-state') === 'open' ||
       el.getAttribute('data-state') === 'closed' ||
       el.closest('.relative.my-1.min-h-6')
     );
+
+    return structurallyExpandable && (
+      turn.contains(el) ||
+      REASONING_ATTR_HINT_RE.test(attrHint)
+    );
   }
 
   function reasoningCandidates(turn) {
     const messageRoot = contentRoot(turn, 'assistant');
-    const candidates = [...turn.querySelectorAll(
+    const local = [...turn.querySelectorAll(
       'button[aria-expanded], [role="button"][aria-expanded], button[aria-controls], [role="button"][aria-controls], [data-state="open"], [data-state="closed"], .relative.my-1.min-h-6 button, .relative.my-1.min-h-6 [role="button"]'
-    )].filter(el => isReasoningDisclosure(el, turn, messageRoot));
+    )];
+    const strong = reasoningStatusCandidates(turn, messageRoot);
+    const seen = new Set();
 
-    return candidates.sort((a, b) =>
-      a.getBoundingClientRect().top - b.getBoundingClientRect().top
-    );
+    return [...strong, ...local]
+      .filter(el => {
+        if (seen.has(el) || !isReasoningDisclosure(el, turn, messageRoot)) return false;
+        seen.add(el);
+        return true;
+      })
+      .sort((a, b) => {
+        if (a === b) return 0;
+        return nodeComesBefore(a, b) ? -1 : 1;
+      });
   }
 
   function controlledReasoningRoot(trigger) {
-    const ids = String(trigger.getAttribute('aria-controls') || '')
+    const ids = String(trigger.getAttribute?.('aria-controls') || '')
       .split(/\s+/).filter(Boolean);
     for (const id of ids) {
       const target = document.getElementById(id);
@@ -353,7 +446,7 @@
   }
 
   function siblingReasoningRoots(trigger, messageRoot) {
-    const header = trigger.closest('.relative.my-1.min-h-6');
+    const header = trigger.closest?.('.relative.my-1.min-h-6');
     if (!header?.parentElement) return [];
 
     const siblings = [...header.parentElement.children];
@@ -371,57 +464,147 @@
     return roots;
   }
 
+  function interstitialReasoningFragment(trigger, messageRoot) {
+    if (!trigger || !messageRoot || !nodeComesBefore(trigger, messageRoot)) return null;
+
+    try {
+      const range = document.createRange();
+      range.setStartAfter(trigger);
+      range.setEndBefore(messageRoot);
+      return range.cloneContents();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function cleanReasoningSource(source) {
+    if (!source) return { html: '', text: '' };
+
+    const holder = document.createElement('div');
+    holder.appendChild(source.cloneNode(true));
+
+    // Never absorb an adjacent normal turn into the reasoning payload.
+    holder.querySelectorAll(TURN_SELECTOR).forEach(node => node.remove());
+
+    const cleaned = cleanClone(holder);
+    const text = normalizeDisplayText(cleaned.innerText || cleaned.textContent || '');
+    if (!text || isReasoningStatusLabel(normalizeMatchText(text))) {
+      return { html: '', text: '' };
+    }
+
+    return { html: cleaned.innerHTML, text };
+  }
+
   function captureReasoning(turn) {
     const messageRoot = contentRoot(turn, 'assistant');
     const candidates = reasoningCandidates(turn);
-    if (!candidates.length) return { html: '', text: '', label: '', count: 0 };
-
-    const holder = document.createElement('div');
-    const texts = [];
-    const labels = [];
-    const seenRoots = new Set();
-
-    for (const trigger of candidates) {
-      const label = reasoningLabel(trigger);
-      const controlled = controlledReasoningRoot(trigger);
-      const roots = controlled ? [controlled] : siblingReasoningRoots(trigger, messageRoot);
-
-      for (const root of roots) {
-        if (seenRoots.has(root)) continue;
-        seenRoots.add(root);
-        const clone = cleanClone(root);
-        holder.appendChild(clone);
-        const text = String(root.innerText || root.textContent || '').trim();
-        if (text) texts.push(text);
-      }
-      if (label) labels.push(label);
+    if (!candidates.length) {
+      return { html: '', text: '', label: '', status: '', count: 0 };
     }
 
-    if (!texts.length) return { html: '', text: '', label: labels[0] || '', count: 0 };
-    return {
-      html: holder.innerHTML,
-      text: texts.join('\n\n'),
-      label: labels[0] || 'Размышления',
-      count: texts.length
+    const statusLabel =
+      candidates.map(reasoningLabel).find(isReasoningStatusLabel) || '';
+    const labels = candidates.map(reasoningLabel).filter(Boolean);
+    const pieces = [];
+    const seenText = new Set();
+
+    const addSource = source => {
+      const piece = cleanReasoningSource(source);
+      if (!piece.text) return;
+      const key = normalizeMatchText(piece.text);
+      if (!key || seenText.has(key)) return;
+      seenText.add(key);
+      pieces.push(piece);
     };
+
+    for (const trigger of candidates) {
+      const controlled = controlledReasoningRoot(trigger);
+      if (controlled) addSource(controlled);
+    }
+
+    if (!pieces.length) {
+      const primary =
+        candidates.find(el => isReasoningStatusLabel(reasoningLabel(el))) ||
+        candidates[0];
+      addSource(interstitialReasoningFragment(primary, messageRoot));
+    }
+
+    if (!pieces.length) {
+      for (const trigger of candidates) {
+        for (const root of siblingReasoningRoots(trigger, messageRoot)) addSource(root);
+      }
+    }
+
+    if (!pieces.length) {
+      return {
+        html: '',
+        text: '',
+        label: statusLabel || labels[0] || '',
+        status: statusLabel,
+        count: 0
+      };
+    }
+
+    return {
+      html: pieces.map(piece => piece.html).join(''),
+      text: pieces.map(piece => piece.text).join('\n\n'),
+      label: statusLabel || labels[0] || 'Размышления',
+      status: statusLabel,
+      count: pieces.length
+    };
+  }
+
+  async function waitForReasoningExpansion(trigger, turn, timeout = 1400) {
+    const messageRoot = contentRoot(turn, 'assistant');
+    const started = Date.now();
+
+    while (Date.now() - started < timeout) {
+      const controlled = controlledReasoningRoot(trigger);
+      if (controlled) {
+        const text = normalizeDisplayText(controlled.innerText || controlled.textContent || '');
+        if (text) return true;
+      }
+
+      const fragment = interstitialReasoningFragment(trigger, messageRoot);
+      const text = normalizeDisplayText(fragment?.textContent || '');
+      if (text && !isReasoningStatusLabel(normalizeMatchText(text))) return true;
+
+      const expanded = trigger.getAttribute?.('aria-expanded');
+      const stateValue = trigger.getAttribute?.('data-state');
+      if ((expanded === 'true' || stateValue === 'open') && Date.now() - started > 240) return true;
+      await sleep(90);
+    }
+
+    return false;
   }
 
   async function expandReasoningVisible(turns) {
     let clicks = 0;
+
     for (const turn of turns || orderedTurns()) {
+      if (roleOf(turn) !== 'assistant') continue;
+
       for (const el of reasoningCandidates(turn)) {
         if (reasoningClicked.has(el)) continue;
-        const expanded = el.getAttribute('aria-expanded');
-        const state = el.getAttribute('data-state');
-        reasoningClicked.add(el);
-        if (expanded === 'true' || state === 'open') continue;
+
+        const expanded = el.getAttribute?.('aria-expanded');
+        const stateValue = el.getAttribute?.('data-state');
+        if (expanded === 'true' || stateValue === 'open') {
+          reasoningClicked.add(el);
+          continue;
+        }
+
         try {
           el.click();
           clicks++;
-          await sleep(320);
-        } catch (_) {}
+          await waitForReasoningExpansion(el, turn);
+          reasoningClicked.add(el);
+        } catch (_) {
+          // Retry on a later physical-scroll pass if the UI was not ready yet.
+        }
       }
     }
+
     return clicks;
   }
 
@@ -632,6 +815,7 @@
       reasoningHtml: reasoning.html,
       reasoningText: reasoning.text,
       reasoningLabel: reasoning.label,
+      reasoningStatus: reasoning.status,
       reasoningCount: reasoning.count
     };
   }
@@ -1154,6 +1338,14 @@
         messages = existing.messages.concat(delta);
       }
 
+      const reasoningMessageCount = messages.filter(item =>
+        Boolean(normalizeDisplayText(item?.reasoningText || ''))
+      ).length;
+      const reasoningBlockCount = messages.reduce(
+        (sum, item) => sum + Number(item?.reasoningCount || 0),
+        0
+      );
+
       if (mode === 'compare') {
         const comparisonCount = previousCount + addedCount;
         const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
@@ -1170,6 +1362,8 @@
             message: comparisonMessage,
             count: comparisonCount,
             addedCount,
+            reasoningMessageCount,
+            reasoningBlockCount,
             archiveId: existingArchiveId,
             finishedAt: Date.now(),
             updatedAt: Date.now()
@@ -1208,6 +1402,8 @@
         lastCaptureMode: mode,
         lastCaptureAddedCount: addedCount,
         previousMessageCount: previousCount,
+        reasoningMessageCount,
+        reasoningBlockCount,
         lastMessageId: messages[messages.length - 1]?.id || ''
       };
 
@@ -1224,6 +1420,8 @@
           count: messages.length,
           addedCount,
           imageCount: conversation.imageCount,
+          reasoningMessageCount,
+          reasoningBlockCount,
           archiveId,
           finishedAt: Date.now(),
           updatedAt: Date.now()

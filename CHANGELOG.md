@@ -2,6 +2,19 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.31
+
+- fix the advertised reasoning-capture path after inspection of a real ChatGPT technical export;
+- recognize visible reasoning recap/status labels such as **«Обработка заняла 7s»** as strong UI markers;
+- stop assuming reasoning controls are descendants of the final assistant message;
+- associate a visible reasoning disclosure in the DOM interval between neighbouring turns with the following assistant reply;
+- click the disclosure, wait for its visible content, and capture the interstitial DOM up to the final assistant text;
+- preserve the old aria/state-based in-turn detector as a fallback for other ChatGPT rollouts;
+- store `reasoningStatus`, `reasoningText`, `reasoningHtml` and aggregate reasoning counts;
+- document that `chrome.debugger` remains a required dependency of the current capture/export architecture;
+- do not ingest or publish the private technical dump used for diagnosis;
+- manifest -> 0.3.31.
+
 ## 0.3.30
 
 - stabilization pass after the updater/icon regressions;
