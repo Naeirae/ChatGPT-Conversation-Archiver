@@ -1563,6 +1563,7 @@
       state.running = false;
       state.jobId = null;
       state.cancel = false;
+      state.paused = false;
     }
   }
 
