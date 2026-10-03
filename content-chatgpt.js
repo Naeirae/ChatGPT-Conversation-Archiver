@@ -118,12 +118,12 @@
     }) || null;
   }
 
-  async function recoverVisibleLoadError() {
+  async function recoverVisibleLoadError(phase = 'top', count = 0) {
     const retry = visibleRetryButton();
     if (!retry) return false;
 
-    await progress('ChatGPT не догрузил участок переписки · нажимаю «Попробовать снова»…', 0, {
-      phase: 'top',
+    await progress('ChatGPT не догрузил участок переписки · физически нажимаю «Попробовать снова»…', count, {
+      phase,
       retryVisible: true,
       force: true
     });
@@ -1096,7 +1096,29 @@
     orderedTurns().forEach((turn, ordinal) => {
       const message = captureTurn(turn, ordinal, settings);
       if (!message) return;
-      if (!map.has(message.id)) order.push(message.id);
+
+      const existing = map.get(message.id);
+      if (!existing) {
+        order.push(message.id);
+        map.set(message.id, message);
+        return;
+      }
+
+      // Virtualization can recreate the same turn after its reasoning block or
+      // images disappear from the current DOM. Never overwrite richer captured
+      // data with a poorer later snapshot.
+      if (!message.reasoningText && existing.reasoningText) {
+        message.reasoningText = existing.reasoningText;
+        message.reasoningHtml = existing.reasoningHtml;
+        message.reasoningLabel = existing.reasoningLabel;
+        message.reasoningStatus = existing.reasoningStatus;
+        message.reasoningCount = existing.reasoningCount;
+      }
+      if ((existing.images?.length || 0) > (message.images?.length || 0)) {
+        message.images = existing.images;
+        message.html = existing.html;
+      }
+
       map.set(message.id, message);
     });
   }
