@@ -24,7 +24,7 @@
   const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { running: false, jobId: null, cancel: false };
+  const state = { running: false, jobId: null, cancel: false, paused: false };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
@@ -32,6 +32,13 @@
   const REASONING_STATUS_RE = /^(?:обработка заняла|размышление заняло|размышления заняли|thought for|thinking for|reasoned for|processing took)\b/i;
   const REASONING_ATTR_HINT_RE = /(?:reasoning|thinking|thought|analysis|cot)/i;
   const reasoningClicked = new WeakSet();
+
+  async function waitIfPaused() {
+    while (state.paused && !state.cancel) {
+      await sleep(250);
+    }
+    if (state.cancel) throw new Error('Сбор отменен.');
+  }
 
   async function getSettings() {
     const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -1078,7 +1085,7 @@
     let firstVisibleKey = '';
 
     for (let i = 0; i < 320; i++) {
-      if (state.cancel) throw new Error('Сбор отменен.');
+      await waitIfPaused();
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -1181,7 +1188,7 @@
     }
 
     for (let i = 0; i < 260; i++) {
-      if (state.cancel) throw new Error('Сбор отменен.');
+      await waitIfPaused();
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -1231,7 +1238,7 @@
     let previousSize = -1;
 
     for (let i = 0; i < 520; i++) {
-      if (state.cancel) throw new Error('Сбор отменен.');
+      await waitIfPaused();
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -1275,6 +1282,7 @@
     state.running = true;
     state.jobId = jobId;
     state.cancel = false;
+    state.paused = false;
     lastProgressAt = 0;
 
     const mode = ['continue', 'sync', 'compare'].includes(options.mode) ? options.mode : 'full';
@@ -1574,8 +1582,21 @@
       sendResponse({ ok: true, running: true, jobId: message.jobId });
       return false;
     }
+    if (message && message.type === 'ARCHIVER_PAUSE_CAPTURE') {
+      if (state.running && (!message.jobId || message.jobId === state.jobId)) state.paused = true;
+      sendResponse({ ok: true, paused: state.paused });
+      return false;
+    }
+    if (message && message.type === 'ARCHIVER_RESUME_CAPTURE') {
+      if (state.running && (!message.jobId || message.jobId === state.jobId)) state.paused = false;
+      sendResponse({ ok: true, paused: state.paused });
+      return false;
+    }
     if (message && message.type === 'ARCHIVER_CANCEL_CAPTURE') {
-      if (state.running && (!message.jobId || message.jobId === state.jobId)) state.cancel = true;
+      if (state.running && (!message.jobId || message.jobId === state.jobId)) {
+        state.paused = false;
+        state.cancel = true;
+      }
       sendResponse({ ok: true });
       return false;
     }
