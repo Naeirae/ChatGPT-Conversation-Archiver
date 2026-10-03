@@ -2,6 +2,17 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.32
+
+- harden the full-capture top-detection path against slow or temporarily stalled ChatGPT lazy loading;
+- replace the short ~1.6 s settle heuristic with a longer quiet-window settle check;
+- push farther upward while probing for older virtualized turns;
+- require the first visible turn, visible-turn signature and collected-message count to remain unchanged across repeated delayed probes before declaring the beginning reached;
+- add an explicit loading window between idle confirmations so a frozen DOM is less likely to be mistaken for the true start of the conversation;
+- increase the safety cap for upward iterations and fail explicitly instead of silently accepting an unconfirmed beginning;
+- browser/live behavior remains unverified until the next long-conversation capture test;
+- manifest -> 0.3.32.
+
 ## 0.3.31
 
 - fix the advertised reasoning-capture path after inspection of a real ChatGPT technical export;
