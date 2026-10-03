@@ -2,6 +2,22 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.34
+
+- treat the stage-1 message count as a hard completeness signal for full captures instead of ignoring it after rewinding to the top;
+- record the stage-1 navigation high-water count and the earliest observed turn before clearing the navigation map;
+- make the chronological downward pass deliberately granular (3 wheel bursts by default instead of the previous coarse 7-burst step);
+- if the first chronological pass collects fewer messages than were already observed while going upward, automatically rewind and repeat the full downward pass with single-burst scrolling;
+- refuse to replace the completed archive when the final chronological result is still smaller than the navigation high-water mark or misses the earliest observed turn; keep the incomplete result only as a draft;
+- expose navigation-minimum vs chronological-count progress in the popup so a 200 -> 100 discrepancy is visible instead of silently accepted;
+- physically click visible reasoning disclosures through Chrome debugger input rather than DOM `.click()`;
+- physically copy the expanded reasoning selection with Ctrl+C and use that copied text as the reasoning payload; preserve richer reasoning/image data if virtualization later recreates a poorer copy of the same turn;
+- detect visible ChatGPT **«Попробовать снова» / Try again / Retry** controls during both upward and downward capture passes, physically click them, wait for the local chunk to settle, and continue;
+- use a physical retry click during initial working-tab hydration too;
+- Ctrl+F-based keyboard navigation remains a fallback candidate if physical selection + Ctrl+C is not sufficient in live testing;
+- live behavior remains unverified until an explicit long-chat test;
+- manifest -> 0.3.34.
+
 ## 0.3.33
 
 - add explicit capture lifecycle controls: **Пауза**, **Продолжить сбор**, **Остановить**, **Сбросить запуск**;
