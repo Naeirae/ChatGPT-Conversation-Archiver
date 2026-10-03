@@ -985,18 +985,23 @@
     return keys.slice(0, 3).concat(keys.slice(-3)).join('|') + '::' + keys.length;
   }
 
-  async function waitForTurnSettle(timeout = 1600) {
+  async function waitForTurnSettle(timeout = 8000, quietWindow = 1400) {
     const started = Date.now();
-    let previous = '';
-    let stable = 0;
+    let previous = visibleTurnSignature();
+    let quietSince = Date.now();
+
     while (Date.now() - started < timeout) {
-      await sleep(180);
+      await sleep(220);
       const next = visibleTurnSignature();
-      if (next && next === previous) stable++;
-      else stable = 0;
-      previous = next;
-      if (stable >= 2) return next;
+
+      if (next && next === previous) {
+        if (Date.now() - quietSince >= quietWindow) return next;
+      } else {
+        previous = next;
+        quietSince = Date.now();
+      }
     }
+
     return previous;
   }
 
@@ -1067,50 +1072,107 @@
   }
 
   async function reachTop(map, order, settings) {
-    let stable = 0;
+    let confirmedIdle = 0;
     let previousSignature = '';
     let previousSize = -1;
+    let firstVisibleKey = '';
 
-    for (let i = 0; i < 260; i++) {
+    for (let i = 0; i < 320; i++) {
       if (state.cancel) throw new Error('Сбор отменен.');
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
+      const turnsBefore = orderedTurns();
       const signature = visibleTurnSignature();
+      const firstBefore = turnsBefore.length
+        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
+        : '';
+
       await progress('Этап 1/3: физически иду к началу · собрано ' + map.size + ' сообщений', map.size, {
         phase: 'top',
-        iteration: i + 1
+        iteration: i + 1,
+        topIdleConfirmations: confirmedIdle
       });
 
-      await physicalScroll('up');
+      // Push harder than a single viewport. ChatGPT may sit visually at the top
+      // while an older virtualized chunk is still loading.
+      await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
-      const nextSignature = visibleTurnSignature();
-      if (nextSignature && nextSignature === signature && signature === previousSignature && map.size === previousSize) {
-        stable++;
+      let nextSignature = visibleTurnSignature();
+      let turnsAfter = orderedTurns();
+      let firstAfter = turnsAfter.length
+        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+        : '';
+      let nextSize = map.size;
+
+      const unchanged =
+        Boolean(nextSignature) &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        nextSize === previousSize &&
+        firstAfter === firstBefore &&
+        firstAfter === firstVisibleKey;
+
+      if (unchanged) {
+        // A temporarily stalled/lazy-loading tab must not be mistaken for the
+        // true beginning. Give it a real loading window, then probe upward again.
+        await progress('Этап 1/3: проверяю, не догружается ли начало…', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          topIdleConfirmations: confirmedIdle + 1
+        });
+
+        await sleep(2600);
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings);
+
+        const afterWaitSignature = visibleTurnSignature();
+        turnsAfter = orderedTurns();
+        const afterWaitFirst = turnsAfter.length
+          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+          : '';
+
+        if (
+          afterWaitSignature === nextSignature &&
+          map.size === nextSize &&
+          afterWaitFirst === firstAfter
+        ) {
+          confirmedIdle++;
+        } else {
+          confirmedIdle = 0;
+          nextSignature = afterWaitSignature;
+          firstAfter = afterWaitFirst;
+          nextSize = map.size;
+        }
       } else {
-        stable = 0;
+        confirmedIdle = 0;
       }
 
       previousSignature = nextSignature;
-      previousSize = map.size;
+      previousSize = nextSize;
+      firstVisibleKey = firstAfter;
 
-      if (stable >= 4) {
-        await progress('Этап 1/3: начало достигнуто · собрано ' + map.size + ' сообщений', map.size, {
+      // Five separately confirmed idle probes means roughly tens of seconds
+      // with repeated upward wheel input and no newly loaded older turns.
+      if (confirmedIdle >= 5) {
+        await progress('Этап 1/3: начало подтверждено повторными проверками · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
+          topIdleConfirmations: confirmedIdle,
           force: true
         });
         return;
       }
     }
 
-    throw new Error('Не удалось надежно дойти до начала переписки физической прокруткой.');
+    throw new Error('Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
   async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings) {
