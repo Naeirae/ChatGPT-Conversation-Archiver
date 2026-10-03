@@ -69,17 +69,28 @@
     try {
       const range = document.createRange();
       const controlled = controlledReasoningRoot(trigger);
+      const siblings = siblingReasoningRoots(trigger, messageRoot);
+
       if (controlled) {
         range.selectNodeContents(controlled);
-      } else if (nodeComesBefore(trigger, messageRoot)) {
-        range.setStartAfter(trigger);
-        range.setEndBefore(messageRoot);
+      } else if (siblings.length) {
+        range.setStartBefore(siblings[0]);
+        range.setEndAfter(siblings[siblings.length - 1]);
       } else {
-        return false;
+        const triggerText = normalizeDisplayText(trigger.innerText || trigger.textContent || '');
+        const label = reasoningLabel(trigger);
+        if (triggerText && label && triggerText.length > label.length + 12) {
+          range.selectNodeContents(trigger);
+        } else if (nodeComesBefore(trigger, messageRoot)) {
+          range.setStartAfter(trigger);
+          range.setEndBefore(messageRoot);
+        } else {
+          return false;
+        }
       }
 
       const text = normalizeDisplayText(range.toString());
-      if (!text || isReasoningStatusLabel(normalizeMatchText(text))) return false;
+      if (!text) return false;
       selection.removeAllRanges();
       selection.addRange(range);
       return true;
@@ -96,8 +107,15 @@
         type: 'ARCHIVER_PHYSICAL_COPY_SELECTION',
         jobId: state.jobId
       });
-      const text = normalizeDisplayText(result?.text || '');
-      return result?.ok && text ? text : '';
+      let text = normalizeDisplayText(result?.text || '');
+      if (!result?.ok || !text) return '';
+
+      const label = reasoningLabel(trigger);
+      if (label && text.startsWith(label)) {
+        text = normalizeDisplayText(text.slice(label.length));
+      }
+      if (!text || isReasoningStatusLabel(normalizeMatchText(text))) return '';
+      return text;
     } finally {
       try { getSelection()?.removeAllRanges(); } catch (_) {}
     }
