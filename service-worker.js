@@ -1116,6 +1116,96 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   }
 }
 
+async function withChatDebugger(tabId, fn) {
+  let attached = false;
+  try {
+    const targets = await chrome.debugger.getTargets();
+    const target = targets.find(item => item.tabId === tabId);
+    if (target?.attached) throw new Error('Вкладка уже занята Chrome debugger.');
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    return await fn();
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
+async function physicalClickChatTab(tabId, point = {}) {
+  return withChatDebugger(tabId, async () => {
+    const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
+      expression: '({width: innerWidth, height: innerHeight})',
+      returnByValue: true
+    });
+    const viewport = viewportResult?.result?.value || {};
+    const width = Math.max(1, Number(viewport.width) || 1280);
+    const height = Math.max(1, Number(viewport.height) || 720);
+    const x = Math.max(1, Math.min(width - 1, Number(point.x) || width / 2));
+    const y = Math.max(1, Math.min(height - 1, Number(point.y) || height / 2));
+
+    await cdp(tabId, 'Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, button: 'none' }).catch(() => {});
+    await cdp(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1
+    });
+    await cdp(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased',
+      x,
+      y,
+      button: 'left',
+      clickCount: 1
+    });
+    await sleep(220);
+    return { ok: true, x, y };
+  });
+}
+
+async function physicalCopyChatSelection(tabId) {
+  const sentinel = '__ARCHIVER_CLIPBOARD_SENTINEL__';
+  await writeClipboard('<span>' + sentinel + '</span>', sentinel);
+
+  await withChatDebugger(tabId, async () => {
+    await cdp(tabId, 'Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'Control',
+      code: 'ControlLeft',
+      windowsVirtualKeyCode: 17,
+      nativeVirtualKeyCode: 17,
+      modifiers: 2
+    }).catch(() => {});
+    await cdp(tabId, 'Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: 'c',
+      code: 'KeyC',
+      windowsVirtualKeyCode: 67,
+      nativeVirtualKeyCode: 67,
+      modifiers: 2
+    });
+    await cdp(tabId, 'Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'c',
+      code: 'KeyC',
+      windowsVirtualKeyCode: 67,
+      nativeVirtualKeyCode: 67,
+      modifiers: 2
+    });
+    await cdp(tabId, 'Input.dispatchKeyEvent', {
+      type: 'keyUp',
+      key: 'Control',
+      code: 'ControlLeft',
+      windowsVirtualKeyCode: 17,
+      nativeVirtualKeyCode: 17,
+      modifiers: 0
+    }).catch(() => {});
+    await sleep(220);
+  });
+
+  const text = await readClipboardText();
+  return { ok: text !== sentinel, text: text === sentinel ? '' : text };
+}
+
 async function dispatchKey(tabId, key, code, windowsVirtualKeyCode, modifiers = 0) {
   const base = { key, code, windowsVirtualKeyCode, nativeVirtualKeyCode: windowsVirtualKeyCode, modifiers };
   await cdp(tabId, 'Input.dispatchKeyEvent', { type: 'keyDown', ...base });
@@ -1898,6 +1988,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, error: 'Физическая прокрутка разрешена только вкладке текущего сбора.' };
         }
         return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
+      }
+      case 'ARCHIVER_PHYSICAL_CLICK': {
+        const job = await getJob();
+        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        const senderTabId = sender?.tab?.id;
+        if (job.captureTabId == null || senderTabId !== job.captureTabId) {
+          return { ok: false, error: 'Физическое нажатие разрешено только вкладке текущего сбора.' };
+        }
+        return await physicalClickChatTab(job.captureTabId, message.point || {});
+      }
+      case 'ARCHIVER_PHYSICAL_COPY_SELECTION': {
+        const job = await getJob();
+        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        const senderTabId = sender?.tab?.id;
+        if (job.captureTabId == null || senderTabId !== job.captureTabId) {
+          return { ok: false, error: 'Физическое копирование разрешено только вкладке текущего сбора.' };
+        }
+        return await physicalCopyChatSelection(job.captureTabId);
       }
       case 'ARCHIVER_CAPTURE_FAILED': {
         const job = await getJob();
