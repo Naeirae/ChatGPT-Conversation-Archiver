@@ -32,12 +32,108 @@
   const REASONING_STATUS_RE = /^(?:обработка заняла|размышление заняло|размышления заняли|thought for|thinking for|reasoned for|processing took)\b/i;
   const REASONING_ATTR_HINT_RE = /(?:reasoning|thinking|thought|analysis|cot)/i;
   const reasoningClicked = new WeakSet();
+  const reasoningPhysicalCopies = new WeakMap();
 
   async function waitIfPaused() {
     while (state.paused && !state.cancel) {
       await sleep(250);
     }
     if (state.cancel) throw new Error('Сбор отменен.');
+  }
+
+  function elementPoint(el) {
+    const rect = el?.getBoundingClientRect?.();
+    if (!rect || rect.width < 2 || rect.height < 2) return null;
+    return {
+      x: rect.left + rect.width / 2,
+      y: rect.top + Math.min(rect.height / 2, 24)
+    };
+  }
+
+  async function physicalClickElement(el) {
+    const point = elementPoint(el);
+    if (!point) return false;
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_PHYSICAL_CLICK',
+      jobId: state.jobId,
+      point
+    });
+    return Boolean(result?.ok);
+  }
+
+  function selectReasoningRange(trigger, turn) {
+    const messageRoot = contentRoot(turn, 'assistant');
+    const selection = getSelection();
+    if (!selection || !trigger || !messageRoot) return false;
+
+    try {
+      const range = document.createRange();
+      const controlled = controlledReasoningRoot(trigger);
+      if (controlled) {
+        range.selectNodeContents(controlled);
+      } else if (nodeComesBefore(trigger, messageRoot)) {
+        range.setStartAfter(trigger);
+        range.setEndBefore(messageRoot);
+      } else {
+        return false;
+      }
+
+      const text = normalizeDisplayText(range.toString());
+      if (!text || isReasoningStatusLabel(normalizeMatchText(text))) return false;
+      selection.removeAllRanges();
+      selection.addRange(range);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function physicalCopyReasoning(trigger, turn) {
+    if (!selectReasoningRange(trigger, turn)) return '';
+
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_PHYSICAL_COPY_SELECTION',
+        jobId: state.jobId
+      });
+      const text = normalizeDisplayText(result?.text || '');
+      return result?.ok && text ? text : '';
+    } finally {
+      try { getSelection()?.removeAllRanges(); } catch (_) {}
+    }
+  }
+
+  function visibleRetryButton() {
+    const pattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
+    return [...document.querySelectorAll('button, [role="button"]')].find(el => {
+      if (!visible(el) || el.disabled) return false;
+      const label = String(
+        el.innerText ||
+        el.textContent ||
+        el.getAttribute?.('aria-label') ||
+        el.getAttribute?.('title') ||
+        ''
+      ).replace(/\s+/g, ' ').trim();
+      return pattern.test(label);
+    }) || null;
+  }
+
+  async function recoverVisibleLoadError() {
+    const retry = visibleRetryButton();
+    if (!retry) return false;
+
+    await progress('ChatGPT не догрузил участок переписки · нажимаю «Попробовать снова»…', 0, {
+      phase: 'top',
+      retryVisible: true,
+      force: true
+    });
+
+    const clicked = await physicalClickElement(retry);
+    if (!clicked) return false;
+
+    await sleep(1800);
+    await waitForTurnSettle(9000, 1800);
+    return true;
   }
 
   async function getSettings() {
