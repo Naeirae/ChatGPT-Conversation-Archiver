@@ -714,7 +714,7 @@ async function startCapture({
       ? rawMessage + ' Можно повторить в режиме «Текущая вкладка».'
       : rawMessage;
 
-    await setJob({
+    const failedJob = await setJob({
       jobId,
       tabId: sourceTab.id,
       sourceTabId: sourceTab.id,
@@ -727,6 +727,7 @@ async function startCapture({
       pendingDocUrl,
       pendingDocMode,
       message,
+      startedAt: Date.now(),
       finishedAt: Date.now(),
       log: [{
         at: Date.now(),
@@ -737,6 +738,7 @@ async function startCapture({
         count: 0
       }]
     });
+    await recordRunHistory(failedJob);
     throw new Error(message);
   }
 }
