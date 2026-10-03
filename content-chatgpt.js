@@ -437,7 +437,7 @@
     let el = node instanceof Element ? node : node?.parentElement;
     let fallback = el || null;
 
-    for (let depth = 0; el && depth < 8; depth++, el = el.parentElement) {
+    for (let depth = 0; el && depth < 16; depth++, el = el.parentElement) {
       if (messageRoot?.contains?.(el)) break;
       if (el.matches?.(ROLE_SELECTOR)) break;
 
@@ -447,7 +447,12 @@
         getComputedStyle(el).cursor === 'pointer'
       );
       if (clickish) return el;
-      if (depth < 2) fallback = el;
+
+      // Keep the tightest visible wrapper around the status text as a physical
+      // click fallback; the current ChatGPT rollout does not always expose a
+      // semantic button/aria-expanded node.
+      const rect = el.getBoundingClientRect?.();
+      if (rect?.width > 2 && rect?.height > 2 && depth < 5) fallback = el;
     }
 
     return fallback;
@@ -460,6 +465,7 @@
       document.body;
     if (!scope) return [];
 
+    const assistants = orderedTurns().filter(item => roleOf(item) === 'assistant');
     const result = [];
     const seen = new Set();
     const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
@@ -468,9 +474,21 @@
       const raw = String(walker.currentNode.nodeValue || '').replace(/\s+/g, ' ').trim();
       if (!raw || !isReasoningStatusLabel(raw)) continue;
 
-      const trigger = closestReasoningTrigger(walker.currentNode, messageRoot);
+      const textNode = walker.currentNode;
+      const textElement = textNode.parentElement;
+      if (!textElement || !visible(textElement)) continue;
+
+      // Associate the disclosure with the nearest visible assistant reply that
+      // follows it in DOM order. Do not depend on the previous-turn window:
+      // current ChatGPT renders reasoning/status UI between turn wrappers.
+      const targetTurn = assistants.find(item => {
+        const root = contentRoot(item, 'assistant');
+        return root && nodeComesBefore(textElement, root);
+      }) || null;
+      if (targetTurn !== turn) continue;
+
+      const trigger = closestReasoningTrigger(textNode, messageRoot) || textElement;
       if (!trigger || seen.has(trigger) || !visible(trigger)) continue;
-      if (!nodeIsInReasoningWindow(trigger, turn, messageRoot)) continue;
 
       seen.add(trigger);
       result.push(trigger);
@@ -481,11 +499,14 @@
 
   function isReasoningDisclosure(el, turn, messageRoot) {
     if (!visible(el) || el.disabled) return false;
-    if (!nodeIsInReasoningWindow(el, turn, messageRoot)) return false;
     if (messageRoot && messageRoot.contains(el)) return false;
 
     const label = reasoningLabel(el);
+    // Strong visible status labels are already associated with the nearest
+    // following assistant turn by reasoningStatusCandidates(). They must not
+    // be rejected by the older "previous turn window" heuristic.
     if (isReasoningStatusLabel(label)) return true;
+    if (!nodeIsInReasoningWindow(el, turn, messageRoot)) return false;
 
     if (!el.matches('button, [role="button"], [aria-expanded], [aria-controls], [data-state="open"], [data-state="closed"]')) {
       return false;
