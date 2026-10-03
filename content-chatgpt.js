@@ -1247,6 +1247,13 @@
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
 
+      if (await recoverVisibleLoadError('top', map.size)) {
+        confirmedIdle = 0;
+        previousSignature = '';
+        previousSize = -1;
+        firstVisibleKey = '';
+      }
+
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
@@ -1350,6 +1357,12 @@
     for (let i = 0; i < 260; i++) {
       await waitIfPaused();
 
+      if (await recoverVisibleLoadError('top', map.size)) {
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings);
+      }
+
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
@@ -1392,35 +1405,49 @@
     throw new Error('Не удалось надежно сопоставить хвост сохраненного архива с текущим чатом.');
   }
 
-  async function walkDown(map, order, settings, boundary) {
+  async function walkDown(map, order, settings, boundary, { bursts = 3 } = {}) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
 
-    for (let i = 0; i < 520; i++) {
+    for (let i = 0; i < 900; i++) {
       await waitIfPaused();
+
+      if (await recoverVisibleLoadError('walk', map.size)) {
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+      }
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+        await progress('Этап 2/3: достигнут конец снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
           boundaryReached: true,
+          chronologicalCount: map.size,
           force: true
         });
         return;
       }
 
       const signature = visibleTurnSignature();
-      await progress('Этап 2/3: физически прохожу вниз · собрано ' + map.size + ' сообщений', map.size, {
+      await progress('Этап 2/3: физически прохожу вниз · хронологически собрано ' + map.size + ' сообщений', map.size, {
         phase: 'walk',
-        iteration: i + 1
+        iteration: i + 1,
+        chronologicalCount: map.size
       });
 
-      await physicalScroll('down');
+      // Downward capture must be deliberately granular. Large wheel bursts can
+      // skip virtualized turns even though the boundary itself remains reachable.
+      await physicalScroll('down', bursts);
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
 
       const nextSignature = visibleTurnSignature();
       if (nextSignature && nextSignature === signature && signature === previousSignature && map.size === previousSize) stable++;
@@ -1429,7 +1456,7 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 4) break;
+      if (stable >= 6) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
@@ -1455,6 +1482,9 @@
     const map = new Map();
     const order = [];
     let chronologicalStarted = false;
+    let navigationHighWater = 0;
+    let navigationFirstId = '';
+    let navigationFirstSignature = '';
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
 
@@ -1495,11 +1525,51 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
+      if (mode === 'full') {
+        navigationHighWater = map.size;
+        const firstAtTop = orderedTurns()[0] || null;
+        navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
+        navigationFirstSignature = firstAtTop ? turnTextSignature(firstAtTop) : '';
+        await progress(
+          'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
+          navigationHighWater,
+          {
+            phase: 'top',
+            navigationHighWater,
+            force: true
+          }
+        );
+      }
+
       map.clear();
       order.length = 0;
       chronologicalStarted = true;
 
-      await walkDown(map, order, settings, boundary);
+      await walkDown(map, order, settings, boundary, { bursts: 3 });
+
+      if (mode === 'full' && map.size < navigationHighWater) {
+        const firstAttemptCount = map.size;
+        await progress(
+          'Хронологический проход собрал ' + firstAttemptCount + ' из как минимум ' +
+            navigationHighWater + ' сообщений · повторяю медленнее…',
+          firstAttemptCount,
+          {
+            phase: 'walk',
+            navigationHighWater,
+            chronologicalCount: firstAttemptCount,
+            coverageRetry: true,
+            force: true
+          }
+        );
+
+        const rewindMap = new Map();
+        const rewindOrder = [];
+        await reachTop(rewindMap, rewindOrder, settings);
+
+        map.clear();
+        order.length = 0;
+        await walkDown(map, order, settings, boundary, { bursts: 1 });
+      }
 
       await progress(
         mode === 'compare'
@@ -1518,6 +1588,25 @@
       collect(map, order, settings);
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+
+      if (mode === 'full') {
+        const finalCount = capturedMessages.length;
+        const hasNavigationFirst = capturedMessages.some(item =>
+          (navigationFirstId && item.id === navigationFirstId) ||
+          (navigationFirstSignature && messageTextSignature(item) === navigationFirstSignature)
+        );
+
+        if (finalCount < navigationHighWater || (navigationFirstId || navigationFirstSignature) && !hasNavigationFirst) {
+          const missing = Math.max(0, navigationHighWater - finalCount);
+          throw new Error(
+            'Полный архив не сохранён: при проходе к началу было найдено как минимум ' +
+            navigationHighWater + ' сообщений, а хронологический проход собрал ' + finalCount +
+            (missing ? ' (не хватает минимум ' + missing + ').' : '.') +
+            (!hasNavigationFirst ? ' Самая ранняя найденная реплика также отсутствует в итоговом проходе.' : '') +
+            ' Неполный результат оставлен только как черновик.'
+          );
+        }
+      }
 
       if (mode !== 'full') {
         const anchorIndex = capturedMessages.findIndex(item =>
