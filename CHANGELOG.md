@@ -2,6 +2,20 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.33
+
+- add explicit capture lifecycle controls: **Пауза**, **Продолжить сбор**, **Остановить**, **Сбросить запуск**;
+- pause/resume now suspends the existing capture loop instead of cancelling and restarting it;
+- keep manual pause distinct from Chrome's frozen-tab state so browser unfreeze does not silently override a user pause;
+- add persistent capture-run history with status, mode, target, counts, timestamps and result messages; keep the latest 20 runs and show the latest 10 in the popup;
+- add a separate history-clear action; resetting a run does not delete the completed archive or run history;
+- restructure the popup around the primary workflow: current capture state and controls first, then local archive, continuation, export, history, archive formatting, interface appearance and updater;
+- rename the old archive-continuation action in the UI to **Добрать новое** so it is not confused with resuming a paused capture;
+- move capture mode, Google Doc continuation details, diagnostics and secondary settings behind progressive disclosure;
+- keep existing element IDs and workflows where possible to reduce regression risk;
+- live UX and pause/resume behavior still require explicit browser verification;
+- manifest -> 0.3.33.
+
 ## 0.3.32
 
 - harden the full-capture top-detection path against slow or temporarily stalled ChatGPT lazy loading;
