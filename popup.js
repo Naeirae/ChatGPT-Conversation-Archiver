@@ -54,12 +54,18 @@ function renderCaptureProgress(job, running) {
 
   $('capturePhase').textContent = PHASE_LABELS[job?.phase] || 'Сбор переписки';
   const parts = [];
-  parts.push((job?.count || 0) + ' сообщений');
+  if (job?.navigationHighWater && job?.phase === 'walk') {
+    parts.push('минимум найдено: ' + Number(job.navigationHighWater || 0));
+    parts.push('хронологически: ' + Number(job.chronologicalCount ?? job.count ?? 0));
+  } else {
+    parts.push((job?.count || 0) + ' сообщений');
+  }
   if (job?.startedAt) {
     const seconds = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
     parts.push(seconds + ' с');
   }
   if (job?.iteration) parts.push('проход ' + job.iteration);
+  if (job?.coverageRetry) parts.push('повторный медленный проход');
   $('captureMeta').textContent = parts.join(' · ');
 }
 function renderRunLog(job) {
