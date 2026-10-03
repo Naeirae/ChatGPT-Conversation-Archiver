@@ -398,14 +398,21 @@ async function clickChatRetry(tabId) {
       target: { tabId },
       func: () => {
         const button = [...document.querySelectorAll('button, [role="button"]')].find(el =>
-          /^(Попробовать снова|Try again|Retry)$/i.test(String(el.innerText || el.textContent || '').trim())
+          /^(Попробовать снова|Повторить|Try again|Retry)$/i.test(String(el.innerText || el.textContent || '').trim())
         );
-        if (!button) return false;
-        button.click();
-        return true;
+        if (!button) return null;
+        const rect = button.getBoundingClientRect();
+        if (!rect.width || !rect.height) return null;
+        return {
+          x: rect.left + rect.width / 2,
+          y: rect.top + rect.height / 2
+        };
       }
     });
-    return Boolean(result?.result);
+    const point = result?.result;
+    if (!point) return false;
+    const clicked = await physicalClickChatTab(tabId, point);
+    return Boolean(clicked?.ok);
   } catch (_) {
     return false;
   }
