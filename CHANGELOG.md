@@ -2,6 +2,18 @@
 
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
+## 0.3.35
+
+- fix the reasoning-disclosure association bug seen in live 0.3.34: visible status labels such as **«Обработка заняла …»** could be found globally but then rejected by the older previous-turn-window heuristic before any physical click was attempted;
+- associate each visible reasoning status label with the nearest following visible assistant reply instead of requiring it to live inside the previous/next turn wrapper geometry;
+- allow strong reasoning status labels to bypass the legacy window filter after that association step;
+- search farther up the DOM tree for a real clickable ancestor and keep the tightest visible status wrapper as a physical-click fallback when ChatGPT exposes no semantic button;
+- after expansion, physically copy reasoning from an aria-controlled body, sibling reasoning body, content expanded inside the same disclosure wrapper, or the interstitial range before the final assistant message;
+- strip the disclosure label from copied reasoning text when the wrapper itself had to be selected;
+- this is a targeted live-failure fix; Ctrl+F/keyboard navigation remains the next fallback if the current ChatGPT rollout still does not expose a physically clickable disclosure target;
+- live behavior remains unverified until the next reasoning-enabled capture test;
+- manifest -> 0.3.35.
+
 ## 0.3.34
 
 - treat the stage-1 message count as a hard completeness signal for full captures instead of ignoring it after rewinding to the top;
