@@ -601,13 +601,43 @@
   function captureReasoning(turn) {
     const messageRoot = contentRoot(turn, 'assistant');
     const candidates = reasoningCandidates(turn);
-    if (!candidates.length) {
+    const physicalCopies = Array.isArray(reasoningPhysicalCopies.get(turn))
+      ? reasoningPhysicalCopies.get(turn).filter(Boolean)
+      : [];
+
+    if (!candidates.length && !physicalCopies.length) {
       return { html: '', text: '', label: '', status: '', count: 0 };
     }
 
     const statusLabel =
       candidates.map(reasoningLabel).find(isReasoningStatusLabel) || '';
     const labels = candidates.map(reasoningLabel).filter(Boolean);
+
+    if (physicalCopies.length) {
+      const unique = [...new Set(
+        physicalCopies
+          .map(normalizeDisplayText)
+          .filter(Boolean)
+      )];
+      const text = unique.join('\n\n');
+      const html = unique
+        .map(piece => '<p>' + piece
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/\n/g, '<br>') + '</p>')
+        .join('');
+      return {
+        html,
+        text,
+        label: statusLabel || labels[0] || 'Размышления',
+        status: statusLabel,
+        count: unique.length,
+        origin: 'physical-copy'
+      };
+    }
+
     const pieces = [];
     const seenText = new Set();
 
@@ -690,17 +720,29 @@
       for (const el of reasoningCandidates(turn)) {
         if (reasoningClicked.has(el)) continue;
 
-        const expanded = el.getAttribute?.('aria-expanded');
-        const stateValue = el.getAttribute?.('data-state');
-        if (expanded === 'true' || stateValue === 'open') {
-          reasoningClicked.add(el);
-          continue;
-        }
-
         try {
-          el.click();
-          clicks++;
-          await waitForReasoningExpansion(el, turn);
+          const expanded = el.getAttribute?.('aria-expanded');
+          const stateValue = el.getAttribute?.('data-state');
+
+          if (!(expanded === 'true' || stateValue === 'open')) {
+            const clicked = await physicalClickElement(el);
+            if (!clicked) continue;
+            clicks++;
+            const opened = await waitForReasoningExpansion(el, turn, 3200);
+            if (!opened) continue;
+          }
+
+          const copied = await physicalCopyReasoning(el, turn);
+          if (copied) {
+            const current = Array.isArray(reasoningPhysicalCopies.get(turn))
+              ? reasoningPhysicalCopies.get(turn)
+              : [];
+            const normalized = normalizeDisplayText(copied);
+            if (normalized && !current.some(item => normalizeDisplayText(item) === normalized)) {
+              reasoningPhysicalCopies.set(turn, [...current, normalized]);
+            }
+          }
+
           reasoningClicked.add(el);
         } catch (_) {
           // Retry on a later physical-scroll pass if the UI was not ready yet.
