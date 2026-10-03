@@ -108,6 +108,98 @@ function renderDraft(draft) {
 }
 
 
+function renderHistory(history = []) {
+  const list = $('captureHistory');
+  const count = $('historyCount');
+  if (!list || !count) return;
+
+  const items = Array.isArray(history) ? history : [];
+  count.textContent = items.length + (items.length === 1 ? ' запуск' : (items.length >= 2 && items.length <= 4 ? ' запуска' : ' запусков'));
+  list.textContent = '';
+
+  if (!items.length) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'История появится после завершённых, остановленных или ошибочных запусков.';
+    list.appendChild(empty);
+    return;
+  }
+
+  const statusLabels = {
+    done: 'Завершён',
+    error: 'Ошибка',
+    cancelled: 'Остановлен'
+  };
+  const modeLabels = {
+    full: 'Полный сбор',
+    continue: 'Добор нового',
+    compare: 'Сверка',
+    sync: 'Восстановление'
+  };
+
+  for (const item of items.slice(0, 10)) {
+    const row = document.createElement('div');
+    row.className = 'history-item';
+
+    const head = document.createElement('div');
+    head.className = 'history-item-head';
+
+    const title = document.createElement('div');
+    title.className = 'history-item-title';
+    title.textContent = modeLabels[item.captureMode] || item.captureMode || 'Сбор';
+
+    const status = document.createElement('div');
+    status.className = 'history-item-status ' + (item.status || '');
+    status.textContent = statusLabels[item.status] || item.status || '—';
+
+    head.append(title, status);
+
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const when = item.finishedAt || item.startedAt;
+    const time = when ? new Date(when).toLocaleString('ru-RU') : '—';
+    const parts = [time, captureTargetLabel(item.captureTarget), (item.count || 0) + ' сообщений'];
+    if (item.addedCount) parts.push('+' + item.addedCount + ' новых');
+    meta.textContent = parts.join(' · ');
+
+    row.append(head, meta);
+
+    if (item.message) {
+      const message = document.createElement('div');
+      message.className = 'history-item-message';
+      message.textContent = item.message;
+      row.appendChild(message);
+    }
+
+    list.appendChild(row);
+  }
+}
+
+function renderCaptureState(job) {
+  const badge = $('captureStateBadge');
+  if (!badge) return;
+
+  badge.className = 'state-badge';
+  if (!job) {
+    badge.textContent = 'Готово';
+    return;
+  }
+
+  const labels = {
+    starting: 'Запуск',
+    running: 'Сбор идёт',
+    paused: 'Пауза',
+    done: 'Готово',
+    error: 'Ошибка',
+    cancelled: 'Остановлен'
+  };
+  badge.textContent = labels[job.status] || job.status || 'Готово';
+  if (job.status === 'running' || job.status === 'starting') badge.classList.add('running');
+  else if (job.status === 'paused') badge.classList.add('paused');
+  else if (job.status === 'done') badge.classList.add('done');
+  else if (job.status === 'error') badge.classList.add('error');
+}
+
 function setStatus(text, error = false) {
   $('status').textContent = text;
   $('status').classList.toggle('error', error);
@@ -312,7 +404,12 @@ function render(data) {
   const archive = state.archive;
   const draft = state.draft;
   const running = job && ['starting', 'running', 'paused'].includes(job.status);
+  const activelyRunning = job && ['starting', 'running'].includes(job.status);
+  const paused = job?.status === 'paused';
   const done = job?.status === 'done' && archive;
+
+  renderCaptureState(job);
+  renderHistory(state.history || []);
 
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
@@ -323,6 +420,13 @@ function render(data) {
   $('syncDoc').disabled = Boolean(running);
   $('docUrl').disabled = Boolean(running);
   $('captureTarget').disabled = Boolean(running);
+
+  $('pauseCapture').classList.toggle('hidden', !activelyRunning);
+  $('resumeCapture').classList.toggle('hidden', !paused);
+  $('resumeCapture').disabled = Boolean(paused && job?.pauseReason && job.pauseReason !== 'user');
+  $('cancel').classList.toggle('hidden', !running);
+  $('resetCapture').disabled = Boolean(running || !job);
+  $('clearHistory').disabled = Boolean(running || !(state.history || []).length);
 
   const compared = job?.status === 'done' && job?.captureMode === 'compare';
   $('compareResult').textContent = compared
@@ -343,7 +447,6 @@ function render(data) {
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
-  $('cancel').classList.toggle('hidden', !running);
   renderCaptureProgress(job, running);
   renderRunLog(job);
   renderDraft(draft);
@@ -589,6 +692,39 @@ $('retryCurrent').onclick = async () => {
   }
 };
 
+$('pauseCapture').onclick = async () => {
+  $('pauseCapture').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_PAUSE_CAPTURE',
+      jobId: state?.job?.jobId
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось поставить сбор на паузу.');
+    await getState();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('pauseCapture').disabled = false;
+  }
+};
+
+$('resumeCapture').onclick = async () => {
+  $('resumeCapture').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_RESUME_CAPTURE',
+      jobId: state?.job?.jobId
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сбор.');
+    await getState();
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('resumeCapture').disabled = false;
+  }
+};
+
 $('cancel').onclick = async () => {
   $('cancel').disabled = true;
   try {
@@ -598,6 +734,34 @@ $('cancel').onclick = async () => {
     setStatus(error.message || String(error), true);
   } finally {
     $('cancel').disabled = false;
+  }
+};
+
+$('resetCapture').onclick = async () => {
+  $('resetCapture').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESET_CAPTURE_STATE' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сбросить состояние запуска.');
+    await getState();
+    setStatus('Состояние последнего запуска сброшено. Завершённый архив и история сохранены.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('resetCapture').disabled = false;
+  }
+};
+
+$('clearHistory').onclick = async () => {
+  $('clearHistory').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CLEAR_RUN_HISTORY' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось очистить историю.');
+    await getState();
+    setStatus('История запусков очищена.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('clearHistory').disabled = false;
   }
 };
 $('copyArchive').onclick = async () => {
