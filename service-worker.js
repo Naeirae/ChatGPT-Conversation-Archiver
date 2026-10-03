@@ -29,6 +29,7 @@ import {
 } from './lib/tab-plan.mjs';
 
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
+const RUN_HISTORY_KEY = 'captureRunHistory';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
@@ -171,6 +172,114 @@ async function appendRunLog(patch, entry = null) {
     });
   }
   return setJob({ ...(patch || {}), log: log.slice(-40) });
+}
+
+async function getRunHistory() {
+  const result = await chrome.storage.local.get(RUN_HISTORY_KEY);
+  return Array.isArray(result[RUN_HISTORY_KEY]) ? result[RUN_HISTORY_KEY] : [];
+}
+
+async function recordRunHistory(job) {
+  if (!job?.jobId) return;
+  const history = await getRunHistory();
+  const summary = {
+    jobId: job.jobId,
+    sourceUrl: job.sourceUrl || '',
+    captureMode: job.captureMode || 'full',
+    captureTarget: job.captureTarget || 'copy',
+    status: job.status || '',
+    phase: job.phase || '',
+    count: Number(job.count || 0),
+    addedCount: Number(job.addedCount || 0),
+    reasoningBlockCount: Number(job.reasoningBlockCount || 0),
+    draftCount: Number(job.draftCount || 0),
+    archiveId: job.archiveId || '',
+    message: job.message || '',
+    startedAt: Number(job.startedAt || 0),
+    finishedAt: Number(job.finishedAt || Date.now())
+  };
+  const next = [summary, ...history.filter(item => item?.jobId !== job.jobId)].slice(0, 20);
+  await chrome.storage.local.set({ [RUN_HISTORY_KEY]: next });
+}
+
+async function pauseCapture() {
+  const job = await getJob();
+  if (!job || !['starting', 'running'].includes(job.status)) return { ok: true, job };
+
+  if (job.captureTabId != null) {
+    const result = await chrome.tabs.sendMessage(job.captureTabId, {
+      type: 'ARCHIVER_PAUSE_CAPTURE',
+      jobId: job.jobId
+    }).catch(() => ({ ok: false }));
+    if (result && result.ok === false) throw new Error(result.error || 'Не удалось поставить сбор на паузу.');
+  }
+
+  const next = await appendRunLog({
+    status: 'paused',
+    pauseReason: 'user',
+    resumePhase: job.phase === 'paused' ? (job.resumePhase || 'top') : (job.phase || 'top'),
+    phase: 'paused',
+    message: 'Сбор поставлен на паузу.'
+  }, {
+    level: 'info',
+    code: 'RUN_PAUSED_BY_USER',
+    message: 'Сбор поставлен на паузу пользователем.',
+    phase: job.phase || '',
+    count: Number(job.count || 0)
+  });
+  return { ok: true, job: next };
+}
+
+async function resumeCapture() {
+  const job = await getJob();
+  if (!job || job.status !== 'paused') return { ok: true, job };
+  if (job.pauseReason && job.pauseReason !== 'user') {
+    throw new Error('Сбор приостановлен браузером. Дождитесь, пока рабочая вкладка снова станет доступна.');
+  }
+
+  if (job.captureTabId != null) {
+    const result = await chrome.tabs.sendMessage(job.captureTabId, {
+      type: 'ARCHIVER_RESUME_CAPTURE',
+      jobId: job.jobId
+    }).catch(() => ({ ok: false }));
+    if (result && result.ok === false) throw new Error(result.error || 'Не удалось продолжить сбор.');
+  }
+
+  const resumePhase = job.resumePhase || 'top';
+  const next = await appendRunLog({
+    status: 'running',
+    pauseReason: '',
+    phase: resumePhase,
+    message: 'Сбор продолжен.'
+  }, {
+    level: 'info',
+    code: 'RUN_RESUMED_BY_USER',
+    message: 'Сбор продолжен пользователем.',
+    phase: resumePhase,
+    count: Number(job.count || 0)
+  });
+  return { ok: true, job: next };
+}
+
+async function resetCaptureState() {
+  const job = await getJob();
+  if (job && ['starting', 'running', 'paused'].includes(job.status)) {
+    throw new Error('Сначала остановите текущий сбор.');
+  }
+  if (job?.draftId) {
+    await chrome.storage.local.remove('draft:' + job.draftId).catch(() => {});
+  }
+  if (job?.tabId != null) {
+    await chrome.action.setBadgeText({ tabId: job.tabId, text: '' }).catch(() => {});
+    await chrome.action.setTitle({ tabId: job.tabId, title: 'Архиватор ChatGPT' }).catch(() => {});
+  }
+  await chrome.storage.local.remove(ACTIVE_JOB_KEY);
+  return { ok: true };
+}
+
+async function clearRunHistory() {
+  await chrome.storage.local.remove(RUN_HISTORY_KEY);
+  return { ok: true, history: [] };
 }
 
 function formatRunLog(job) {
@@ -652,16 +761,17 @@ async function cancelCapture() {
 
   const next = await appendRunLog({
     status: 'cancelled',
-    message: 'Сбор отменен.',
+    message: 'Сбор остановлен.',
     finishedAt: Date.now(),
     captureTabId: null
   }, {
     level: 'warn',
     code: 'RUN_CANCELLED',
-    message: 'Сбор отменен пользователем.',
+    message: 'Сбор остановлен пользователем.',
     phase: job.phase || '',
     count: Number(job.count || 0)
   });
+  await recordRunHistory(next);
   return { ok: true, job: next };
 }
 
@@ -677,7 +787,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   }
   await cleanupTemporaryBaseline(job);
 
-  await appendRunLog({
+  const next = await appendRunLog({
     status,
     message,
     draftId,
@@ -694,6 +804,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     phase: job.phase || '',
     count: Number(job.count || 0)
   });
+  await recordRunHistory(next);
 }
 
 async function handleCaptureComplete(message) {
@@ -723,7 +834,7 @@ async function handleCaptureComplete(message) {
       ? ('Сверка завершена: +' + addedCount + ' новых сообщений относительно локального архива. Архив не изменён.')
       : 'Сверка завершена: новых сообщений относительно локального архива нет. Архив не изменён.';
 
-    await appendRunLog({
+    const next = await appendRunLog({
       status: 'done',
       phase: 'done',
       captureMode: 'compare',
@@ -740,6 +851,7 @@ async function handleCaptureComplete(message) {
       phase: 'done',
       count: Number(message.count || archive.messages?.length || 0)
     });
+    await recordRunHistory(next);
     return;
   }
 
@@ -780,7 +892,7 @@ async function handleCaptureComplete(message) {
     } else finalMessage += ' В Google Doc новых сообщений для вставки нет.';
   }
 
-  await appendRunLog({
+  const next = await appendRunLog({
     status: 'done',
     phase: 'done',
     message: finalMessage,
@@ -801,6 +913,7 @@ async function handleCaptureComplete(message) {
     phase: 'done',
     count: archive.messages?.length || 0
   });
+  await recordRunHistory(next);
 }
 
 function escapeHtml(value) {
@@ -1730,13 +1843,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           archive: summarize(archive),
           draft: summarize(draft),
           linkedDoc,
-          canContinue: Boolean(currentArchive?.messages?.length)
+          canContinue: Boolean(currentArchive?.messages?.length),
+          history: await getRunHistory()
         };
       }
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
+      case 'ARCHIVER_PAUSE_CAPTURE':
+        return await pauseCapture();
+      case 'ARCHIVER_RESUME_CAPTURE':
+        return await resumeCapture();
       case 'ARCHIVER_CANCEL_CAPTURE':
         return await cancelCapture();
+      case 'ARCHIVER_RESET_CAPTURE_STATE':
+        return await resetCaptureState();
+      case 'ARCHIVER_CLEAR_RUN_HISTORY':
+        return await clearRunHistory();
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
@@ -1846,17 +1968,24 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
-  if (changeInfo.frozen === true) {
+  if (changeInfo.frozen === true && job.status !== 'paused') {
     await setJob({
       status: 'paused',
+      pauseReason: 'frozen',
+      resumePhase: job.phase === 'paused' ? (job.resumePhase || 'top') : (job.phase || 'top'),
       message: 'Вкладка сбора временно заморожена. Сбор продолжится после разморозки.',
       phase: 'paused'
     });
-  } else if (changeInfo.frozen === false && job.status === 'paused') {
+  } else if (
+    changeInfo.frozen === false &&
+    job.status === 'paused' &&
+    job.pauseReason === 'frozen'
+  ) {
     await setJob({
       status: 'running',
+      pauseReason: '',
       message: 'Вкладка сбора снова доступна. Продолжаю сбор…',
-      phase: 'walk'
+      phase: job.resumePhase || 'top'
     });
   }
 
