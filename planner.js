@@ -32,12 +32,17 @@ function markerFor(type, messageNumber) {
 }
 
 function updateMarkerSummary() {
-  const tabs = markers.filter(item => item.type === 'tab').length;
   const headings = markers.filter(item => item.type === 'heading').length;
   const docs = Math.max(1, documentParts.length || 1);
+  const physicalTabs = documentParts.length
+    ? documentParts.reduce(
+        (sum, part) => sum + 1 + part.events.filter(item => item.type === 'tab').length,
+        0
+      )
+    : 1;
   $('markerSummary').textContent =
-    docs + ' Google Doc' + (docs > 1 ? ' · ' : ' · ') +
-    (tabs + docs) + ' вкладок суммарно · ' + headings + ' подзаголовков';
+    docs + ' Google Doc · ' +
+    physicalTabs + ' вкладок суммарно · ' + headings + ' подзаголовков';
   $('clearMarkers').disabled = !markers.length;
 }
 
