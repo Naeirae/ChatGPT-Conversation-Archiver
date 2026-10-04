@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Архиватор ChatGPT",
-  "version": "0.3.36",
-  "description": "Собирает полные переписки ChatGPT, сверяет два прохода без разрушительного повтора и восстанавливает доказательно пропущенные сообщения.",
+  "version": "0.3.37",
+  "description": "Архиватор ChatGPT: один доказательный проход, добор пропущенных изображений, reasoning capture и проверяемый экспорт по вкладкам Google Docs.",
   "permissions": [
     "activeTab",
     "tabs",
