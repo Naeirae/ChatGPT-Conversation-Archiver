@@ -326,6 +326,8 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     mode: options.mode || 'full',
     resumeAnchorId: options.resumeAnchorId || '',
     existingArchiveId: options.existingArchiveId || '',
+    existingDraftId: options.existingDraftId || '',
+    fixedCaptureBoundary: options.fixedCaptureBoundary || null,
     resumeAnchorSignature: options.resumeAnchorSignature || '',
     resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : []
   };
