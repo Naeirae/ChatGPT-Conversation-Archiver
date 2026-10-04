@@ -2659,7 +2659,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.tabs.onRemoved.addListener(async tabId => {
   const job = await getJob();
-  if (!job || !['starting', 'running', 'paused'].includes(job.status)) return;
+  if (!job) return;
+
+  if (
+    job.status === 'error' &&
+    job.recoveryAvailable &&
+    job.captureTabId === tabId
+  ) {
+    await setJob({
+      recoveryAvailable: false,
+      captureTabId: null,
+      message: (job.message || 'Сбор оборвался.') + ' Сохранённая рабочая вкладка закрыта; черновик остаётся доступен.'
+    });
+    return;
+  }
+
+  if (!['starting', 'running', 'paused'].includes(job.status)) return;
 
   if (job.captureTabId === tabId) {
     await finishJobWithError(
