@@ -1,3 +1,12 @@
+## 0.3.41
+
+- remove the legacy "slow coverage retry" state from new runs and from the popup; current capture has only the normal navigation pass plus one chronological pass;
+- preserve failed background capture tabs correctly so unfinished passes remain recoverable;
+- rename the user-facing concept from "draft" to "unfinished pass" while keeping old storage keys internally for compatibility;
+- list all saved unfinished passes in the popup and add a dedicated viewer with full saved messages and comparison against the completed local archive;
+- store recovery metadata on unfinished passes, including capture phase, navigation high-water mark, and the original lower snapshot boundary;
+- add a retry path that returns the preserved working tab to the top without re-counting/re-capturing the first stage, then repeats only the chronological downward pass and merges missing messages into the saved unfinished pass.
+
 # Changelog
 
 ## 0.3.40
