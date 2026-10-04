@@ -67,6 +67,15 @@ try {
       !contentSource.includes('reasoningStatusCandidates')) {
     fail('content-chatgpt.js: missing interstitial reasoning capture adapter');
   }
+  if (!contentSource.includes('reconcileNavigationCoverage') ||
+      !contentSource.includes('reconciledInsertedCount') ||
+      !contentSource.includes('повторный полный проход автоматически не запускается')) {
+    fail('content-chatgpt.js: missing non-destructive navigation reconciliation');
+  }
+  if (contentSource.includes('coverageRetry') ||
+      contentSource.includes('повторяю медленнее')) {
+    fail('content-chatgpt.js: destructive automatic coverage retry must stay removed');
+  }
   console.log('OK: service-worker runtime helper declarations and reasoning adapter');
 } catch (error) {
   fail(`service-worker.js runtime helper guard failed: ${error.message}`);
