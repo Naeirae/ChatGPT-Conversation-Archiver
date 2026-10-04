@@ -338,17 +338,29 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     resumeAnchorSignature: options.resumeAnchorSignature || '',
     resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : []
   };
+  const expectedVersion = chrome.runtime.getManifest().version;
 
+  let ping = null;
   try {
-    const result = await chrome.tabs.sendMessage(tabId, payload);
-    if (result?.ok) return result;
-    throw new Error(result?.error || 'Content script не запустил сбор.');
-  } catch (firstError) {
+    ping = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_PING' });
+  } catch (_) {}
+
+  if (!ping?.ok || ping.version !== expectedVersion) {
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
-    const result = await chrome.tabs.sendMessage(tabId, payload);
-    if (!result?.ok) throw new Error(result?.error || firstError?.message || 'Не удалось запустить сбор.');
-    return result;
+    await sleep(80);
+    ping = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_PING' }).catch(() => null);
   }
+
+  if (!ping?.ok || ping.version !== expectedVersion) {
+    throw new Error(
+      'Вкладка ChatGPT использует устаревший код архиватора. ' +
+      'Обновите страницу чата и повторите запуск.'
+    );
+  }
+
+  const result = await chrome.tabs.sendMessage(tabId, payload);
+  if (!result?.ok) throw new Error(result?.error || 'Content script не запустил сбор.');
+  return result;
 }
 
 async function waitForChatTabComplete(tabId, timeout = 30000) {
