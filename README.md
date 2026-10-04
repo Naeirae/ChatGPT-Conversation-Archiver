@@ -109,11 +109,13 @@ Popup открывает отдельную **визуальную страни�
 
 - **«Вкладка перед»** — начать новую Google Docs tab перед этой репликой;
 - **«Подзаголовок»** — вставить H2 перед этой репликой и сразу ввести название темы;
-- первая вкладка существует автоматически, поэтому у сообщения №1 граница новой вкладки недоступна;
+- первая вкладка существует автоматически и считается **вкладкой №1**, поэтому у сообщения №1 граница новой вкладки недоступна; подзаголовок для первой вкладки можно поставить прямо у сообщения №1;
 - пометки сохраняются локально отдельно для конкретного архива и не теряются при закрытии страницы разметки;
 - длинные сообщения показываются свернутыми и могут быть раскрыты на месте; доступные изображения показываются миниатюрами, чтобы тематическую границу можно было выбирать визуально;
 - названия самих вкладок в этой версии не автоматизируются: их можно переименовать вручную в Google Docs;
 - после завершения много-вкладочного экспорта связь с чатом сохраняется на **последнюю созданную вкладку**, поэтому обычное `Продолжить` дописывает хвост туда же;
+- перед каждой следующей секцией расширение физически пересчитывает document tabs, включая исходную первую вкладку; новая секция вставляется только после доказанного увеличения числа вкладок на одну;
+- после экспорта число физических вкладок ещё раз сверяется с планом; если оно не совпало, документ оставляется открытым с ошибкой вместо ложного «готово»;
 - если создание очередной вкладки через интерфейс Google Docs не удалось, экспорт останавливается и оставляет уже созданный документ открытым, не притворяясь завершенным.
 
 Внутри разметчика пометки по-прежнему сериализуются в детерминированный message-number plan перед экспортом, но пользователю не нужно редактировать или копировать этот технический формат вручную.
@@ -149,7 +151,7 @@ From 0.3.14 the archive stores more than the source URL. During finalization the
 
 Google Docs export no longer asks Docs to fetch private ChatGPT image URLs from rich HTML. Text is pasted as rich HTML with image tags removed. When an archived message contains a prepared binary image, the debugger keeps the Docs tab active, writes the real image to the clipboard (ClipboardItem first, selected-image execCommand fallback), and performs a physical Ctrl+V at that point in the message sequence.
 
-The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. Old archives created before 0.3.14 do not contain binary image data; run **Собрать заново** to repair their images.
+The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. Old or incomplete archives can use **Добрать картинки**: this re-walks the chat and merges only newly discovered image records into the existing local archive. If the archive is linked to a Google Doc, **Довставить добранные картинки** attempts to insert only those recovered images, using a unique text anchor for the owning message and failing closed when the placement cannot be proven.
 
 ## Engineering status
 
