@@ -93,7 +93,9 @@ function renderRunLog(job) {
           ? 'продолжение'
           : job.captureMode === 'images'
             ? 'добор изображений'
-            : 'полный сбор'
+            : job.captureMode === 'retry-walk'
+              ? 'повтор только прохода вниз'
+              : 'полный сбор'
   );
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
@@ -235,7 +237,8 @@ function renderHistory(history = []) {
     continue: 'Добор нового',
     compare: 'Сверка',
     sync: 'Восстановление',
-    images: 'Добор изображений'
+    images: 'Добор изображений',
+    'retry-walk': 'Повтор прохода вниз'
   };
 
   for (const item of items.slice(0, 10)) {
