@@ -1738,6 +1738,92 @@
     throw new Error('Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
+  async function reachTopWithoutCapture(existingCount = 0) {
+    let confirmedIdle = 0;
+    let previousSignature = '';
+    let firstVisibleKey = '';
+
+    for (let i = 0; i < 320; i++) {
+      await waitIfPaused();
+
+      if (await recoverVisibleLoadError('top', existingCount)) {
+        confirmedIdle = 0;
+        previousSignature = '';
+        firstVisibleKey = '';
+      }
+
+      const turnsBefore = orderedTurns();
+      const signature = visibleTurnSignature();
+      const firstBefore = turnsBefore.length
+        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
+        : '';
+
+      await progress(
+        'Повторяю только проход вниз: возвращаю рабочую вкладку к началу без пересчёта сообщений…',
+        existingCount,
+        {
+          phase: 'top',
+          iteration: i + 1,
+          retryWalkOnly: true
+        }
+      );
+
+      await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
+
+      let nextSignature = visibleTurnSignature();
+      let turnsAfter = orderedTurns();
+      let firstAfter = turnsAfter.length
+        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+        : '';
+
+      const unchanged =
+        Boolean(nextSignature) &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        firstAfter === firstBefore &&
+        firstAfter === firstVisibleKey;
+
+      if (unchanged) {
+        await sleep(2600);
+        const afterWaitSignature = visibleTurnSignature();
+        turnsAfter = orderedTurns();
+        const afterWaitFirst = turnsAfter.length
+          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+          : '';
+
+        if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
+          confirmedIdle++;
+        } else {
+          confirmedIdle = 0;
+          nextSignature = afterWaitSignature;
+          firstAfter = afterWaitFirst;
+        }
+      } else {
+        confirmedIdle = 0;
+      }
+
+      previousSignature = nextSignature;
+      firstVisibleKey = firstAfter;
+
+      if (confirmedIdle >= 5) {
+        await progress(
+          'Начало подтверждено. Запускаю заново только хронологический проход вниз…',
+          existingCount,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            topIdleConfirmations: confirmedIdle,
+            retryWalkOnly: true,
+            force: true
+          }
+        );
+        return;
+      }
+    }
+
+    throw new Error('Не удалось надежно вернуть рабочую вкладку к началу для повторного прохода вниз.');
+  }
+
   async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings, { allowDownwardFallback = false } = {}) {
     if (!anchorId && !anchorSignature && !(tailSignatures || []).length) {
       throw new Error('У сохраненного архива нет якоря продолжения.');
@@ -1910,7 +1996,7 @@
     state.paused = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -1937,9 +2023,11 @@
           ? 'Этап 1/3: фиксирую конец снимка…'
           : mode === 'images'
             ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
-            : mode === 'resume-draft'
-              ? 'Этап 1/3: восстанавливаю место незавершённого прохода…'
-              : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
+            : mode === 'retry-walk'
+              ? 'Повторяю только второй этап: возвращаюсь к началу без пересчёта сообщений…'
+              : mode === 'resume-draft'
+                ? 'Этап 1/3: восстанавливаю место незавершённого прохода…'
+                : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
         0,
         { phase: 'top', force: true, captureMode: mode }
       );
@@ -1978,6 +2066,14 @@
         await reachTop(map, order, settings, navigationWindows);
         navigationMessages = [...map.values()];
         navigationSequence = buildNavigationSequence(navigationWindows);
+      } else if (mode === 'retry-walk') {
+        if (!existingDraftId) throw new Error('Для повторного прохода нужен сохранённый незавершённый проход.');
+        const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+        const existingPass = stored['draft:' + existingDraftId];
+        if (!existingPass?.messages?.length) {
+          throw new Error('Сохранённый незавершённый проход недоступен.');
+        }
+        await reachTopWithoutCapture(existingPass.messages.length);
       } else {
         const matched = await reachResumeAnchor(
           resumeAnchorId,
@@ -2045,7 +2141,7 @@
         );
         capturedMessages = reconciliation.messages;
 
-        // Keep the best first-pass result as the draft source too. The old
+        // Keep the best first-pass result as the unfinished-pass source too. The old
         // coverage retry cleared map/order and could destroy a usable capture.
         map.clear();
         order.length = 0;
@@ -2093,13 +2189,13 @@
               (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
               (missing ? ', не хватает минимум ' + missing : '') +
               (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
-              ' Результат сохранён как черновик; повторный полный проход автоматически не запускается.'
+              ' Результат сохранён как незавершённый проход; повторный полный проход автоматически не запускается.'
             );
           }
         }
       }
 
-      if (mode !== 'full' && mode !== 'images') {
+      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk') {
         const anchorIndex = capturedMessages.findIndex(item =>
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
@@ -2125,11 +2221,11 @@
       let previousCount = 0;
       let recoveredImageRefs = [];
 
-      if (mode === 'resume-draft') {
-        if (!existingDraftId) throw new Error('Для продолжения нужен сохранённый черновик.');
+      if (mode === 'resume-draft' || mode === 'retry-walk') {
+        if (!existingDraftId) throw new Error('Для продолжения нужен сохранённый незавершённый проход.');
         const stored = await chrome.storage.local.get('draft:' + existingDraftId);
         const existing = stored['draft:' + existingDraftId];
-        if (!existing?.messages?.length) throw new Error('Черновик незавершённого прохода недоступен.');
+        if (!existing?.messages?.length) throw new Error('Сохранённый незавершённый проход недоступен.');
 
         previousCount = existing.messages.length;
         const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
@@ -2293,7 +2389,7 @@
             ? 'Переписка собрана.'
             : mode === 'images'
               ? ('Добор изображений завершён: +' + recoveredImageRefs.length + '.')
-              : mode === 'resume-draft'
+              : (mode === 'resume-draft' || mode === 'retry-walk')
                 ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений.')
                 : ('Архив продолжен: +' + addedCount + ' сообщений.'),
           count: messages.length,
@@ -2330,7 +2426,7 @@
       if (chronologicalStarted && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
-        if (mode === 'resume-draft' && existingDraftId) {
+        if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
           const stored = await chrome.storage.local.get('draft:' + existingDraftId);
           const existing = stored['draft:' + existingDraftId];
           if (existing?.messages?.length) {
@@ -2359,13 +2455,17 @@
             sourceUrl: location.href,
             capturedAt: new Date().toISOString(),
             captureMode: mode,
+            capturePhase: current.phase || 'walk',
+            captureBoundary: current.captureBoundary || fixedCaptureBoundary || null,
+            navigationHighWater: Number(current.navigationHighWater || 0),
+            chronologicalCount: draftMessages.length,
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
             complete: false,
             error: message
           };
           await chrome.storage.local.set({ ['draft:' + draftId]: draft });
-          if (mode === 'resume-draft' && existingDraftId && existingDraftId !== draftId) {
+          if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId && existingDraftId !== draftId) {
             await chrome.storage.local.remove('draft:' + existingDraftId).catch(() => {});
           }
         }
