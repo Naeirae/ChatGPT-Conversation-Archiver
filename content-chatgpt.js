@@ -1738,7 +1738,7 @@
     throw new Error('Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
-  async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings) {
+  async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings, { allowDownwardFallback = false } = {}) {
     if (!anchorId && !anchorSignature && !(tailSignatures || []).length) {
       throw new Error('У сохраненного архива нет якоря продолжения.');
     }
@@ -1789,6 +1789,44 @@
       });
 
       await physicalScroll('up');
+    }
+
+    if (allowDownwardFallback) {
+      await progress('Стык не найден выше; проверяю участок ниже текущей позиции…', map.size, {
+        phase: 'top',
+        force: true
+      });
+
+      for (let i = 0; i < 260; i++) {
+        await waitIfPaused();
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings);
+
+        const tailMatch = findResumeTailMatch(tailSignatures);
+        if (tailMatch) {
+          await progress('Найден стык незавершённого прохода по соседним репликам.', map.size, {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            anchorMatchLength: tailMatch.matchLength,
+            force: true
+          });
+          return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
+        }
+
+        if (hasResumeAnchor(anchorId, anchorSignature)) {
+          await progress('Найден последний сохранённый стык незавершённого прохода.', map.size, {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            force: true
+          });
+          return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+        }
+
+        await physicalScroll('down', 3);
+      }
     }
 
     throw new Error('Не удалось надежно сопоставить хвост сохраненного архива с текущим чатом.');
@@ -1947,7 +1985,8 @@
           resumeTailSignatures,
           map,
           order,
-          settings
+          settings,
+          { allowDownwardFallback: mode === 'resume-draft' }
         );
         matchedAnchorId = matched?.id || '';
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
