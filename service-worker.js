@@ -48,6 +48,7 @@ const {
   deleteArchive,
   getDraft,
   removeDraft,
+  listDrafts,
   getLastArchive,
   getArchiveForUrl,
   indexArchive,
@@ -849,14 +850,35 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   const job = await getJob();
   if (job?.jobId !== jobId) return;
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
+  let preservedCaptureTabId = null;
+  if (
+    status === 'error' &&
+    draftId &&
+    ['full', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
+    job.captureTarget === 'copy' &&
+    job.captureTabId != null &&
+    job.captureTabId !== job.sourceTabId
+  ) {
+    try {
+      const tab = await chrome.tabs.get(job.captureTabId);
+      if (tab?.id && isConversationUrl(tab.url || '')) preservedCaptureTabId = tab.id;
+    } catch (_) {}
+  }
+
+  if (
+    job.captureTarget === 'copy' &&
+    job.captureTabId != null &&
+    job.captureTabId !== job.sourceTabId &&
+    preservedCaptureTabId == null
+  ) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
-    if (job.sourceTabId != null) {
-      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
-    }
+  }
+  if (job.sourceTabId != null) {
+    await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
   }
   await cleanupTemporaryBaseline(job);
 
+  const recoveryAvailable = Boolean(preservedCaptureTabId != null && draftId);
   const next = await appendRunLog({
     status,
     message,
@@ -918,7 +940,7 @@ async function resumeFailedCaptureFromWorkingTab() {
     throw new Error('Рабочая вкладка незавершённого прохода уже недоступна.');
   }
 
-  const boundary = failedJob.captureBoundary || null;
+  const boundary = failedJob.captureBoundary || draft.captureBoundary || null;
   if (!boundary?.kind || !boundary?.key) {
     throw new Error(
       'У этого старого черновика нет сохранённой нижней метки снимка. ' +
@@ -2537,15 +2559,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const archive = currentArchive || await getLastArchive();
         const draft = job?.draftId ? await getDraft(job.draftId) : null;
+        const drafts = await listDrafts();
         return {
           ok: true,
           job,
           archive: summarize(archive),
           draft: summarize(draft),
+          drafts: drafts.map(item => ({
+            ...summarize(item),
+            complete: Boolean(item.complete),
+            error: item.error || '',
+            captureMode: item.captureMode || '',
+            capturePhase: item.capturePhase || '',
+            hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key)
+          })),
           linkedDoc,
           canContinue: Boolean(currentArchive?.messages?.length),
           history: await getRunHistory()
         };
+      }
+      case 'ARCHIVER_GET_DRAFT': {
+        const draft = await getDraft(message.draftId || '');
+        return { ok: true, draft };
       }
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
