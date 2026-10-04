@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.36
+
+- remove the automatic destructive second full downward pass added in 0.3.34;
+- keep the first chronological pass intact instead of clearing `map/order` and starting over;
+- expand completeness checking from count-only retry logic to message-level reconciliation between the upward navigation pass and the chronological downward pass;
+- record ordered navigation windows while moving upward and reconstruct a navigation sequence from their overlaps;
+- if a message seen during navigation is missing from the chronological pass, insert the captured navigation copy only when its position can be proven from neighbouring messages;
+- preserve richer reasoning/image data from the navigation copy when the chronological copy is poorer;
+- if placement cannot be proven, fail closed without another full pass and keep the best reconciled first-pass result as the draft;
+- report how many messages were restored and how many remain unresolved;
+- this directly addresses the live failure where a safety repeat ran after a usable first pass and the repeat failure discarded the previously collected result;
+- browser/live verification is still required;
+- manifest -> 0.3.36.
+
 This project is pre-1.0. Entries describe repository changes; browser behavior is considered verified only after an explicit live test.
 
 ## 0.3.35
