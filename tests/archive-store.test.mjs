@@ -186,3 +186,50 @@ test('temporary archives can be removed without touching other state', async () 
   assert.equal(await store.getArchive('temp'), null);
   assert.equal((await store.getArchive('good')).id, 'good');
 });
+
+
+test('deleteArchive clears canonical index and last pointer without touching linked-doc state', async () => {
+  const storage = fakeStorage({
+    [STORAGE_KEYS.lastArchiveId]: 'bad',
+    [STORAGE_KEYS.archiveIndex]: {
+      'chatgpt.com:conv-bad': 'bad',
+      'chatgpt.com:conv-good': 'good'
+    },
+    [STORAGE_KEYS.archivePrefix + 'bad']: {
+      id: 'bad',
+      sourceUrl: 'https://chatgpt.com/c/conv-bad'
+    },
+    [STORAGE_KEYS.archivePrefix + 'good']: {
+      id: 'good',
+      sourceUrl: 'https://chatgpt.com/c/conv-good'
+    },
+    [STORAGE_KEYS.docLinks]: {
+      'chatgpt.com:conv-bad': {
+        url: 'https://docs.google.com/document/d/doc/edit'
+      }
+    }
+  });
+  const store = createArchiveStore(storage);
+
+  await store.deleteArchive('bad');
+
+  const snapshot = storage.snapshot();
+  assert.equal(snapshot[STORAGE_KEYS.archivePrefix + 'bad'], undefined);
+  assert.equal(snapshot[STORAGE_KEYS.lastArchiveId], undefined);
+  assert.equal(snapshot[STORAGE_KEYS.archiveIndex]['chatgpt.com:conv-bad'], undefined);
+  assert.equal(snapshot[STORAGE_KEYS.archiveIndex]['chatgpt.com:conv-good'], 'good');
+  assert.equal(snapshot[STORAGE_KEYS.docLinks]['chatgpt.com:conv-bad'].url, 'https://docs.google.com/document/d/doc/edit');
+});
+
+test('removeDraft deletes only the selected draft', async () => {
+  const storage = fakeStorage({
+    [STORAGE_KEYS.draftPrefix + 'd1']: { id: 'd1' },
+    [STORAGE_KEYS.draftPrefix + 'd2']: { id: 'd2' }
+  });
+  const store = createArchiveStore(storage);
+
+  await store.removeDraft('d1');
+
+  assert.equal(await store.getDraft('d1'), null);
+  assert.equal((await store.getDraft('d2')).id, 'd2');
+});
