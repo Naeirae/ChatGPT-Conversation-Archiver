@@ -75,17 +75,17 @@
       <strong id="draftTitle"></strong>
       <div id="draftMeta" class="muted"></div>
       <div class="actions">
-        <button id="copyDraft">Скопировать черновик</button>
+        <button id="copyDraft">Скопировать незавершённый проход</button>
         <button id="openFailedCapture" class="hidden">Открыть вкладку сбора</button>
         <button id="resumeFailedCapture" class="hidden primary">Найти стык и продолжить</button>
-        <button id="deleteDraft" class="danger-outline">Удалить черновик</button>
+        <button id="deleteDraft" class="danger-outline">Удалить незавершённый проход</button>
       </div>
       <div id="draftRecoveryHint" class="muted hidden">
         Рабочая вкладка оставлена открытой. Можно открыть её, вручную домотать ближе к месту обрыва и затем продолжить: архиватор найдёт последний сохранённый стык и пойдёт дальше до исходной нижней метки снимка.
       </div>
     </section>
 
-    <section id="archive" class="archive hidden">
+    <details id="unfinishedPassesPanel" class="settings history-panel">\n      <summary><span>Сохранённые незавершённые проходы</span><small id="unfinishedPassesCount">0</small></summary>\n      <div class="muted">Оборванные хронологические проходы: просмотр, повтор прохода вниз и удаление.</div>\n      <div id="unfinishedPassesList" class="history-list"></div>\n    </details>\n\n    <section id="archive" class="archive hidden">
       <div class="section-heading">
         <div>
           <div class="archive-label">Локальный архив</div>
