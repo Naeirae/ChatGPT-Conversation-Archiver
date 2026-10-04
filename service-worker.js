@@ -1395,7 +1395,83 @@ async function physicalClick(tabId, point) {
   return true;
 }
 
-async function createNextGoogleDocsTab(tabId, seenTokens = new Set()) {
+async function goToGoogleDocTabTokenAttached(tabId, targetToken, maxTabs = 100) {
+  if (!targetToken) return false;
+  await focusGoogleDocEditor(tabId);
+
+  let state = await googleDocPageState(tabId);
+  for (let i = 0; i < maxTabs; i++) {
+    const current = googleDocTabToken(state.href);
+    if (current === targetToken) return true;
+    await dispatchKey(tabId, 'PageUp', 'PageUp', 33, 10);
+    await sleep(160);
+    const next = await googleDocPageState(tabId);
+    if (googleDocTabToken(next.href) === current) {
+      state = next;
+      break;
+    }
+    state = next;
+  }
+
+  for (let i = 0; i < maxTabs; i++) {
+    const current = googleDocTabToken(state.href);
+    if (current === targetToken) return true;
+    await dispatchKey(tabId, 'PageDown', 'PageDown', 34, 10);
+    await sleep(180);
+    const next = await googleDocPageState(tabId);
+    if (googleDocTabToken(next.href) === current) return current === targetToken;
+    state = next;
+  }
+  return googleDocTabToken(state.href) === targetToken;
+}
+
+async function inspectGoogleDocTabsAttached(tabId, { restoreToken = '' } = {}) {
+  await focusGoogleDocEditor(tabId);
+  const original = restoreToken || googleDocTabToken((await googleDocPageState(tabId)).href);
+
+  // Google Docs starts every new document with one implicit first tab. Its URL
+  // often has no ?tab= parameter, so googleDocTabToken() normalizes it to t.0.
+  let state = await googleDocPageState(tabId);
+  for (let i = 0; i < 100; i++) {
+    const before = googleDocTabToken(state.href);
+    await dispatchKey(tabId, 'PageUp', 'PageUp', 33, 10);
+    await sleep(170);
+    const next = await googleDocPageState(tabId);
+    if (googleDocTabToken(next.href) === before) {
+      state = next;
+      break;
+    }
+    state = next;
+  }
+
+  const tokens = [];
+  for (let i = 0; i < 100; i++) {
+    const token = googleDocTabToken(state.href);
+    if (tokens.includes(token)) break;
+    tokens.push(token);
+
+    await dispatchKey(tabId, 'PageDown', 'PageDown', 34, 10);
+    await sleep(190);
+    const next = await googleDocPageState(tabId);
+    if (googleDocTabToken(next.href) === token) {
+      state = next;
+      break;
+    }
+    state = next;
+  }
+
+  if (original) await goToGoogleDocTabTokenAttached(tabId, original).catch(() => false);
+
+  return {
+    count: tokens.length,
+    tokens,
+    firstToken: tokens[0] || '',
+    lastToken: tokens[tokens.length - 1] || '',
+    originalToken: original
+  };
+}
+
+async function createNextGoogleDocsTab(tabId, seenTokens = new Set(), expectedBeforeCount = null) {
   let attached = false;
   const knownTokens = seenTokens instanceof Set ? seenTokens : new Set(seenTokens || []);
 
@@ -1407,7 +1483,16 @@ async function createNextGoogleDocsTab(tabId, seenTokens = new Set()) {
     for (let attempt = 1; attempt <= 3; attempt++) {
       let before = await googleDocPageState(tabId);
       const beforeToken = googleDocTabToken(before.href);
-      if (beforeToken) knownTokens.add(beforeToken);
+      const beforeInventory = await inspectGoogleDocTabsAttached(tabId, { restoreToken: beforeToken });
+      for (const token of beforeInventory.tokens) knownTokens.add(token);
+
+      if (Number.isInteger(expectedBeforeCount) && beforeInventory.count !== expectedBeforeCount) {
+        throw new Error(
+          'Перед созданием следующей вкладки Google Docs найдено ' + beforeInventory.count +
+          ' вкладок, ожидалось ' + expectedBeforeCount +
+          '. Экспорт остановлен до вставки следующего раздела.'
+        );
+      }
 
       let addControl = await googleDocsControlRect(tabId, 'add-tab');
       if (!addControl) {
@@ -1439,26 +1524,44 @@ async function createNextGoogleDocsTab(tabId, seenTokens = new Set()) {
       }
 
       const started = Date.now();
-      while (Date.now() - started < 4500) {
+      while (Date.now() - started < 6000) {
         state = await googleDocPageState(tabId);
-        const token = unseenGoogleDocTabToken(state.href, knownTokens);
-        if (token) {
-          knownTokens.add(token);
-          await sleep(450);
+        const activeToken = googleDocTabToken(state.href);
+        const inventory = await inspectGoogleDocTabsAttached(tabId, { restoreToken: activeToken });
+        const newTokens = inventory.tokens.filter(token => !knownTokens.has(token));
+
+        if (inventory.count === beforeInventory.count + 1 && newTokens.length === 1) {
+          const token = newTokens[0];
+          for (const item of inventory.tokens) knownTokens.add(item);
+          const selected = await goToGoogleDocTabTokenAttached(tabId, token);
+          if (!selected) {
+            throw new Error('Новая вкладка создана, но переключиться в неё перед вставкой не удалось.');
+          }
+          await sleep(300);
           return {
             ok: true,
-            url: state.href,
+            url: (await googleDocPageState(tabId)).href,
             token,
+            count: inventory.count,
             controlLabel: addControl.label || '',
             attempt
           };
         }
-        await sleep(180);
+
+        if (inventory.count > beforeInventory.count + 1) {
+          throw new Error(
+            'Google Docs создал больше одной вкладки за один шаг (' +
+            beforeInventory.count + ' → ' + inventory.count +
+            '). Экспорт остановлен до вставки следующего раздела.'
+          );
+        }
+
+        await sleep(220);
       }
 
-      // A mere URL change to an already-seen tab is not creation. Re-open the
-      // panel / find the plus again and retry instead of silently pasting the
-      // next section into an existing tab.
+      // A URL change alone is not enough. We retry only if the physical tab
+      // inventory is still unchanged.
+      await goToGoogleDocTabTokenAttached(tabId, beforeToken).catch(() => false);
       await sleep(350);
     }
 
@@ -2080,6 +2183,28 @@ async function exportTabbedConversation(planText = '') {
 
   const initialDocTab = await chrome.tabs.get(tab.id);
   const seenTabTokens = new Set([googleDocTabToken(initialDocTab.url || '')].filter(Boolean));
+  let initialTabCount = 0;
+
+  {
+    let attached = false;
+    try {
+      await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+      attached = true;
+      await sleep(450);
+      const inventory = await inspectGoogleDocTabsAttached(tab.id);
+      initialTabCount = inventory.count;
+      for (const token of inventory.tokens) seenTabTokens.add(token);
+    } finally {
+      if (attached) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
+    }
+  }
+
+  if (initialTabCount !== 1) {
+    throw new Error(
+      'Новый Google Doc должен начинаться с одной первой вкладки, но найдено: ' +
+      initialTabCount + '. Экспорт не начат.'
+    );
+  }
 
   let imageInsertedCount = 0;
   let imageFailedCount = 0;
@@ -2091,7 +2216,7 @@ async function exportTabbedConversation(planText = '') {
       const section = sections[index];
 
       if (index > 0) {
-        const created = await createNextGoogleDocsTab(tab.id, seenTabTokens);
+        const created = await createNextGoogleDocsTab(tab.id, seenTabTokens, index);
         if (created?.token) seenTabTokens.add(created.token);
       }
 
@@ -2119,6 +2244,31 @@ async function exportTabbedConversation(planText = '') {
     );
   }
 
+  let verifiedTabCount = 0;
+  {
+    let attached = false;
+    try {
+      await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+      attached = true;
+      await sleep(350);
+      const state = await googleDocPageState(tab.id);
+      const inventory = await inspectGoogleDocTabsAttached(tab.id, {
+        restoreToken: googleDocTabToken(state.href)
+      });
+      verifiedTabCount = inventory.count;
+    } finally {
+      if (attached) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
+    }
+  }
+
+  if (verifiedTabCount !== sections.length) {
+    throw new Error(
+      'После экспорта количество вкладок не совпало с планом: создано ' +
+      verifiedTabCount + ', должно быть ' + sections.length +
+      '. Документ оставлен открытым для проверки.'
+    );
+  }
+
   const finalTab = await chrome.tabs.get(tab.id);
   const linkedDoc = await recordDocExport(conversation, finalTab.url);
   const headingCount = events.filter(event => event.type === 'heading').length;
@@ -2129,7 +2279,7 @@ async function exportTabbedConversation(planText = '') {
     linkedDoc,
     exportMode: 'tabbed-full',
     addedCount: messages.length,
-    tabCount: sections.length,
+    tabCount: verifiedTabCount,
     headingCount,
     imageInsertedCount,
     imageFailedCount,
