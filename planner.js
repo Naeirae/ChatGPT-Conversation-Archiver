@@ -193,7 +193,9 @@ function render() {
 
     const tabButton = fragment.querySelector('.marker-tab');
     tabButton.classList.toggle('active', Boolean(tabMark));
-    tabButton.textContent = tabMark ? 'Убрать вкладку' : 'Вкладка перед';
+    tabButton.textContent = messageNumber === 1
+      ? 'Первая вкладка уже есть'
+      : (tabMark ? 'Убрать вкладку' : 'Вкладка перед');
     tabButton.disabled = messageNumber === 1;
     tabButton.addEventListener('click', () => toggleTab(messageNumber));
 
