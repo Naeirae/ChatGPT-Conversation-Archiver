@@ -30,6 +30,7 @@ import {
 
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const RUN_HISTORY_KEY = 'captureRunHistory';
+const DOC_IMAGE_PATCHES_KEY = 'docImagePatches';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
@@ -191,6 +192,7 @@ async function recordRunHistory(job) {
     phase: job.phase || '',
     count: Number(job.count || 0),
     addedCount: Number(job.addedCount || 0),
+    imageRecoveredCount: Number(job.imageRecoveredCount || 0),
     reasoningBlockCount: Number(job.reasoningBlockCount || 0),
     draftCount: Number(job.draftCount || 0),
     archiveId: job.archiveId || '',
@@ -556,11 +558,11 @@ async function startCapture({
   const inspection = await inspectAndKickScroll(sourceTab.id);
   let existingArchive = providedArchive;
 
-  if ((mode === 'continue' || mode === 'sync' || mode === 'compare') && !existingArchive) {
+  if ((mode === 'continue' || mode === 'sync' || mode === 'compare' || mode === 'images') && !existingArchive) {
     existingArchive = await getArchiveForUrl(inspection.href);
   }
 
-  if ((mode === 'continue' || mode === 'compare') && !existingArchive?.messages?.length) {
+  if ((mode === 'continue' || mode === 'compare' || mode === 'images') && !existingArchive?.messages?.length) {
     throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по Google Doc.');
   }
 
@@ -609,7 +611,9 @@ async function startCapture({
         ? 'восстановление по Google Doc'
         : mode === 'continue'
           ? 'продолжение'
-          : 'полный сбор';
+          : mode === 'images'
+            ? 'добор изображений'
+            : 'полный сбор';
     const targetLabel = captureTarget === 'current' ? 'текущая вкладка' : 'рабочая копия';
 
     await setJob({
@@ -629,9 +633,13 @@ async function startCapture({
         ? (captureTarget === 'current'
             ? 'Текущая вкладка готова; иду к началу…'
             : 'Рабочая копия загружена; иду к началу…')
-        : (captureTarget === 'current'
-            ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
-            : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
+        : mode === 'images'
+          ? (captureTarget === 'current'
+              ? 'Текущая вкладка готова; добираю изображения по всей переписке…'
+              : 'Рабочая копия загружена; добираю изображения по всей переписке…')
+          : (captureTarget === 'current'
+              ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
+              : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
       count: 0,
       addedCount: 0,
       imageCount: 0,
@@ -656,7 +664,7 @@ async function startCapture({
     });
 
     const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
-    const resumeAnchorId = mode === 'sync' ? '' : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
+    const resumeAnchorId = (mode === 'sync' || mode === 'images') ? '' : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
     const resumeAnchorSignature = mode === 'sync'
       ? (resumeTailSignatures[resumeTailSignatures.length - 1] || '')
       : (lastExistingMessage ? messageSignature(lastExistingMessage.role, lastExistingMessage.text) : '');
@@ -675,7 +683,9 @@ async function startCapture({
         status: 'running',
         message: mode === 'full'
           ? 'Фоновый сбор идет в рабочей вкладке…'
-          : 'Фоново добираю сообщения после найденного стыка…',
+          : mode === 'images'
+            ? 'Фоново добираю изображения по всей переписке…'
+            : 'Фоново добираю сообщения после найденного стыка…',
         phase: 'top'
       }, {
         level: 'info',
@@ -689,7 +699,9 @@ async function startCapture({
         status: 'running',
         message: mode === 'full'
           ? 'Физически прокручиваю текущую вкладку…'
-          : 'Ищу стык и добираю хвост в текущей вкладке…',
+          : mode === 'images'
+            ? 'Физически прохожу чат и добираю изображения…'
+            : 'Ищу стык и добираю хвост в текущей вкладке…',
         phase: 'top'
       }, {
         level: 'info',
@@ -859,6 +871,35 @@ async function handleCaptureComplete(message) {
       message: finalMessage,
       phase: 'done',
       count: Number(message.count || archive.messages?.length || 0)
+    });
+    await recordRunHistory(next);
+    return;
+  }
+
+  if (message.mode === 'images') {
+    const recovered = Number(message.imageRecoveredCount || archive.lastImageRecoveredCount || 0);
+    const finalMessage = recovered
+      ? ('Добор изображений завершён: +' + recovered + '. Локальный архив обновлён; текст не пересобирался.')
+      : 'Добор изображений завершён: новых изображений не найдено.';
+
+    const next = await appendRunLog({
+      status: 'done',
+      phase: 'done',
+      captureMode: 'images',
+      message: finalMessage,
+      count: archive.messages?.length || 0,
+      addedCount: 0,
+      imageRecoveredCount: recovered,
+      imageCount: archive.imageCount || 0,
+      archiveId: archive.id,
+      finishedAt: Date.now(),
+      captureTabId: null
+    }, {
+      level: 'info',
+      code: 'IMAGE_RECOVERY_COMPLETE',
+      message: finalMessage,
+      phase: 'done',
+      count: archive.messages?.length || 0
     });
     await recordRunHistory(next);
     return;
@@ -1686,6 +1727,203 @@ async function pasteArchiveIntoGoogleDoc(
   };
 }
 
+function normalizeDocSearchText(value = '') {
+  return String(value || '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u200b-\u200d\ufeff]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function occurrenceCount(haystack, needle) {
+  if (!needle) return 0;
+  let count = 0;
+  let from = 0;
+  while (true) {
+    const index = haystack.indexOf(needle, from);
+    if (index < 0) return count;
+    count++;
+    from = index + needle.length;
+  }
+}
+
+function uniqueMessageAnchor(docText, message) {
+  const normalizedDoc = normalizeDocSearchText(docText);
+  const lines = String(message?.text || '')
+    .split(/\r?\n/)
+    .map(normalizeDocSearchText)
+    .filter(line => line.length >= 24)
+    .sort((a, b) => b.length - a.length);
+
+  const candidates = [];
+  for (const line of lines) {
+    candidates.push(line.slice(0, 120));
+    if (line.length > 120) {
+      const mid = Math.max(0, Math.floor(line.length / 2) - 60);
+      candidates.push(line.slice(mid, mid + 120));
+    }
+  }
+  const full = normalizeDocSearchText(message?.text || '');
+  if (full.length >= 24) candidates.push(full.slice(0, 120));
+
+  for (const candidate of candidates) {
+    const query = candidate.trim();
+    if (query.length < 24) continue;
+    if (occurrenceCount(normalizedDoc, query) === 1) return query;
+  }
+  return '';
+}
+
+async function copyEditorSelectionText(tabId) {
+  const sentinel = '__ARCHIVER_DOC_SELECTION_SENTINEL__';
+  await writeClipboard('<span>' + sentinel + '</span>', sentinel);
+  await dispatchKey(tabId, 'c', 'KeyC', 67, 2);
+  await sleep(160);
+  const text = await readClipboardText();
+  return text === sentinel ? '' : String(text || '');
+}
+
+async function locateGoogleDocAnchor(tabId, query) {
+  await focusGoogleDocEditor(tabId);
+  await dispatchKey(tabId, 'f', 'KeyF', 70, 2);
+  await sleep(120);
+  await cdp(tabId, 'Input.insertText', { text: query });
+  await sleep(320);
+  await dispatchKey(tabId, 'Enter', 'Enter', 13, 0).catch(() => {});
+  await sleep(120);
+  await dispatchKey(tabId, 'Escape', 'Escape', 27, 0);
+  await sleep(180);
+
+  const selected = normalizeDocSearchText(await copyEditorSelectionText(tabId));
+  const expected = normalizeDocSearchText(query);
+  if (!selected || !selected.includes(expected)) return false;
+
+  // Collapse the proven editor selection to its end; only after this
+  // verification may an image be pasted.
+  await dispatchKey(tabId, 'ArrowRight', 'ArrowRight', 39, 0);
+  await sleep(80);
+  await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+  await sleep(100);
+  return true;
+}
+
+function recoveredImageItems(archive) {
+  const refs = Array.isArray(archive?.lastRecoveredImageRefs)
+    ? archive.lastRecoveredImageRefs
+    : [];
+  const messages = archive?.messages || [];
+  const items = [];
+
+  for (const ref of refs) {
+    const message = messages.find(item =>
+      (ref.messageId && item.id === ref.messageId) ||
+      (ref.messageSignature && messageSignature(item.role, item.text) === ref.messageSignature)
+    );
+    if (!message) continue;
+    const image = (message.images || []).find(item => item?.src === ref.src);
+    if (!image?.dataUrl || image.binaryStatus !== 'ready') continue;
+    items.push({ message, image, ref });
+  }
+  return items;
+}
+
+async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
+  const archive = await getArchive(archiveId) || await getLastArchive();
+  if (!archive) throw new Error('Нет локального архива.');
+  const linked = await getLinkedDoc(archive.sourceUrl || '');
+  const docUrl = normalizeGoogleDocUrl(linked?.url || '');
+  if (!docUrl) throw new Error('Для этого архива не найден связанный Google Doc.');
+
+  const allItems = recoveredImageItems(archive);
+  if (!allItems.length) {
+    return { docUrl, inserted: 0, failed: 0, noChanges: true, failures: [] };
+  }
+
+  const docId = googleDocKey(docUrl);
+  const patchStateRaw = await chrome.storage.local.get(DOC_IMAGE_PATCHES_KEY);
+  const patchState = { ...(patchStateRaw[DOC_IMAGE_PATCHES_KEY] || {}) };
+  const done = new Set(Array.isArray(patchState[docId]) ? patchState[docId] : []);
+
+  const keyOf = item => hashText(
+    String(item?.ref?.messageId || item?.ref?.messageSignature || '') + '|' +
+    String(item?.image?.src || '')
+  );
+  const items = allItems.filter(item => !done.has(keyOf(item)));
+  if (!items.length) {
+    return { docUrl, inserted: 0, failed: 0, noChanges: true, failures: [] };
+  }
+
+  let tab = null;
+  let attached = false;
+  let inserted = 0;
+  const failures = [];
+
+  try {
+    tab = await chrome.tabs.create({ url: docUrl, active: true });
+    if (!tab?.id) throw new Error('Не удалось открыть связанный Google Doc.');
+    await waitForTabComplete(tab.id);
+    await sleep(1800);
+
+    await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+    attached = true;
+    await sleep(400);
+
+    const docText = await copyCurrentGoogleDocTabText(tab.id);
+    const grouped = new Map();
+    for (const item of items) {
+      const key = item.message.id || messageSignature(item.message.role, item.message.text);
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(item);
+    }
+
+    for (const group of grouped.values()) {
+      const message = group[0].message;
+      const anchor = uniqueMessageAnchor(docText, message);
+      if (!anchor) {
+        for (const item of group) {
+          failures.push({ src: item.image.src || '', error: 'Не найден уникальный текстовый якорь сообщения в Google Doc.' });
+        }
+        continue;
+      }
+
+      const located = await locateGoogleDocAnchor(tab.id, anchor);
+      if (!located) {
+        for (const item of group) {
+          failures.push({ src: item.image.src || '', error: 'Google Docs не подтвердил выделение якоря; вставка пропущена.' });
+        }
+        continue;
+      }
+
+      for (const item of group) {
+        const copied = await copyImageClipboardInGoogleDocs(tab.id, item.image);
+        if (!copied?.ok) {
+          failures.push({ src: item.image.src || '', error: copied?.error || 'clipboard failed' });
+          continue;
+        }
+        await dispatchKey(tab.id, 'v', 'KeyV', 86, 2);
+        await sleep(850);
+        await dispatchKey(tab.id, 'Enter', 'Enter', 13, 0);
+        await sleep(120);
+        inserted++;
+        done.add(keyOf(item));
+      }
+    }
+
+    patchState[docId] = [...done];
+    await chrome.storage.local.set({ [DOC_IMAGE_PATCHES_KEY]: patchState });
+  } finally {
+    if (attached && tab?.id) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
+  }
+
+  return {
+    docUrl,
+    inserted,
+    failed: failures.length,
+    noChanges: false,
+    failures
+  };
+}
+
 async function appendMessagesToGoogleDocUrl(
   conversation,
   messages,
@@ -1909,6 +2147,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           mode: 'full',
           captureTarget: message.captureTarget || 'copy'
         });
+      case 'ARCHIVER_RECOVER_IMAGES_CURRENT':
+        return await startCapture({
+          mode: 'images',
+          captureTarget: message.captureTarget || 'copy'
+        });
       case 'ARCHIVER_CONTINUE_CURRENT':
         return await startCapture({
           mode: 'continue',
@@ -2059,6 +2302,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, ...(await exportTabbedConversation(message.planText || '')) };
       case 'ARCHIVER_EXPORT_ACTIVE_DOC':
         return { ok: true, ...(await exportConversation({ activeDoc: true })) };
+      case 'ARCHIVER_PATCH_RECOVERED_IMAGES':
+        return { ok: true, ...(await patchRecoveredImagesToLinkedDoc(message.archiveId || '')) };
       default:
         return null;
     }
