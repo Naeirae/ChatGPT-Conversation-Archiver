@@ -3,12 +3,12 @@
 ## 0.3.37
 
 - keep the 0.3.36 removal of the destructive automatic second full capture pass;
-- add an explicit **«Добрать картинки»** mode: it re-walks the conversation, unions image sightings from the upward and downward passes, and merges only newly found images into the existing local archive without replacing message text;
+- add an explicit **«Добрать картинки»** fallback for poor-network cases: it is manual only, does not run during normal capture, re-walks the conversation, unions image sightings from the upward and downward passes, and merges only newly found images into the existing local archive without replacing message text;
 - add an explicit **«Довставить добранные картинки»** action for a linked Google Doc; it inserts only recovered image binaries and refuses to paste when a unique message anchor cannot be proven;
 - keep a per-document image-patch ledger so the same recovered image is not inserted twice by the repair action;
 - fix a reasoning-copy loss mode: when the clickable disclosure wrapper contains both **«Обработка заняла …»** and the expanded reasoning text, strip only the status line instead of treating the whole wrapper text as the label and deleting the captured reasoning;
 - harden multi-tab Google Docs export: count the implicit first tab as tab 1, verify the physical tab count before every new section, require each creation step to increase the count by exactly one, switch to the proven new tab before pasting, and verify final physical tab count equals the planned section count;
-- make the planner explicitly show message #1 as **«Первая вкладка уже есть»**; a heading for the first tab can still be placed at message #1;
+- make the planner explicitly show message #1 as **«Первая вкладка уже есть»**; the implicit first Google Docs tab is never created by the exporter, while every later **«Вкладка перед»** marker must produce exactly one new physical tab; a heading for the first tab can still be placed at message #1;
 - source/browser live verification is still required for image recovery, reasoning capture, and the new physical-tab count checks;
 - manifest -> 0.3.37.
 
