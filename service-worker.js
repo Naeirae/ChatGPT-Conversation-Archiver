@@ -798,26 +798,10 @@ async function cancelCapture() {
     }
   } catch (_) {}
 
-  let preservedCaptureTabId = null;
   if (
-    status === 'error' &&
-    draftId &&
-    ['full', 'resume-draft'].includes(job.captureMode) &&
     job.captureTarget === 'copy' &&
     job.captureTabId != null &&
     job.captureTabId !== job.sourceTabId
-  ) {
-    try {
-      const tab = await chrome.tabs.get(job.captureTabId);
-      if (tab?.id && isConversationUrl(tab.url || '')) preservedCaptureTabId = tab.id;
-    } catch (_) {}
-  }
-
-  if (
-    job.captureTarget === 'copy' &&
-    job.captureTabId != null &&
-    job.captureTabId !== job.sourceTabId &&
-    preservedCaptureTabId == null
   ) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
@@ -826,7 +810,6 @@ async function cancelCapture() {
   }
   await cleanupTemporaryBaseline(job);
 
-  const recoveryAvailable = Boolean(preservedCaptureTabId != null && draftId);
   const next = await appendRunLog({
     status: 'cancelled',
     message: 'Сбор остановлен.',
