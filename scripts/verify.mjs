@@ -110,6 +110,11 @@ try {
       !serviceWorkerSource.includes('DOC_IMAGE_PATCHES_KEY')) {
     fail('service-worker.js: missing recovered-image patch action');
   }
+  if (!serviceWorkerSource.includes("type: 'ARCHIVER_PING'") ||
+      !serviceWorkerSource.includes('ping.version !== expectedVersion') ||
+      !contentSource.includes("message.type === 'ARCHIVER_PING'")) {
+    fail('capture runtime: missing content-script version handshake');
+  }
   console.log('OK: service-worker runtime helper declarations and reasoning adapter');
 } catch (error) {
   fail(`service-worker.js runtime helper guard failed: ${error.message}`);
