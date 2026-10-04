@@ -130,3 +130,44 @@ test('tail may span the boundary between document tabs', () => {
   assert.equal(baseline.messages[2].text, 'C');
   assert.equal(baseline.messages[3].text, 'D');
 });
+
+
+test('known exported heading does not contaminate previous message signature', () => {
+  const baseline = buildGoogleDocBaseline([
+    {
+      index: 0,
+      url: 'https://docs.google.com/document/d/doc/edit?tab=t.one',
+      text: [
+        'Пользователь:',
+        'Первое сообщение',
+        'ChatGPT:',
+        'Первый ответ',
+        'Новая тема',
+        'Пользователь:',
+        'Второе сообщение'
+      ].join('\n')
+    }
+  ], {
+    ignoredStandaloneLines: ['Новая тема']
+  });
+
+  assert.equal(baseline.messages.length, 3);
+  assert.equal(baseline.messages[1].text, 'Первый ответ');
+  assert.equal(baseline.messages[2].text, 'Второе сообщение');
+});
+
+test('known inter-document navigation labels are ignored inside message flow', () => {
+  const messages = parseGoogleDocTabMessages(
+    [
+      'ChatGPT:',
+      'Ответ',
+      'Разговор — 2'
+    ].join('\n'),
+    'https://docs.google.com/document/d/doc/edit',
+    0,
+    { ignoredStandaloneLines: ['Разговор — 2'] }
+  );
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].text, 'Ответ');
+});
