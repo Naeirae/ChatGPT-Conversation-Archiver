@@ -44,7 +44,7 @@ test('document split localizes tab and heading events and resets first tab', () 
   assert.equal(parts.length, 2);
   assert.deepEqual(parts[1].events, [
     { type: 'heading', messageNumber: 1, title: 'Вторая часть' },
-    { type: 'tab', messageNumber: 2 }
+    { type: 'tab', messageNumber: 2, title: '' }
   ]);
 });
 
