@@ -92,7 +92,9 @@ function renderRunLog(job) {
         ? 'восстановление по Google Doc'
         : job.captureMode === 'continue'
           ? 'продолжение'
-          : 'полный сбор'
+          : job.captureMode === 'images'
+            ? 'добор изображений'
+            : 'полный сбор'
   );
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
@@ -140,7 +142,8 @@ function renderHistory(history = []) {
     full: 'Полный сбор',
     continue: 'Добор нового',
     compare: 'Сверка',
-    sync: 'Восстановление'
+    sync: 'Восстановление',
+    images: 'Добор изображений'
   };
 
   for (const item of items.slice(0, 10)) {
@@ -462,7 +465,8 @@ function render(data) {
   $('archiveMeta').textContent = archive
     ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
       (archive.reasoningBlockCount ? ` · ${archive.reasoningBlockCount} блоков размышлений` : '') +
-      (archive.imageCount ? ` · ${archive.imageBinaryReady || 0} подготовлено · ${archive.imageBinaryFailed || 0} ошибок` : ''))
+      (archive.imageCount ? ` · ${archive.imageBinaryReady || 0} подготовлено · ${archive.imageBinaryFailed || 0} ошибок` : '') +
+      (archive.lastImageRecoveredCount ? ` · последний добор +${archive.lastImageRecoveredCount}` : ''))
     : '';
 
   // A failed new capture must not hide or disable the previously completed
@@ -470,6 +474,13 @@ function render(data) {
   $('newDoc').disabled = Boolean(running || !archive);
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
+  $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
+  $('patchRecoveredImages').disabled = Boolean(
+    running ||
+    !archive ||
+    !state.linkedDoc?.url ||
+    !(archive.recoveredImagePendingPatchCount || archive.lastImageRecoveredCount)
+  );
 
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
@@ -494,6 +505,13 @@ function render(data) {
       added
         ? `Сверка завершена: ${added} новых сообщений относительно локального архива. Архив не изменён.`
         : 'Сверка завершена: новых сообщений относительно локального архива нет. Архив не изменён.'
+    );
+  } else if (job?.status === 'done' && job?.captureMode === 'images') {
+    const recovered = Number(job.imageRecoveredCount || archive?.lastImageRecoveredCount || 0);
+    setStatus(
+      recovered
+        ? `Добор картинок завершён: найдено ${recovered} новых. Локальный архив обновлён.`
+        : 'Добор картинок завершён: новых изображений не найдено.'
     );
   } else if (done) {
     const added = archive.lastCaptureMode === 'continue' || archive.lastCaptureMode === 'sync'
@@ -675,6 +693,12 @@ $('retryCurrent').onclick = async () => {
         docUrl: $('docUrl').value.trim(),
         captureTarget: 'current'
       });
+    } else if (previousMode === 'images') {
+      setStatus('Повторяю добор картинок в обычном режиме…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
+        captureTarget: 'current'
+      });
     } else {
       setStatus('Повторяю полный сбор в обычном режиме…');
       result = await chrome.runtime.sendMessage({
@@ -770,6 +794,67 @@ $('clearHistory').onclick = async () => {
     $('clearHistory').disabled = false;
   }
 };
+$('recoverImages').onclick = async () => {
+  if (!state?.archive) {
+    setStatus('Сначала нужен локальный архив этого чата.', true);
+    return;
+  }
+  $('recoverImages').disabled = true;
+  setStatus('Повторно прохожу чат и добираю только изображения…');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить добор изображений.');
+    render({
+      ...state,
+      job: result.job,
+      archive: state?.archive || null,
+      draft: null,
+      canContinue: true
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('recoverImages').disabled = false;
+  }
+};
+
+$('patchRecoveredImages').onclick = async () => {
+  if (!state?.archive) {
+    setStatus('Нет локального архива для довставки картинок.', true);
+    return;
+  }
+  if (!state?.linkedDoc?.url) {
+    setStatus('У этого чата нет связанного Google Doc.', true);
+    return;
+  }
+
+  $('patchRecoveredImages').disabled = true;
+  setStatus('Ищу сообщения в связанном Google Doc и довставляю только добранные картинки…');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_PATCH_RECOVERED_IMAGES',
+      archiveId: state.archive.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось довставить изображения.');
+    if (result.noChanges) {
+      setStatus('Новых добранных картинок для этого Google Doc нет.');
+    } else {
+      setStatus(
+        `Довставка завершена: ${result.inserted || 0} изображений вставлено` +
+        (result.failed ? `, ${result.failed} не вставлено.` : '.')
+      );
+    }
+    await getState();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('patchRecoveredImages').disabled = false;
+  }
+};
+
 $('copyArchive').onclick = async () => {
   $('copyArchive').disabled = true;
   try {
