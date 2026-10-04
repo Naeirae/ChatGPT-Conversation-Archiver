@@ -859,6 +859,149 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   await recordRunHistory(next);
 }
 
+async function focusRecoverableCaptureTab() {
+  const job = await getJob();
+  if (!job?.captureTabId || !job?.draftId) {
+    throw new Error('Нет сохранённой вкладки незавершённого прохода.');
+  }
+
+  const tab = await chrome.tabs.get(job.captureTabId).catch(() => null);
+  if (!tab?.id || !isConversationUrl(tab.url || '')) {
+    throw new Error('Сохранённая вкладка сбора уже закрыта или ушла со страницы ChatGPT.');
+  }
+
+  await chrome.tabs.update(tab.id, { active: true });
+  if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  return { ok: true, tabId: tab.id };
+}
+
+async function resumeFailedCaptureFromWorkingTab() {
+  const failedJob = await getJob();
+  if (
+    !failedJob ||
+    failedJob.status !== 'error' ||
+    !failedJob.draftId ||
+    failedJob.captureTabId == null
+  ) {
+    throw new Error('Нет незавершённого прохода с сохранённой рабочей вкладкой.');
+  }
+
+  const draft = await getDraft(failedJob.draftId);
+  if (!draft?.messages?.length) throw new Error('Черновик незавершённого прохода не найден.');
+
+  const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
+  if (!captureTab?.id || !isConversationUrl(captureTab.url || '')) {
+    throw new Error('Рабочая вкладка незавершённого прохода уже недоступна.');
+  }
+
+  const boundary = failedJob.captureBoundary || null;
+  if (!boundary?.kind || !boundary?.key) {
+    throw new Error(
+      'У этого старого черновика нет сохранённой нижней метки снимка. ' +
+      'Автоматически продолжить его без риска захватить новые сообщения нельзя.'
+    );
+  }
+
+  const lastMessage = draft.messages[draft.messages.length - 1] || null;
+  if (!lastMessage) throw new Error('В черновике нет точки, от которой можно продолжить.');
+
+  const jobId = makeJobId();
+  await setJob({
+    jobId,
+    status: 'starting',
+    phase: 'top',
+    captureMode: 'resume-draft',
+    captureTarget: 'copy',
+    recoveryDraftId: draft.id,
+    draftId: draft.id,
+    draftCount: draft.messages.length,
+    recoveryAvailable: false,
+    captureTabId: captureTab.id,
+    message: 'Ищу последний сохранённый стык в оставленной рабочей вкладке…',
+    startedAt: Date.now(),
+    finishedAt: null
+  });
+
+  try {
+    await ensureChatGptContentScript(captureTab.id, jobId, {
+      mode: 'resume-draft',
+      resumeAnchorId: lastMessage.id || '',
+      resumeAnchorSignature: messageSignature(lastMessage.role, lastMessage.text),
+      existingDraftId: draft.id,
+      fixedCaptureBoundary: boundary
+    });
+  } catch (error) {
+    const message = error?.message || String(error);
+    await setJob({
+      status: 'error',
+      recoveryAvailable: true,
+      message,
+      finishedAt: Date.now()
+    });
+    throw error;
+  }
+
+  if (failedJob.sourceTabId != null) {
+    await chrome.tabs.update(failedJob.sourceTabId, { active: true }).catch(() => {});
+  }
+
+  const next = await appendRunLog({
+    status: 'running',
+    phase: 'top',
+    message: 'Продолжаю незавершённый проход в той же рабочей вкладке…'
+  }, {
+    level: 'info',
+    code: 'DRAFT_RECOVERY_STARTED',
+    message: 'Черновик найден; ищу последний сохранённый стык и продолжаю до исходной нижней метки.',
+    phase: 'top',
+    count: draft.messages.length
+  });
+
+  return { ok: true, job: next };
+}
+
+async function deleteDraftAndRecoveryTab(draftId = '') {
+  const job = await getJob();
+  const targetId = draftId || job?.draftId || '';
+  if (!targetId) return { ok: true, removed: false };
+
+  await removeDraft(targetId);
+
+  if (job?.draftId === targetId) {
+    if (
+      job.captureTarget === 'copy' &&
+      job.captureTabId != null &&
+      job.captureTabId !== job.sourceTabId
+    ) {
+      await chrome.tabs.remove(job.captureTabId).catch(() => {});
+    }
+
+    await setJob({
+      draftId: '',
+      draftCount: 0,
+      recoveryDraftId: '',
+      recoveryAvailable: false,
+      captureTabId: null
+    });
+  }
+
+  return { ok: true, removed: true };
+}
+
+async function deleteLocalArchive(archiveId = '') {
+  const archive = await getArchive(archiveId) || (!archiveId ? await getLastArchive() : null);
+  if (!archive?.id) return { ok: true, removed: false };
+
+  await deleteArchive(archive.id);
+
+  const job = await getJob();
+  if (job?.archiveId === archive.id) {
+    await setJob({ archiveId: '' });
+  }
+
+  return { ok: true, removed: true, archiveId: archive.id };
+}
+
 async function handleCaptureComplete(message) {
   const job = await getJob();
   if (!job || job.jobId !== message.jobId) return;
