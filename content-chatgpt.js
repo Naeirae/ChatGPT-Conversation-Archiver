@@ -1146,35 +1146,60 @@
     return clicks;
   }
 
-  function collect(map, order, settings) {
-    orderedTurns().forEach((turn, ordinal) => {
+  function collect(map, order, settings, stopBoundary = null) {
+    const turns = orderedTurns();
+
+    for (let ordinal = 0; ordinal < turns.length; ordinal++) {
+      const turn = turns[ordinal];
       const message = captureTurn(turn, ordinal, settings);
-      if (!message) return;
 
-      const existing = map.get(message.id);
-      if (!existing) {
-        order.push(message.id);
-        map.set(message.id, message);
-        return;
+      if (message) {
+        const existing = map.get(message.id);
+        if (!existing) {
+          order.push(message.id);
+          map.set(message.id, message);
+        } else {
+          // Virtualization can recreate the same turn after its reasoning block or
+          // images disappear from the current DOM. Never overwrite richer captured
+          // data with a poorer later snapshot.
+          if (!message.reasoningText && existing.reasoningText) {
+            message.reasoningText = existing.reasoningText;
+            message.reasoningHtml = existing.reasoningHtml;
+            message.reasoningLabel = existing.reasoningLabel;
+            message.reasoningStatus = existing.reasoningStatus;
+            message.reasoningCount = existing.reasoningCount;
+          }
+          if ((existing.images?.length || 0) > (message.images?.length || 0)) {
+            message.images = existing.images;
+            message.html = existing.html;
+          }
+
+          map.set(message.id, message);
+        }
       }
 
-      // Virtualization can recreate the same turn after its reasoning block or
-      // images disappear from the current DOM. Never overwrite richer captured
-      // data with a poorer later snapshot.
-      if (!message.reasoningText && existing.reasoningText) {
-        message.reasoningText = existing.reasoningText;
-        message.reasoningHtml = existing.reasoningHtml;
-        message.reasoningLabel = existing.reasoningLabel;
-        message.reasoningStatus = existing.reasoningStatus;
-        message.reasoningCount = existing.reasoningCount;
-      }
-      if ((existing.images?.length || 0) > (message.images?.length || 0)) {
-        message.images = existing.images;
-        message.html = existing.html;
-      }
+      // A full capture is a snapshot. Messages created after the bottom marker
+      // must never be absorbed just because they became visible while we were
+      // walking back down.
+      if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
+    }
+  }
 
-      map.set(message.id, message);
-    });
+  function messageMatchesBoundary(message, boundary) {
+    if (!message || !boundary) return false;
+    if (boundary.kind === 'stable') return message.id === boundary.key;
+    return messageTextSignature(message) === boundary.key;
+  }
+
+  function trimMessagesThroughBoundary(messages, boundary) {
+    const rows = [...(messages || [])];
+    const index = rows.findIndex(message => messageMatchesBoundary(message, boundary));
+    if (index < 0) return { messages: rows, found: false, trimmed: 0 };
+    return {
+      messages: rows.slice(0, index + 1),
+      found: true,
+      trimmed: Math.max(0, rows.length - index - 1)
+    };
   }
 
   function navigationRef(message) {
@@ -1772,10 +1797,10 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
 
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнут конец снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
+        collect(map, order, settings, boundary);
+        await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
           boundaryReached: true,
@@ -1798,6 +1823,17 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      if (boundaryIsVisible(boundary)) {
+        collect(map, order, settings, boundary);
+        await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
+        return;
+      }
       collect(map, order, settings);
 
       const nextSignature = visibleTurnSignature();
@@ -1863,7 +1899,7 @@
       const boundary = makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
 
-      collect(map, order, settings);
+      collect(map, order, settings, boundary);
 
       if (mode === 'full' || mode === 'images') {
         const navigationWindows = [];
@@ -1919,9 +1955,14 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
+      collect(map, order, settings, boundary);
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
+      if (!bounded.found) {
+        throw new Error('Метка конца снимка не найдена в итоговом проходе. Архив не сохранён, чтобы не смешать сообщения, появившиеся после запуска.');
+      }
+      capturedMessages = bounded.messages;
 
       if (mode === 'full' || mode === 'images') {
         const reconciliation = reconcileNavigationCoverage(
@@ -2138,7 +2179,11 @@
         previousMessageCount: previousCount,
         reasoningMessageCount,
         reasoningBlockCount,
-        lastMessageId: messages[messages.length - 1]?.id || ''
+        lastMessageId: messages[messages.length - 1]?.id || '',
+        captureBoundaryKind: boundary.kind || '',
+        captureBoundaryKey: boundary.key || '',
+        captureBoundaryRole: boundary.role || '',
+        captureBoundaryTrimmedNewerCount: bounded.trimmed || 0
       };
 
       const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
