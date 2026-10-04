@@ -22,6 +22,7 @@
     <div class="legend">
       <span><i class="dot tab-dot"></i> новая вкладка перед репликой</span>
       <span><i class="dot heading-dot"></i> подзаголовок перед репликой</span>
+      <span><i class="dot document-dot"></i> новый Google Doc из-за лимита размера</span>
       <span id="markerSummary" class="marker-summary"></span>
     </div>
     <p id="status" class="status">Пометки сохраняются автоматически локально.</p>
@@ -31,7 +32,7 @@
     <section class="intro">
       <p>
         Прокручивайте архив и ставьте пометки прямо у нужной реплики.
-        Первая вкладка Google Docs существует автоматически и считается первой. Для неё можно поставить подзаголовок у реплики №1. Названия самих вкладок после экспорта можно переименовать вручную.
+        Первая вкладка Google Docs существует автоматически и считается первой. Для неё можно поставить подзаголовок у реплики №1. Если архив приближается к безопасному пределу размера Google Docs, экспорт автоматически продолжится в новом документе; границы частей показаны ниже, а счёт вкладок в каждой части начинается заново.
       </p>
     </section>
     <section id="messages" class="messages" aria-live="polite"></section>
@@ -39,6 +40,7 @@
 
   <template id="messageTemplate">
     <article class="message-card">
+      <div class="document-boundary-label hidden">Новый Google Doc</div>
       <div class="boundary-label hidden">Новая вкладка</div>
       <div class="message-head">
         <div>
