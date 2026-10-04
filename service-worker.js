@@ -777,14 +777,34 @@ async function cancelCapture() {
     }
   } catch (_) {}
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
+  let preservedCaptureTabId = null;
+  if (
+    status === 'error' &&
+    draftId &&
+    job.captureTarget === 'copy' &&
+    job.captureTabId != null &&
+    job.captureTabId !== job.sourceTabId
+  ) {
+    try {
+      const tab = await chrome.tabs.get(job.captureTabId);
+      if (tab?.id && isConversationUrl(tab.url || '')) preservedCaptureTabId = tab.id;
+    } catch (_) {}
+  }
+
+  if (
+    job.captureTarget === 'copy' &&
+    job.captureTabId != null &&
+    job.captureTabId !== job.sourceTabId &&
+    preservedCaptureTabId == null
+  ) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
-    if (job.sourceTabId != null) {
-      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
-    }
+  }
+  if (job.sourceTabId != null) {
+    await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
   }
   await cleanupTemporaryBaseline(job);
 
+  const recoveryAvailable = Boolean(preservedCaptureTabId != null && draftId);
   const next = await appendRunLog({
     status: 'cancelled',
     message: 'Сбор остановлен.',
