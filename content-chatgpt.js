@@ -110,9 +110,9 @@
       let text = normalizeDisplayText(result?.text || '');
       if (!result?.ok || !text) return '';
 
-      const label = reasoningLabel(trigger);
-      if (label && text.startsWith(label)) {
-        text = normalizeDisplayText(text.slice(label.length));
+      const statusLabel = reasoningStatusLabelText(trigger);
+      if (statusLabel && text.startsWith(statusLabel)) {
+        text = normalizeDisplayText(text.slice(statusLabel.length));
       }
       if (!text || isReasoningStatusLabel(normalizeMatchText(text))) return '';
       return text;
@@ -428,6 +428,19 @@
   function isReasoningStatusLabel(value = '') {
     return REASONING_STATUS_RE.test(String(value || '').replace(/\s+/g, ' ').trim());
   }
+  function reasoningStatusLabelText(el) {
+    const raw = String(
+      el?.innerText ||
+      el?.textContent ||
+      el?.getAttribute?.('aria-label') ||
+      el?.getAttribute?.('title') ||
+      ''
+    ).replace(/\r/g, '').trim();
+    if (!raw) return '';
+    const firstLine = raw.split('\n').map(part => part.trim()).find(Boolean) || '';
+    return isReasoningStatusLabel(firstLine) ? firstLine : '';
+  }
+
 
   function nodeComesBefore(a, b) {
     if (!a || !b || a === b) return false;
@@ -520,10 +533,11 @@
     if (messageRoot && messageRoot.contains(el)) return false;
 
     const label = reasoningLabel(el);
+    const statusLabel = reasoningStatusLabelText(el);
     // Strong visible status labels are already associated with the nearest
     // following assistant turn by reasoningStatusCandidates(). They must not
     // be rejected by the older "previous turn window" heuristic.
-    if (isReasoningStatusLabel(label)) return true;
+    if (statusLabel) return true;
     if (!nodeIsInReasoningWindow(el, turn, messageRoot)) return false;
 
     if (!el.matches('button, [role="button"], [aria-expanded], [aria-controls], [data-state="open"], [data-state="closed"]')) {
@@ -649,7 +663,7 @@
     }
 
     const statusLabel =
-      candidates.map(reasoningLabel).find(isReasoningStatusLabel) || '';
+      candidates.map(reasoningStatusLabelText).find(Boolean) || '';
     const labels = candidates.map(reasoningLabel).filter(Boolean);
 
     if (physicalCopies.length) {
@@ -1060,11 +1074,12 @@
     return normalizeImageBlob(await response.blob());
   }
 
-  async function hydrateMessageImages(messages) {
+  async function hydrateMessageImages(messages, { onlyMissing = false } = {}) {
     const unique = new Map();
     for (const message of messages || []) {
       for (const image of message.images || []) {
         if (!image?.src) continue;
+        if (onlyMissing && image.binaryStatus === 'ready' && image.dataUrl) continue;
         if (!unique.has(image.src)) unique.set(image.src, []);
         unique.get(image.src).push(image);
       }
@@ -1378,6 +1393,82 @@
       navigationCount: navMessages.length,
       chronologicalCount: (capturedMessages || []).length
     };
+  }
+
+  function mergeImageRecords(existingImages, scannedImages) {
+    const merged = (existingImages || []).map(image => ({ ...image }));
+    const seen = new Set(merged.map(image => String(image?.src || '')).filter(Boolean));
+    const added = [];
+
+    for (const image of scannedImages || []) {
+      const src = String(image?.src || '');
+      if (!src || seen.has(src)) continue;
+      seen.add(src);
+      const next = {
+        ...image,
+        index: merged.length,
+        dataUrl: image?.dataUrl || '',
+        binaryStatus: image?.binaryStatus || 'pending',
+        binaryError: image?.binaryError || ''
+      };
+      merged.push(next);
+      added.push(next);
+    }
+
+    merged.forEach((image, index) => { image.index = index; });
+    return { images: merged, added };
+  }
+
+  function imageAttachmentHtml(image, index) {
+    const src = String(image?.src || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
+    const alt = String(image?.alt || '')
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;');
+    return '<p data-archiver-attachment="true"><img src="' + src +
+      '" alt="' + alt + '" data-archiver-image-index="' + index + '"></p>';
+  }
+
+  function appendRecoveredImageMarkup(html, images, addedImages) {
+    let next = String(html || '');
+    for (const image of addedImages || []) {
+      const index = images.findIndex(item => item.src === image.src);
+      if (index < 0) continue;
+      next += imageAttachmentHtml(image, index);
+    }
+    return next;
+  }
+
+  function mergeRecoveredImagesIntoArchive(existingMessages, scannedMessages) {
+    const scanned = scannedMessages || [];
+    const result = (existingMessages || []).map(message => ({ ...message }));
+    const recovered = [];
+
+    const findScanned = message => scanned.find(candidate =>
+      sameNavigationRef(navigationRef(message), navigationRef(candidate))
+    ) || null;
+
+    for (let i = 0; i < result.length; i++) {
+      const target = result[i];
+      const source = findScanned(target);
+      if (!source?.images?.length) continue;
+
+      const merged = mergeImageRecords(target.images || [], source.images || []);
+      if (!merged.added.length) continue;
+
+      target.images = merged.images;
+      target.html = appendRecoveredImageMarkup(target.html, merged.images, merged.added);
+      for (const image of merged.added) {
+        recovered.push({
+          messageId: target.id || '',
+          messageSignature: messageTextSignature(target),
+          src: image.src || ''
+        });
+      }
+    }
+
+    return { messages: result, recovered };
   }
 
   async function updateJob(patch) {
@@ -1732,7 +1823,7 @@
     state.paused = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'images'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -1755,7 +1846,9 @@
       await progress(
         mode === 'full'
           ? 'Этап 1/3: фиксирую конец снимка…'
-          : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
+          : mode === 'images'
+            ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
+            : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
         0,
         { phase: 'top', force: true, captureMode: mode }
       );
@@ -1772,7 +1865,7 @@
 
       collect(map, order, settings);
 
-      if (mode === 'full') {
+      if (mode === 'full' || mode === 'images') {
         const navigationWindows = [];
         await reachTop(map, order, settings, navigationWindows);
         navigationMessages = [...map.values()];
@@ -1790,7 +1883,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full') {
+      if (mode === 'full' || mode === 'images') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -1830,7 +1923,7 @@
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
 
-      if (mode === 'full') {
+      if (mode === 'full' || mode === 'images') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -1890,7 +1983,7 @@
         }
       }
 
-      if (mode !== 'full') {
+      if (mode !== 'full' && mode !== 'images') {
         const anchorIndex = capturedMessages.findIndex(item =>
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
@@ -1906,7 +1999,7 @@
         capturedMessages = capturedMessages.slice(anchorIndex + 1);
       }
 
-      if (mode === 'full' && !capturedMessages.length) {
+      if ((mode === 'full' || mode === 'images') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -1914,8 +2007,39 @@
       const archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href));
       let addedCount = capturedMessages.length;
       let previousCount = 0;
+      let recoveredImageRefs = [];
 
-      if (mode !== 'full' && existingArchiveId) {
+      if (mode === 'images') {
+        if (!existingArchiveId) throw new Error('Для добора изображений нужен существующий локальный архив.');
+        const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
+        const existing = stored['archive:' + existingArchiveId];
+        if (!existing?.messages?.length) throw new Error('Локальный архив для добора изображений недоступен.');
+
+        previousCount = existing.messages.length;
+
+        // The upward and downward scans can each expose a different subset of
+        // lazy-loaded images. Union them before merging into the saved archive.
+        const scanPool = [];
+        const scanByRef = new Map();
+        for (const candidate of [...navigationMessages, ...capturedMessages]) {
+          const ref = navigationRef(candidate);
+          const key = ref.id || ref.signature;
+          if (!key) continue;
+          const previous = scanByRef.get(key);
+          if (!previous) {
+            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
+            continue;
+          }
+          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
+          previous.images = merged.images;
+        }
+        scanPool.push(...scanByRef.values());
+
+        const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
+        messages = merged.messages;
+        recoveredImageRefs = merged.recovered;
+        addedCount = 0;
+      } else if (mode !== 'full' && existingArchiveId) {
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
         const existing = stored['archive:' + existingArchiveId];
         if (!existing?.messages) throw new Error('Локальный архив для продолжения недоступен.');
@@ -1986,8 +2110,13 @@
 
       const binaryTargetMessages = mode === 'full'
         ? messages
-        : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
-      const binaryStats = await hydrateMessageImages(binaryTargetMessages);
+        : mode === 'images'
+          ? messages.filter(message => recoveredImageRefs.some(ref =>
+              (ref.messageId && ref.messageId === message.id) ||
+              (ref.messageSignature && ref.messageSignature === messageTextSignature(message))
+            ))
+          : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
+      const binaryStats = await hydrateMessageImages(binaryTargetMessages, { onlyMissing: mode === 'images' });
 
       const allImages = messages.flatMap(item => item.images || []);
       const conversation = {
@@ -2002,6 +2131,8 @@
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
         lastCaptureAddedCount: addedCount,
+        lastImageRecoveredCount: recoveredImageRefs.length,
+        lastRecoveredImageRefs: recoveredImageRefs,
         previousMessageCount: previousCount,
         reasoningMessageCount,
         reasoningBlockCount,
@@ -2017,9 +2148,12 @@
           status: 'done',
           message: mode === 'full'
             ? 'Переписка собрана.'
-            : ('Архив продолжен: +' + addedCount + ' сообщений.'),
+            : mode === 'images'
+              ? ('Добор изображений завершён: +' + recoveredImageRefs.length + '.')
+              : ('Архив продолжен: +' + addedCount + ' сообщений.'),
           count: messages.length,
           addedCount,
+          imageRecoveredCount: recoveredImageRefs.length,
           imageCount: conversation.imageCount,
           reasoningMessageCount,
           reasoningBlockCount,
@@ -2036,6 +2170,7 @@
           archiveId,
           count: messages.length,
           addedCount,
+          imageRecoveredCount: recoveredImageRefs.length,
           mode
         });
       } catch (_) {}
