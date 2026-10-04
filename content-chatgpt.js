@@ -1162,6 +1162,215 @@
     });
   }
 
+  function navigationRef(message) {
+    return {
+      id: String(message?.id || ''),
+      signature: message ? messageTextSignature(message) : ''
+    };
+  }
+
+  function sameNavigationRef(a, b) {
+    if (!a || !b) return false;
+    if (a.id && b.id && a.id === b.id) return true;
+    return Boolean(a.signature && b.signature && a.signature === b.signature);
+  }
+
+  function recordNavigationWindow(windows, settings) {
+    if (!Array.isArray(windows)) return;
+    const refs = orderedTurns()
+      .map((turn, ordinal) => captureTurn(turn, ordinal, settings))
+      .filter(Boolean)
+      .map(navigationRef);
+    if (!refs.length) return;
+
+    const previous = windows[windows.length - 1] || [];
+    if (
+      previous.length === refs.length &&
+      previous.every((ref, index) => sameNavigationRef(ref, refs[index]))
+    ) return;
+
+    windows.push(refs);
+  }
+
+  function buildNavigationSequence(windows) {
+    let sequence = [];
+
+    for (const windowRefs of windows || []) {
+      const refs = (windowRefs || []).filter(ref => ref && (ref.id || ref.signature));
+      if (!refs.length) continue;
+      if (!sequence.length) {
+        sequence = [...refs];
+        continue;
+      }
+
+      const allKnown = refs.every(ref => sequence.some(existing => sameNavigationRef(ref, existing)));
+      if (allKnown) continue;
+
+      let overlap = 0;
+      const maxOverlap = Math.min(refs.length, sequence.length);
+      for (let size = maxOverlap; size >= 1; size--) {
+        let same = true;
+        for (let offset = 0; offset < size; offset++) {
+          if (!sameNavigationRef(refs[refs.length - size + offset], sequence[offset])) {
+            same = false;
+            break;
+          }
+        }
+        if (same) {
+          overlap = size;
+          break;
+        }
+      }
+
+      if (overlap) {
+        sequence = refs.slice(0, refs.length - overlap).concat(sequence);
+        continue;
+      }
+
+      let pivot = null;
+      for (let i = 0; i < refs.length && !pivot; i++) {
+        const j = sequence.findIndex(existing => sameNavigationRef(refs[i], existing));
+        if (j >= 0) pivot = { i, j };
+      }
+
+      if (pivot) {
+        sequence = refs.slice(0, pivot.i).concat(sequence);
+        continue;
+      }
+
+      // Upward traversal only moves toward older turns. If virtualization gives
+      // us a non-overlapping window, its visible messages are still older than
+      // the sequence already observed below it.
+      const unseen = refs.filter(ref => !sequence.some(existing => sameNavigationRef(ref, existing)));
+      sequence = unseen.concat(sequence);
+    }
+
+    const deduped = [];
+    for (const ref of sequence) {
+      if (!deduped.some(existing => sameNavigationRef(ref, existing))) deduped.push(ref);
+    }
+    return deduped;
+  }
+
+  function mergeRicherCapture(base, fallback) {
+    if (!base) return fallback;
+    if (!fallback) return base;
+    const merged = { ...fallback, ...base };
+    if (!base.reasoningText && fallback.reasoningText) {
+      merged.reasoningText = fallback.reasoningText;
+      merged.reasoningHtml = fallback.reasoningHtml;
+      merged.reasoningLabel = fallback.reasoningLabel;
+      merged.reasoningStatus = fallback.reasoningStatus;
+      merged.reasoningCount = fallback.reasoningCount;
+    }
+    if ((fallback.images?.length || 0) > (base.images?.length || 0)) {
+      merged.images = fallback.images;
+      merged.html = fallback.html;
+    }
+    return merged;
+  }
+
+  function reconcileNavigationCoverage(capturedMessages, navigationMessages, navigationSequence) {
+    const result = [...(capturedMessages || [])];
+    const navMessages = [...(navigationMessages || [])];
+
+    const matchesRef = (message, ref) => sameNavigationRef(navigationRef(message), ref);
+    const findResultIndex = ref => result.findIndex(message => matchesRef(message, ref));
+    const findNavigationMessage = ref => navMessages.find(message => matchesRef(message, ref)) || null;
+
+    // First use the upward pass as a richness fallback for messages that are
+    // already present in the chronological pass.
+    for (let i = 0; i < result.length; i++) {
+      const fallback = navMessages.find(message =>
+        sameNavigationRef(navigationRef(result[i]), navigationRef(message))
+      );
+      if (fallback) result[i] = mergeRicherCapture(result[i], fallback);
+    }
+
+    const missingGroups = [];
+    let current = [];
+    for (const ref of navigationSequence || []) {
+      if (findResultIndex(ref) >= 0) {
+        if (current.length) {
+          missingGroups.push(current);
+          current = [];
+        }
+      } else {
+        current.push(ref);
+      }
+    }
+    if (current.length) missingGroups.push(current);
+
+    let insertedCount = 0;
+    let unresolvedCount = 0;
+
+    for (const group of missingGroups) {
+      const firstRef = group[0];
+      const lastRef = group[group.length - 1];
+      const firstNavIndex = (navigationSequence || []).findIndex(ref => sameNavigationRef(ref, firstRef));
+      let lastNavIndex = firstNavIndex;
+      for (let i = firstNavIndex; i < (navigationSequence || []).length; i++) {
+        if (sameNavigationRef(navigationSequence[i], lastRef)) {
+          lastNavIndex = i;
+          break;
+        }
+      }
+
+      let previousRef = null;
+      for (let i = firstNavIndex - 1; i >= 0; i--) {
+        if (findResultIndex(navigationSequence[i]) >= 0) {
+          previousRef = navigationSequence[i];
+          break;
+        }
+      }
+
+      let nextRef = null;
+      for (let i = lastNavIndex + 1; i < (navigationSequence || []).length; i++) {
+        if (findResultIndex(navigationSequence[i]) >= 0) {
+          nextRef = navigationSequence[i];
+          break;
+        }
+      }
+
+      const messages = group.map(findNavigationMessage).filter(Boolean);
+      if (messages.length !== group.length) {
+        unresolvedCount += group.length;
+        continue;
+      }
+
+      const previousIndex = previousRef ? findResultIndex(previousRef) : -1;
+      const nextIndex = nextRef ? findResultIndex(nextRef) : -1;
+      let insertAt = -1;
+
+      if (previousRef && nextRef && previousIndex >= 0 && nextIndex > previousIndex) {
+        insertAt = nextIndex;
+      } else if (!previousRef && nextRef && nextIndex >= 0) {
+        insertAt = nextIndex;
+      } else if (previousRef && !nextRef && previousIndex >= 0) {
+        insertAt = previousIndex + 1;
+      }
+
+      if (insertAt < 0) {
+        unresolvedCount += group.length;
+        continue;
+      }
+
+      result.splice(insertAt, 0, ...messages);
+      insertedCount += messages.length;
+    }
+
+    const unresolvedRefs = (navigationSequence || []).filter(ref => findResultIndex(ref) < 0);
+    unresolvedCount = Math.max(unresolvedCount, unresolvedRefs.length);
+
+    return {
+      messages: result,
+      insertedCount,
+      unresolvedCount,
+      navigationCount: navMessages.length,
+      chronologicalCount: (capturedMessages || []).length
+    };
+  }
+
   async function updateJob(patch) {
     const data = await chrome.storage.local.get('activeCaptureJob');
     const current = data.activeCaptureJob || {};
@@ -1277,7 +1486,7 @@
     return null;
   }
 
-  async function reachTop(map, order, settings) {
+  async function reachTop(map, order, settings, navigationWindows = null) {
     let confirmedIdle = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -1296,6 +1505,7 @@
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
+      recordNavigationWindow(navigationWindows, settings);
 
       const turnsBefore = orderedTurns();
       const signature = visibleTurnSignature();
@@ -1316,6 +1526,7 @@
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
+      recordNavigationWindow(navigationWindows, settings);
 
       let nextSignature = visibleTurnSignature();
       let turnsAfter = orderedTurns();
@@ -1345,6 +1556,8 @@
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
+        recordNavigationWindow(navigationWindows, settings);
+      recordNavigationWindow(navigationWindows, settings);
 
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
@@ -1524,6 +1737,8 @@
     let navigationHighWater = 0;
     let navigationFirstId = '';
     let navigationFirstSignature = '';
+    let navigationMessages = [];
+    let navigationSequence = [];
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
 
@@ -1550,7 +1765,10 @@
       collect(map, order, settings);
 
       if (mode === 'full') {
-        await reachTop(map, order, settings);
+        const navigationWindows = [];
+        await reachTop(map, order, settings, navigationWindows);
+        navigationMessages = [...map.values()];
+        navigationSequence = buildNavigationSequence(navigationWindows);
       } else {
         const matched = await reachResumeAnchor(
           resumeAnchorId,
@@ -1586,30 +1804,6 @@
 
       await walkDown(map, order, settings, boundary, { bursts: 3 });
 
-      if (mode === 'full' && map.size < navigationHighWater) {
-        const firstAttemptCount = map.size;
-        await progress(
-          'Хронологический проход собрал ' + firstAttemptCount + ' из как минимум ' +
-            navigationHighWater + ' сообщений · повторяю медленнее…',
-          firstAttemptCount,
-          {
-            phase: 'walk',
-            navigationHighWater,
-            chronologicalCount: firstAttemptCount,
-            coverageRetry: true,
-            force: true
-          }
-        );
-
-        const rewindMap = new Map();
-        const rewindOrder = [];
-        await reachTop(rewindMap, rewindOrder, settings);
-
-        map.clear();
-        order.length = 0;
-        await walkDown(map, order, settings, boundary, { bursts: 1 });
-      }
-
       await progress(
         mode === 'compare'
           ? 'Этап 3/3: считаю новые сообщения…'
@@ -1629,20 +1823,61 @@
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
 
       if (mode === 'full') {
+        const reconciliation = reconcileNavigationCoverage(
+          capturedMessages,
+          navigationMessages,
+          navigationSequence
+        );
+        capturedMessages = reconciliation.messages;
+
+        // Keep the best first-pass result as the draft source too. The old
+        // coverage retry cleared map/order and could destroy a usable capture.
+        map.clear();
+        order.length = 0;
+        for (const message of capturedMessages) {
+          if (!message?.id || map.has(message.id)) continue;
+          map.set(message.id, message);
+          order.push(message.id);
+        }
+
+        await progress(
+          reconciliation.insertedCount
+            ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
+               ' пропущенных сообщений · итог ' + capturedMessages.length)
+            : ('Сверка проходов: пропусков не найдено · итог ' + capturedMessages.length),
+          capturedMessages.length,
+          {
+            phase: 'finalizing',
+            navigationHighWater,
+            chronologicalCount: reconciliation.chronologicalCount,
+            reconciledInsertedCount: reconciliation.insertedCount,
+            reconciledUnresolvedCount: reconciliation.unresolvedCount,
+            force: true
+          }
+        );
+
         const finalCount = capturedMessages.length;
         const hasNavigationFirst = capturedMessages.some(item =>
           (navigationFirstId && item.id === navigationFirstId) ||
           (navigationFirstSignature && messageTextSignature(item) === navigationFirstSignature)
         );
 
-        if (finalCount < navigationHighWater || (navigationFirstId || navigationFirstSignature) && !hasNavigationFirst) {
+        if (
+          reconciliation.unresolvedCount > 0 ||
+          finalCount < navigationHighWater ||
+          (navigationFirstId || navigationFirstSignature) && !hasNavigationFirst
+        ) {
           const missing = Math.max(0, navigationHighWater - finalCount);
           throw new Error(
-            'Полный архив не сохранён: при проходе к началу было найдено как минимум ' +
-            navigationHighWater + ' сообщений, а хронологический проход собрал ' + finalCount +
-            (missing ? ' (не хватает минимум ' + missing + ').' : '.') +
-            (!hasNavigationFirst ? ' Самая ранняя найденная реплика также отсутствует в итоговом проходе.' : '') +
-            ' Неполный результат оставлен только как черновик.'
+            'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
+            'Навигационный минимум: ' + navigationHighWater +
+            ', хронологический проход: ' + reconciliation.chronologicalCount +
+            ', после сверки: ' + finalCount +
+            (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
+            (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
+            (missing ? ', не хватает минимум ' + missing : '') +
+            (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
+            ' Результат сохранён как черновик; повторный полный проход автоматически не запускается.'
           );
         }
       }
