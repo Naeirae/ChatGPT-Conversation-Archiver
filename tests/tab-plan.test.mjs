@@ -97,3 +97,25 @@ test('buildTabbedSections keeps a heading on the implicit first tab', () => {
   assert.deepEqual(sections[0].messages[0].archiveHeadings, ['Первая тема']);
   assert.deepEqual(sections[1].messages[0].archiveHeadings, ['Вторая тема']);
 });
+
+
+test('one implicit first tab plus every later tab marker defines the physical tab count', () => {
+  const messages = Array.from({ length: 8 }, (_, index) => ({
+    id: String(index + 1),
+    role: index % 2 ? 'assistant' : 'user',
+    text: 'm' + (index + 1)
+  }));
+  const events = parseTabPlan(
+    '3 | вкладка\n5 | вкладка\n7 | вкладка',
+    messages.length
+  );
+
+  const sections = buildTabbedSections(messages, events);
+  const tabMarkers = events.filter(event => event.type === 'tab');
+
+  assert.equal(sections.length, 1 + tabMarkers.length);
+  assert.deepEqual(
+    sections.map(section => section.startMessageNumber),
+    [1, 3, 5, 7]
+  );
+});
