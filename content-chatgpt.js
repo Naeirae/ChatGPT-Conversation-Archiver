@@ -354,6 +354,19 @@
     return String(role || 'unknown') + ':p:' + hashText(normalized.slice(0, 240));
   }
 
+  function normalizedBoundary(value) {
+    if (!value || typeof value !== 'object') return null;
+    const kind = value.kind === 'stable' ? 'stable' : value.kind === 'signature' ? 'signature' : '';
+    const key = String(value.key || '').trim();
+    if (!kind || !key) return null;
+    return {
+      kind,
+      key,
+      role: String(value.role || ''),
+      ordinal: Number.isFinite(Number(value.ordinal)) ? Number(value.ordinal) : -1
+    };
+  }
+
   function makeCaptureBoundary(turns) {
     for (let i = turns.length - 1; i >= 0; i--) {
       const key = turnStableKey(turns[i]);
@@ -1859,13 +1872,15 @@
     state.paused = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'images'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
       ? options.resumeTailSignatures.filter(Boolean)
       : [];
     const existingArchiveId = String(options.existingArchiveId || '');
+    const existingDraftId = String(options.existingDraftId || '');
+    const fixedCaptureBoundary = normalizedBoundary(options.fixedCaptureBoundary);
     const map = new Map();
     const order = [];
     let chronologicalStarted = false;
@@ -1884,7 +1899,9 @@
           ? 'Этап 1/3: фиксирую конец снимка…'
           : mode === 'images'
             ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
-            : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
+            : mode === 'resume-draft'
+              ? 'Этап 1/3: восстанавливаю место незавершённого прохода…'
+              : 'Этап 1/3: фиксирую новый конец и ищу сохраненный стык…',
         0,
         { phase: 'top', force: true, captureMode: mode }
       );
@@ -1896,8 +1913,25 @@
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
       }
 
-      const boundary = makeCaptureBoundary(turns);
+      const boundary = fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
+
+      await progress(
+        fixedCaptureBoundary
+          ? 'Продолжаю незавершённый снимок до исходной нижней метки…'
+          : 'Нижняя метка снимка зафиксирована.',
+        0,
+        {
+          phase: 'top',
+          force: true,
+          captureBoundary: {
+            kind: boundary.kind,
+            key: boundary.key,
+            role: boundary.role || '',
+            ordinal: Number(boundary.ordinal ?? -1)
+          }
+        }
+      );
 
       collect(map, order, settings, boundary);
 
@@ -2052,7 +2086,30 @@
       let previousCount = 0;
       let recoveredImageRefs = [];
 
-      if (mode === 'images') {
+      if (mode === 'resume-draft') {
+        if (!existingDraftId) throw new Error('Для продолжения нужен сохранённый черновик.');
+        const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+        const existing = stored['draft:' + existingDraftId];
+        if (!existing?.messages?.length) throw new Error('Черновик незавершённого прохода недоступен.');
+
+        previousCount = existing.messages.length;
+        const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+        const existingSignatures = new Set(
+          existing.messages
+            .filter(item => cleanMessageText(item.text || '', item.role || ''))
+            .map(messageTextSignature)
+        );
+
+        const delta = capturedMessages.filter(item => {
+          if (item.id && existingIds.has(item.id)) return false;
+          const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
+          if (hasText && existingSignatures.has(messageTextSignature(item))) return false;
+          return true;
+        });
+
+        addedCount = delta.length;
+        messages = existing.messages.concat(delta);
+      } else if (mode === 'images') {
         if (!existingArchiveId) throw new Error('Для добора изображений нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
         const existing = stored['archive:' + existingArchiveId];
@@ -2197,7 +2254,9 @@
             ? 'Переписка собрана.'
             : mode === 'images'
               ? ('Добор изображений завершён: +' + recoveredImageRefs.length + '.')
-              : ('Архив продолжен: +' + addedCount + ' сообщений.'),
+              : mode === 'resume-draft'
+                ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений.')
+                : ('Архив продолжен: +' + addedCount + ' сообщений.'),
           count: messages.length,
           addedCount,
           imageRecoveredCount: recoveredImageRefs.length,
@@ -2230,7 +2289,27 @@
       let draftCount = 0;
 
       if (chronologicalStarted && map.size > 0) {
-        const draftMessages = order.map(id => map.get(id)).filter(Boolean);
+        let draftMessages = order.map(id => map.get(id)).filter(Boolean);
+
+        if (mode === 'resume-draft' && existingDraftId) {
+          const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+          const existing = stored['draft:' + existingDraftId];
+          if (existing?.messages?.length) {
+            const seenIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+            const seenSignatures = new Set(
+              existing.messages
+                .filter(item => cleanMessageText(item.text || '', item.role || ''))
+                .map(messageTextSignature)
+            );
+            const delta = draftMessages.filter(item => {
+              if (item.id && seenIds.has(item.id)) return false;
+              const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
+              return !hasText || !seenSignatures.has(messageTextSignature(item));
+            });
+            draftMessages = existing.messages.concat(delta);
+          }
+        }
+
         if (draftMessages.length) {
           draftId = 'draft-' + jobId;
           draftCount = draftMessages.length;
@@ -2290,6 +2369,8 @@
         mode: message.mode,
         resumeAnchorId: message.resumeAnchorId,
         existingArchiveId: message.existingArchiveId,
+        existingDraftId: message.existingDraftId,
+        fixedCaptureBoundary: message.fixedCaptureBoundary,
         resumeAnchorSignature: message.resumeAnchorSignature,
         resumeTailSignatures: message.resumeTailSignatures
       }).catch(() => {});
