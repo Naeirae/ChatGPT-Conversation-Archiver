@@ -233,3 +233,26 @@ test('removeDraft deletes only the selected draft', async () => {
   assert.equal(await store.getDraft('d1'), null);
   assert.equal((await store.getDraft('d2')).id, 'd2');
 });
+
+
+test('listDrafts returns saved unfinished-pass payloads newest first', async () => {
+  const storage = fakeStorage({
+    [STORAGE_KEYS.draftPrefix + 'old']: {
+      id: 'old',
+      capturedAt: '2026-10-01T10:00:00Z',
+      messages: [{ id: 'm1' }]
+    },
+    [STORAGE_KEYS.draftPrefix + 'new']: {
+      id: 'new',
+      capturedAt: '2026-10-02T10:00:00Z',
+      messages: [{ id: 'm1' }, { id: 'm2' }]
+    },
+    unrelated: { id: 'ignore' }
+  });
+  const store = createArchiveStore(storage);
+
+  const passes = await store.listDrafts();
+
+  assert.deepEqual(passes.map(item => item.id), ['new', 'old']);
+  assert.equal(passes[0].messages.length, 2);
+});
