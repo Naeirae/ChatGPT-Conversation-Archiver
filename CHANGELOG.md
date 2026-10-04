@@ -1,3 +1,13 @@
+## 0.3.42
+
+- add automatic multi-document export for oversized archives with a safe 850k-character budget per Google Doc;
+- name document parts as «[conversation title] — N» when the archive spans multiple documents; if automatic renaming is unavailable, the part title is still inserted in the document header;
+- add bidirectional cross-document navigation: each later part links back to the previous part, and each previous part gets a Ctrl+K link to the next part;
+- reset Google Docs tab counting inside every new document; the planner now shows automatic document boundaries and total physical tab count across parts;
+- persist the linked document chain on the conversation while keeping the final part as the continuation target;
+- prevent known exported H2 headings and cross-document navigation labels from contaminating Google Docs baseline message signatures during sync/recovery;
+- add pure planning tests for document splitting, local tab-event reset, part titles, and boundary detection.
+
 ## 0.3.41
 
 - remove the legacy "slow coverage retry" state from new runs and from the popup; current capture has only the normal navigation pass plus one chronological pass;
