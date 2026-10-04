@@ -460,6 +460,17 @@ function render(data) {
   renderRunLog(job);
   renderDraft(draft);
 
+  const recoverableDraft = Boolean(
+    draft &&
+    job?.status === 'error' &&
+    job?.recoveryAvailable &&
+    job?.captureTabId != null
+  );
+  $('openFailedCapture').classList.toggle('hidden', !recoverableDraft);
+  $('resumeFailedCapture').classList.toggle('hidden', !recoverableDraft);
+  $('draftRecoveryHint').classList.toggle('hidden', !recoverableDraft);
+  $('deleteDraft').disabled = Boolean(running || !draft);
+
   $('archive').classList.toggle('hidden', !archive);
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
@@ -475,6 +486,7 @@ function render(data) {
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
   $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
+  $('deleteArchive').disabled = Boolean(running || !archive);
   $('patchRecoveredImages').disabled = Boolean(
     running ||
     !archive ||
@@ -868,6 +880,76 @@ $('copyArchive').onclick = async () => {
     setStatus(error.message || String(error), true);
   } finally {
     $('copyArchive').disabled = false;
+  }
+};
+
+$('openFailedCapture').onclick = async () => {
+  $('openFailedCapture').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть вкладку сбора.');
+    setStatus('Рабочая вкладка открыта. При необходимости домотайте её ближе к месту обрыва, затем нажмите «Найти стык и продолжить».');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('openFailedCapture').disabled = false;
+  }
+};
+
+$('resumeFailedCapture').onclick = async () => {
+  $('resumeFailedCapture').disabled = true;
+  try {
+    setStatus('Ищу последний сохранённый стык в оставленной рабочей вкладке…');
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый проход.');
+    await getState();
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('resumeFailedCapture').disabled = false;
+  }
+};
+
+$('deleteDraft').onclick = async () => {
+  const draft = state?.draft;
+  if (!draft) return;
+  if (!confirm('Удалить этот черновик незавершённого прохода? Сохранённая рабочая вкладка этого прохода тоже будет закрыта.')) return;
+
+  $('deleteDraft').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_DELETE_DRAFT',
+      draftId: draft.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить черновик.');
+    await getState();
+    setStatus('Черновик удалён.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('deleteDraft').disabled = false;
+  }
+};
+
+$('deleteArchive').onclick = async () => {
+  const archive = state?.archive;
+  if (!archive) return;
+  if (!confirm('Удалить этот локальный архив? Связанный Google Doc удалён не будет.')) return;
+
+  $('deleteArchive').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_DELETE_ARCHIVE',
+      archiveId: archive.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить локальный архив.');
+    await getState();
+    setStatus('Локальный архив удалён. Связанный Google Doc, если он был, не изменён.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('deleteArchive').disabled = false;
   }
 };
 
