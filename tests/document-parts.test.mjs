@@ -35,7 +35,7 @@ test('planGoogleDocParts splits before a message that would exceed the budget', 
 test('document split localizes tab and heading events and resets first tab', () => {
   const messages = [msg('a'.repeat(600)), msg('b'.repeat(600)), msg('c')];
   const events = [
-    { type: 'tab', messageNumber: 2 },
+    { type: 'tab', messageNumber: 2, title: '' },
     { type: 'heading', messageNumber: 2, title: 'Вторая часть' },
     { type: 'tab', messageNumber: 3 }
   ];
