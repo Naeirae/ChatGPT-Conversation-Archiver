@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.38
+
+- freeze every capture to the exact bottom message visible when collection starts;
+- treat that message as the snapshot boundary and stop the chronological walk at it even if the source conversation receives newer messages in parallel;
+- never collect messages below the boundary when the final viewport contains both the original marker and newer turns;
+- defensively trim the final captured list through the boundary before save and fail closed if the marker cannot be found;
+- persist boundary kind/key/role plus the count of any trimmed newer messages for diagnostics;
+- this lets the user keep chatting in the same conversation while the working-copy capture runs without moving the archive's endpoint;
+- local completed archives remain in chrome.storage.local across in-place updater file replacement and chrome.runtime.reload; removing/re-adding from another folder is still a different extension install;
+- manifest -> 0.3.38.
+
 ## 0.3.37
 
 - keep the 0.3.36 removal of the destructive automatic second full capture pass;
