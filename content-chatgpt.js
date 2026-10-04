@@ -2402,9 +2402,13 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message && message.type === 'ARCHIVER_PING') {
+      sendResponse({ ok: true, version: EXTENSION_VERSION });
+      return false;
+    }
     if (message && message.type === 'ARCHIVER_START_CAPTURE') {
       if (state.running) {
-        sendResponse({ ok: true, running: true, jobId: state.jobId });
+        sendResponse({ ok: true, running: true, jobId: state.jobId, version: EXTENSION_VERSION });
         return false;
       }
       captureConversation(message.jobId, {
@@ -2416,7 +2420,7 @@
         resumeAnchorSignature: message.resumeAnchorSignature,
         resumeTailSignatures: message.resumeTailSignatures
       }).catch(() => {});
-      sendResponse({ ok: true, running: true, jobId: message.jobId });
+      sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
     }
     if (message && message.type === 'ARCHIVER_PAUSE_CAPTURE') {
