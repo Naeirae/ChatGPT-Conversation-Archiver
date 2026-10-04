@@ -8,6 +8,7 @@ import {
 } from './lib/archive-store.mjs';
 
 import {
+  exportTailSignatures,
   findExportTailAnchor,
   hashText,
   messageSignature
@@ -44,7 +45,9 @@ const {
   getArchive,
   putArchive,
   removeArchive,
+  deleteArchive,
   getDraft,
+  removeDraft,
   getLastArchive,
   getArchiveForUrl,
   indexArchive,
