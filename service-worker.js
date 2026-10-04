@@ -781,6 +781,7 @@ async function cancelCapture() {
   if (
     status === 'error' &&
     draftId &&
+    ['full', 'resume-draft'].includes(job.captureMode) &&
     job.captureTarget === 'copy' &&
     job.captureTabId != null &&
     job.captureTabId !== job.sourceTabId
