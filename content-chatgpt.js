@@ -2365,6 +2365,9 @@
             error: message
           };
           await chrome.storage.local.set({ ['draft:' + draftId]: draft });
+          if (mode === 'resume-draft' && existingDraftId && existingDraftId !== draftId) {
+            await chrome.storage.local.remove('draft:' + existingDraftId).catch(() => {});
+          }
         }
       }
 
