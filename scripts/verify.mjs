@@ -12,7 +12,8 @@ const jsFiles = [
   'lib/urls.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
-  'lib/tab-plan.mjs'
+  'lib/tab-plan.mjs',
+  'lib/document-parts.mjs'
 ];
 
 const forbiddenArtifacts = [
@@ -97,13 +98,14 @@ try {
   }
   if (!serviceWorkerSource.includes('resumeFailedCaptureFromWorkingTab') ||
       !serviceWorkerSource.includes('ARCHIVER_RESUME_FAILED_CAPTURE') ||
-      !serviceWorkerSource.includes('ARCHIVER_DELETE_DRAFT') ||
+      !serviceWorkerSource.includes('ARCHIVER_DELETE_UNFINISHED_PASS') ||
       !serviceWorkerSource.includes('ARCHIVER_DELETE_ARCHIVE')) {
     fail('service-worker.js: missing recovery/deletion commands');
   }
   if (!serviceWorkerSource.includes('inspectGoogleDocTabsAttached') ||
       !serviceWorkerSource.includes('expectedBeforeCount') ||
-      !serviceWorkerSource.includes('verifiedTabCount !== sections.length')) {
+      !serviceWorkerSource.includes('verifyGoogleDocTabCount') ||
+      !serviceWorkerSource.includes('verifiedTabCount !== expectedCount')) {
     fail('service-worker.js: missing physical Google Docs tab-count verification');
   }
   if (!serviceWorkerSource.includes('ARCHIVER_PATCH_RECOVERED_IMAGES') ||
@@ -261,7 +263,8 @@ const tests = spawnSync(process.execPath, [
   'tests/urls.test.mjs',
   'tests/archive-store.test.mjs',
   'tests/google-docs-baseline.test.mjs',
-  'tests/tab-plan.test.mjs'
+  'tests/tab-plan.test.mjs',
+  'tests/document-parts.test.mjs'
 ], {
   encoding: 'utf8'
 });
