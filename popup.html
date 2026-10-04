@@ -74,7 +74,15 @@
       <div class="archive-label">Незавершённый проход</div>
       <strong id="draftTitle"></strong>
       <div id="draftMeta" class="muted"></div>
-      <button id="copyDraft">Скопировать черновик</button>
+      <div class="actions">
+        <button id="copyDraft">Скопировать черновик</button>
+        <button id="openFailedCapture" class="hidden">Открыть вкладку сбора</button>
+        <button id="resumeFailedCapture" class="hidden primary">Найти стык и продолжить</button>
+        <button id="deleteDraft" class="danger">Удалить черновик</button>
+      </div>
+      <div id="draftRecoveryHint" class="muted hidden">
+        Рабочая вкладка оставлена открытой. Можно открыть её, вручную домотать ближе к месту обрыва и затем продолжить: архиватор найдёт последний сохранённый стык и пойдёт дальше до исходной нижней метки снимка.
+      </div>
     </section>
 
     <section id="archive" class="archive hidden">
@@ -88,6 +96,7 @@
       <div class="actions">
         <button id="copyArchive">Скопировать архив</button>
         <button id="recoverImages">Добрать картинки</button>
+        <button id="deleteArchive" class="danger">Удалить архив</button>
       </div>
       <div class="muted">
         Если при плохой сети часть картинок пропала, запустите «Добрать картинки». Обычный сбор от этого не меняется и не замедляется.
