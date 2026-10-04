@@ -809,7 +809,11 @@ async function cancelCapture() {
     status: 'cancelled',
     message: 'Сбор остановлен.',
     finishedAt: Date.now(),
-    captureTabId: null
+    captureTabId: null,
+    recoveryAvailable: false,
+    recoveryDraftId: '',
+    draftId: '',
+    draftCount: 0
   }, {
     level: 'warn',
     code: 'RUN_CANCELLED',
@@ -1014,6 +1018,9 @@ async function handleCaptureComplete(message) {
   if (message.mode !== 'compare') {
     await indexArchive(archive);
   }
+  if (message.mode === 'resume-draft' && job.recoveryDraftId) {
+    await removeDraft(job.recoveryDraftId).catch(() => {});
+  }
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
@@ -1083,6 +1090,7 @@ async function handleCaptureComplete(message) {
   let docError = '';
 
   const isContinuation = message.mode === 'continue' || message.mode === 'sync';
+  const isDraftRecovery = message.mode === 'resume-draft';
   const shouldAutoAppend = Boolean(isContinuation && job.pendingDocUrl);
 
   if (shouldAutoAppend) {
@@ -1100,9 +1108,11 @@ async function handleCaptureComplete(message) {
     }
   }
 
-  let finalMessage = isContinuation
-    ? ('Архив продолжен: +' + addedCount + ' сообщений.')
-    : 'Переписка собрана.';
+  let finalMessage = isDraftRecovery
+    ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений; архив собран до исходной нижней метки.')
+    : isContinuation
+      ? ('Архив продолжен: +' + addedCount + ' сообщений.')
+      : 'Переписка собрана.';
 
   if (shouldAutoAppend) {
     if (docError) finalMessage += ' Google Doc не обновлен: ' + docError;
