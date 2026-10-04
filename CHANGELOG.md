@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.39
+
+- add explicit deletion for the visible incomplete draft and the visible local archive;
+- deleting a local archive removes its archive payload, canonical conversation index entry and stale last-archive pointer, but does not delete or unlink the external Google Doc;
+- when a **full** background capture fails after a draft exists, keep that exact working ChatGPT tab open instead of closing it;
+- show **«Открыть вкладку сбора»** and **«Найти стык и продолжить»** for a recoverable failed full capture;
+- recovery reuses the same working tab, finds the last saved draft message, and continues only to the original fixed bottom snapshot marker from the failed run;
+- the recovery anchor search can inspect both directions; the user may also open the preserved tab, physically scroll nearer to the failure point, and retry recovery from there;
+- a successful recovery promotes the combined draft + recovered tail into a normal indexed archive and removes the draft;
+- if recovery fails again, the new draft keeps the previous draft plus newly captured messages and replaces the older recovery draft;
+- resetting a failed run now also closes its preserved recovery tab;
+- closing a preserved recovery tab manually disables same-tab recovery but keeps the draft available for copy/delete;
+- source/static verification is required; live browser verification of the recovery path is still pending;
+- manifest -> 0.3.39.
+
 ## 0.3.38
 
 - freeze every capture to the exact bottom message visible when collection starts;
