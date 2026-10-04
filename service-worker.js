@@ -838,15 +838,21 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     message,
     draftId,
     draftCount,
+    recoveryAvailable,
     finishedAt: Date.now(),
     tabId: sourceTabId ?? job.sourceTabId ?? job.tabId,
-    captureTabId: null
+    captureTabId: preservedCaptureTabId
   }, {
     level: status === 'cancelled' ? 'warn' : 'error',
-    code: draftId ? 'RUN_FAILED_WITH_DRAFT' : 'RUN_FAILED',
-    message: draftId
-      ? ('Сбор завершился ошибкой; сохранен черновик на ' + Number(draftCount || 0) + ' сообщений.')
-      : message,
+    code: recoveryAvailable
+      ? 'RUN_FAILED_RECOVERABLE'
+      : (draftId ? 'RUN_FAILED_WITH_DRAFT' : 'RUN_FAILED'),
+    message: recoveryAvailable
+      ? ('Сбор оборвался; сохранён черновик на ' + Number(draftCount || 0) +
+          ' сообщений и оставлена рабочая вкладка для продолжения.')
+      : draftId
+        ? ('Сбор завершился ошибкой; сохранен черновик на ' + Number(draftCount || 0) + ' сообщений.')
+        : message,
     phase: job.phase || '',
     count: Number(job.count || 0)
   });
