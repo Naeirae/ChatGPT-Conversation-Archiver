@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.40
+
+- keep the automatic slow second full pass removed;
+- add a non-destructive content-script version handshake before any capture starts;
+- if an already-open ChatGPT tab still contains an older injected archiver script after an extension update, the service worker no longer starts capture through that stale script;
+- inject the current content script, verify its exact extension version, and only then send ARCHIVER_START_CAPTURE;
+- if the version still cannot be proven, fail closed and ask for a page refresh instead of running old capture logic;
+- this specifically prevents a removed legacy behavior such as the 0.3.34 slow coverage retry from reappearing through an old open tab;
+- live browser verification is still required;
+- manifest -> 0.3.40.
+
 ## 0.3.39
 
 - add explicit deletion for the visible incomplete draft and the visible local archive;
