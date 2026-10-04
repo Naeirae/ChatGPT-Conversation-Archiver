@@ -2539,6 +2539,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await resetCaptureState();
       case 'ARCHIVER_CLEAR_RUN_HISTORY':
         return await clearRunHistory();
+      case 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB':
+        return await focusRecoverableCaptureTab();
+      case 'ARCHIVER_RESUME_FAILED_CAPTURE':
+        return await resumeFailedCaptureFromWorkingTab();
+      case 'ARCHIVER_DELETE_DRAFT':
+        return await deleteDraftAndRecoveryTab(message.draftId || '');
+      case 'ARCHIVER_DELETE_ARCHIVE':
+        return await deleteLocalArchive(message.archiveId || '');
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
