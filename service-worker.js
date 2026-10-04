@@ -1845,6 +1845,31 @@ async function createNextGoogleDocsTab(tabId, seenTokens = new Set(), expectedBe
   }
 }
 
+async function knownBaselineDecorations(docUrl) {
+  const docId = googleDocKey(docUrl);
+  if (!docId) return [];
+
+  const exportInfo = await getDocExport(docId);
+  if (!exportInfo?.archiveId) return [];
+
+  const archive = await getArchive(exportInfo.archiveId);
+  const stored = await chrome.storage.local.get('tabMarkers:' + exportInfo.archiveId);
+  const markers = stored['tabMarkers:' + exportInfo.archiveId];
+  const headings = Array.isArray(markers)
+    ? markers
+        .filter(item => item?.type === 'heading')
+        .map(item => String(item.title || '').trim())
+        .filter(Boolean)
+    : [];
+
+  const linked = archive?.sourceUrl ? await getLinkedDoc(archive.sourceUrl) : null;
+  const partTitles = Array.isArray(linked?.parts)
+    ? linked.parts.map(item => String(item?.title || '').trim()).filter(Boolean)
+    : [];
+
+  return [...new Set([...headings, ...partTitles])];
+}
+
 async function readGoogleDocBaseline(docUrl, sourceTabId) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
   if (!normalizedUrl) throw new Error('Нужна ссылка на Google Doc вида docs.google.com/document/d/...');
@@ -1900,7 +1925,11 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
       if (googleDocTabToken(after.href) === token) break;
     }
 
-    const baseline = buildGoogleDocBaseline(tabs, { tailLimit: 6 });
+    const ignoredStandaloneLines = await knownBaselineDecorations(normalizedUrl);
+    const baseline = buildGoogleDocBaseline(tabs, {
+      tailLimit: 6,
+      ignoredStandaloneLines
+    });
     if (baseline.meaningfulCount < 2) {
       throw new Error('В Google Doc не удалось найти достаточно реплик для надежной сверки.');
     }
