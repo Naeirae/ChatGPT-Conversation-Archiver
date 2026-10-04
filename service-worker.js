@@ -2382,6 +2382,13 @@ async function exportConversation({ activeDoc = false } = {}) {
   const conversation = await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
+  if (!activeDoc) {
+    const autoParts = planGoogleDocParts(conversation.messages || [], []);
+    if (autoParts.length > 1) {
+      return exportTabbedConversation('');
+    }
+  }
+
   const settings = await getSettings();
   let tab;
   let messages = conversation.messages || [];
