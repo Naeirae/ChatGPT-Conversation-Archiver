@@ -1049,6 +1049,58 @@ async function deleteLocalArchive(archiveId = '') {
   return { ok: true, removed: true, archiveId: archive.id };
 }
 
+async function compareUnfinishedPass(passId = '') {
+  const unfinishedPass = await getDraft(passId);
+  if (!unfinishedPass?.messages?.length) {
+    throw new Error('Сохранённый незавершённый проход не найден.');
+  }
+
+  const archive = await getArchiveForUrl(unfinishedPass.sourceUrl || '');
+  if (!archive?.messages?.length) {
+    return {
+      ok: true,
+      unfinishedPass: summarize(unfinishedPass),
+      archive: null,
+      commonPrefixCount: 0,
+      sharedCount: 0,
+      onlyInUnfinishedPassCount: unfinishedPass.messages.length,
+      onlyInArchiveCount: 0
+    };
+  }
+
+  const identity = message => {
+    if (message?.id) return 'id:' + message.id;
+    return 'sig:' + messageSignature(message?.role || '', message?.text || '');
+  };
+
+  const passMessages = unfinishedPass.messages || [];
+  const archiveMessages = archive.messages || [];
+  const archiveSet = new Set(archiveMessages.map(identity));
+  const passSet = new Set(passMessages.map(identity));
+
+  let commonPrefixCount = 0;
+  while (
+    commonPrefixCount < passMessages.length &&
+    commonPrefixCount < archiveMessages.length &&
+    identity(passMessages[commonPrefixCount]) === identity(archiveMessages[commonPrefixCount])
+  ) {
+    commonPrefixCount++;
+  }
+
+  let sharedCount = 0;
+  for (const key of passSet) if (archiveSet.has(key)) sharedCount++;
+
+  return {
+    ok: true,
+    unfinishedPass: summarize(unfinishedPass),
+    archive: summarize(archive),
+    commonPrefixCount,
+    sharedCount,
+    onlyInUnfinishedPassCount: [...passSet].filter(key => !archiveSet.has(key)).length,
+    onlyInArchiveCount: [...archiveSet].filter(key => !passSet.has(key)).length
+  };
+}
+
 async function handleCaptureComplete(message) {
   const job = await getJob();
   if (!job || job.jobId !== message.jobId) return;
@@ -2586,6 +2638,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const draft = await getDraft(message.draftId || message.passId || '');
         return { ok: true, unfinishedPass: draft, draft };
       }
+      case 'ARCHIVER_COMPARE_UNFINISHED_PASS':
+        return await compareUnfinishedPass(message.passId || message.draftId || '');
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
       case 'ARCHIVER_PAUSE_CAPTURE':
