@@ -76,6 +76,24 @@ try {
       contentSource.includes('повторяю медленнее')) {
     fail('content-chatgpt.js: destructive automatic coverage retry must stay removed');
   }
+  if (!contentSource.includes("mode === 'images'") ||
+      !contentSource.includes('mergeRecoveredImagesIntoArchive') ||
+      !contentSource.includes('lastRecoveredImageRefs')) {
+    fail('content-chatgpt.js: missing image-only recovery mode');
+  }
+  if (!contentSource.includes('reasoningStatusLabelText') ||
+      !contentSource.includes("text.startsWith(statusLabel)")) {
+    fail('content-chatgpt.js: reasoning status stripping must not erase expanded reasoning');
+  }
+  if (!workerSource.includes('inspectGoogleDocTabsAttached') ||
+      !workerSource.includes('expectedBeforeCount') ||
+      !workerSource.includes('verifiedTabCount !== sections.length')) {
+    fail('service-worker.js: missing physical Google Docs tab-count verification');
+  }
+  if (!workerSource.includes('ARCHIVER_PATCH_RECOVERED_IMAGES') ||
+      !workerSource.includes('DOC_IMAGE_PATCHES_KEY')) {
+    fail('service-worker.js: missing recovered-image patch action');
+  }
   console.log('OK: service-worker runtime helper declarations and reasoning adapter');
 } catch (error) {
   fail(`service-worker.js runtime helper guard failed: ${error.message}`);
