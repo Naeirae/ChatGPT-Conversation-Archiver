@@ -78,3 +78,22 @@ test('serializeTabPlan keeps tab before heading at the same message', () => {
     '7 | вкладка\n7 | подзаголовок | Картинки\n12 | вкладка'
   );
 });
+
+
+test('buildTabbedSections keeps a heading on the implicit first tab', () => {
+  const messages = [
+    { id: '1', role: 'user', text: 'm1' },
+    { id: '2', role: 'assistant', text: 'm2' },
+    { id: '3', role: 'user', text: 'm3' }
+  ];
+  const events = parseTabPlan(
+    '1 | подзаголовок | Первая тема\n3 | вкладка\n3 | подзаголовок | Вторая тема',
+    3
+  );
+
+  const sections = buildTabbedSections(messages, events);
+
+  assert.equal(sections.length, 2);
+  assert.deepEqual(sections[0].messages[0].archiveHeadings, ['Первая тема']);
+  assert.deepEqual(sections[1].messages[0].archiveHeadings, ['Вторая тема']);
+});
