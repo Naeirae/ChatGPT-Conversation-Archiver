@@ -1137,7 +1137,11 @@ async function handleCaptureComplete(message) {
     docUrl: docResult?.docUrl || (shouldAutoAppend ? job.pendingDocUrl : '') || '',
     docExportError: docError,
     finishedAt: Date.now(),
-    captureTabId: null
+    captureTabId: null,
+    recoveryAvailable: false,
+    recoveryDraftId: '',
+    draftId: '',
+    draftCount: 0
   }, {
     level: docError ? 'warn' : 'info',
     code: docError
