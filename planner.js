@@ -3,6 +3,11 @@ import {
   serializeTabPlan
 } from './lib/tab-plan.mjs';
 
+import {
+  documentBoundaryMessageNumbers,
+  planGoogleDocParts
+} from './lib/document-parts.mjs';
+
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 const requestedArchiveId = params.get('archiveId') || '';
@@ -11,6 +16,7 @@ const PLAN_PREFIX = 'tabMarkers:';
 let archive = null;
 let markers = [];
 let saveTimer = null;
+let documentParts = [];
 
 function setStatus(text, error = false) {
   $('status').textContent = text;
@@ -28,8 +34,10 @@ function markerFor(type, messageNumber) {
 function updateMarkerSummary() {
   const tabs = markers.filter(item => item.type === 'tab').length;
   const headings = markers.filter(item => item.type === 'heading').length;
+  const docs = Math.max(1, documentParts.length || 1);
   $('markerSummary').textContent =
-    (tabs + 1) + ' вкладок · ' + headings + ' подзаголовков';
+    docs + ' Google Doc' + (docs > 1 ? ' · ' : ' · ') +
+    (tabs + docs) + ' вкладок суммарно · ' + headings + ' подзаголовков';
   $('clearMarkers').disabled = !markers.length;
 }
 
@@ -159,9 +167,16 @@ function addImagePreviews(container, message) {
 function render() {
   if (!archive) return;
 
+  const planEvents = markers
+    .filter(item => item.type !== 'heading' || String(item.title || '').trim())
+    .map(item => ({ ...item }));
+  documentParts = planGoogleDocParts(archive.messages || [], planEvents);
+  const docBoundaries = new Set(documentBoundaryMessageNumbers(documentParts));
+
   $('archiveMeta').textContent =
     (archive.title || 'ChatGPT conversation') +
-    ' · ' + (archive.messages?.length || 0) + ' сообщений';
+    ' · ' + (archive.messages?.length || 0) + ' сообщений' +
+    (documentParts.length > 1 ? ' · ' + documentParts.length + ' документов' : '');
 
   const root = $('messages');
   root.replaceChildren();
@@ -175,9 +190,12 @@ function render() {
     const tabMark = markerFor('tab', messageNumber);
     const headingMark = markerFor('heading', messageNumber);
 
+    const documentBoundary = docBoundaries.has(messageNumber);
     card.classList.toggle('is-tab', Boolean(tabMark));
     card.classList.toggle('is-heading', Boolean(headingMark));
+    card.classList.toggle('is-document-boundary', documentBoundary);
     fragment.querySelector('.boundary-label').classList.toggle('hidden', !tabMark);
+    fragment.querySelector('.document-boundary-label').classList.toggle('hidden', !documentBoundary);
 
     fragment.querySelector('.message-number').textContent = '#' + messageNumber;
     fragment.querySelector('.message-role').textContent = roleLabel(message.role);
@@ -265,7 +283,8 @@ $('exportTabbed').addEventListener('click', async () => {
       : '';
 
     setStatus(
-      'Готово: ' + (result.tabCount || 1) + ' вкладок, ' +
+      'Готово: ' + (result.documentCount || 1) + ' документов, ' +
+      (result.tabCount || 1) + ' вкладок, ' +
       (result.headingCount || 0) + ' подзаголовков, ' +
       (result.addedCount || 0) + ' сообщений.' +
       imagePart +
