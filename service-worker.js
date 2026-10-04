@@ -29,6 +29,11 @@ import {
   parseTabPlan
 } from './lib/tab-plan.mjs';
 
+import {
+  partTitle,
+  planGoogleDocParts
+} from './lib/document-parts.mjs';
+
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const RUN_HISTORY_KEY = 'captureRunHistory';
 const DOC_IMAGE_PATCHES_KEY = 'docImagePatches';
@@ -2427,42 +2432,115 @@ async function exportConversation({ activeDoc = false } = {}) {
   };
 }
 
-async function exportTabbedConversation(planText = '') {
-  const conversation = await getLastArchive();
-  if (!conversation) throw new Error('Сначала соберите переписку.');
-
-  const messages = conversation.messages || [];
-  if (!messages.length) throw new Error('В архиве нет сообщений для экспорта.');
-
-  const events = parseTabPlan(planText, messages.length);
-  const sections = buildTabbedSections(messages, events);
-  if (sections.length > 40) {
-    throw new Error('За один экспорт можно создать не более 40 вкладок.');
+async function renameGoogleDoc(tabId, title) {
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    await sleep(250);
+    const result = await cdp(tabId, 'Runtime.evaluate', {
+      expression: `(() => {
+        const selectors = [
+          '#docs-title-input',
+          'input.docs-title-input',
+          'input[aria-label*="Rename"]',
+          'input[aria-label*="Переимен"]',
+          'input[aria-label*="назван"]'
+        ];
+        for (const selector of selectors) {
+          const input = document.querySelector(selector);
+          if (!input || typeof input.focus !== 'function') continue;
+          input.focus();
+          if (typeof input.select === 'function') input.select();
+          return true;
+        }
+        return false;
+      })()`,
+      returnByValue: true
+    });
+    if (!result?.result?.value) return false;
+    await cdp(tabId, 'Input.insertText', { text: String(title || '').trim() });
+    await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+    await sleep(260);
+    return true;
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
+}
 
-  const settings = await getSettings();
-  const tab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
-  if (!tab?.id) throw new Error('Не удалось открыть новый Google Doc.');
+async function selectGoogleDocTextAttached(tabId, query) {
+  await focusGoogleDocEditor(tabId);
+  await dispatchKey(tabId, 'f', 'KeyF', 70, 2);
+  await sleep(120);
+  await cdp(tabId, 'Input.insertText', { text: query });
+  await sleep(300);
+  await dispatchKey(tabId, 'Enter', 'Enter', 13, 0).catch(() => {});
+  await sleep(100);
+  await dispatchKey(tabId, 'Escape', 'Escape', 27, 0);
+  await sleep(160);
 
-  await waitForTabComplete(tab.id);
-  await sleep(2500);
+  const selected = normalizeDocSearchText(await copyEditorSelectionText(tabId));
+  const expected = normalizeDocSearchText(query);
+  return Boolean(selected && selected.includes(expected));
+}
 
-  const initialDocTab = await chrome.tabs.get(tab.id);
-  const seenTabTokens = new Set([googleDocTabToken(initialDocTab.url || '')].filter(Boolean));
-  let initialTabCount = 0;
+async function insertGoogleDocNavigation(tabId, label, url, position = 'end') {
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    await sleep(220);
+    await focusGoogleDocEditor(tabId);
 
-  {
-    let attached = false;
-    try {
-      await chrome.debugger.attach({ tabId: tab.id }, '1.3');
-      attached = true;
-      await sleep(450);
-      const inventory = await inspectGoogleDocTabsAttached(tab.id);
-      initialTabCount = inventory.count;
-      for (const token of inventory.tokens) seenTabTokens.add(token);
-    } finally {
-      if (attached) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
+    const goToStart = position === 'start';
+    await dispatchKey(
+      tabId,
+      goToStart ? 'Home' : 'End',
+      goToStart ? 'Home' : 'End',
+      goToStart ? 36 : 35,
+      2
+    );
+    await sleep(140);
+
+    const text = String(label || '').trim();
+    if (!text) throw new Error('Пустая подпись междокументной ссылки.');
+
+    await cdp(tabId, 'Input.insertText', {
+      text: goToStart ? text + '\n\n' : '\n\n' + text
+    });
+    await sleep(220);
+
+    const selected = await selectGoogleDocTextAttached(tabId, text);
+    if (!selected) {
+      throw new Error('Не удалось выделить текст междокументной ссылки: ' + text);
     }
+
+    await dispatchKey(tabId, 'k', 'KeyK', 75, 2);
+    await sleep(320);
+    await cdp(tabId, 'Input.insertText', { text: String(url || '') });
+    await sleep(120);
+    await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+    await sleep(260);
+    return true;
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
+async function inspectSingleNewGoogleDoc(tabId) {
+  const current = await chrome.tabs.get(tabId);
+  const seenTabTokens = new Set([googleDocTabToken(current.url || '')].filter(Boolean));
+  let initialTabCount = 0;
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    await sleep(420);
+    const inventory = await inspectGoogleDocTabsAttached(tabId);
+    initialTabCount = inventory.count;
+    for (const token of inventory.tokens) seenTabTokens.add(token);
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
 
   if (initialTabCount !== 1) {
@@ -2471,82 +2549,184 @@ async function exportTabbedConversation(planText = '') {
       initialTabCount + '. Экспорт не начат.'
     );
   }
+  return seenTabTokens;
+}
 
-  let imageInsertedCount = 0;
-  let imageFailedCount = 0;
-  const failedImages = [];
-  let completedTabs = 0;
-
-  try {
-    for (let index = 0; index < sections.length; index++) {
-      const section = sections[index];
-
-      if (index > 0) {
-        const created = await createNextGoogleDocsTab(tab.id, seenTabTokens, index);
-        if (created?.token) seenTabTokens.add(created.token);
-      }
-
-      const pasted = await pasteArchiveIntoGoogleDoc(
-        tab.id,
-        conversation,
-        section.messages,
-        settings,
-        {
-          includeHeader: index === 0,
-          appendToEnd: false
-        }
-      );
-
-      imageInsertedCount += Number(pasted.imageInsertedCount || 0);
-      imageFailedCount += Number(pasted.imageFailedCount || 0);
-      failedImages.push(...(pasted.failedImages || []));
-      completedTabs++;
-    }
-  } catch (error) {
-    throw new Error(
-      'Разделение остановлено после ' + completedTabs + ' из ' + sections.length +
-      ' вкладок. Документ оставлен открытым. Причина: ' +
-      (error?.message || String(error))
-    );
-  }
-
+async function verifyGoogleDocTabCount(tabId, expectedCount) {
   let verifiedTabCount = 0;
-  {
-    let attached = false;
-    try {
-      await chrome.debugger.attach({ tabId: tab.id }, '1.3');
-      attached = true;
-      await sleep(350);
-      const state = await googleDocPageState(tab.id);
-      const inventory = await inspectGoogleDocTabsAttached(tab.id, {
-        restoreToken: googleDocTabToken(state.href)
-      });
-      verifiedTabCount = inventory.count;
-    } finally {
-      if (attached) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
-    }
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    await sleep(350);
+    const state = await googleDocPageState(tabId);
+    const inventory = await inspectGoogleDocTabsAttached(tabId, {
+      restoreToken: googleDocTabToken(state.href)
+    });
+    verifiedTabCount = inventory.count;
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
-
-  if (verifiedTabCount !== sections.length) {
+  if (verifiedTabCount !== expectedCount) {
     throw new Error(
       'После экспорта количество вкладок не совпало с планом: создано ' +
-      verifiedTabCount + ', должно быть ' + sections.length +
+      verifiedTabCount + ', должно быть ' + expectedCount +
       '. Документ оставлен открытым для проверки.'
     );
   }
+  return verifiedTabCount;
+}
 
-  const finalTab = await chrome.tabs.get(tab.id);
-  const linkedDoc = await recordDocExport(conversation, finalTab.url);
-  const headingCount = events.filter(event => event.type === 'heading').length;
+async function exportTabbedConversation(planText = '') {
+  const conversation = await getLastArchive();
+  if (!conversation) throw new Error('Сначала соберите переписку.');
+
+  const messages = conversation.messages || [];
+  if (!messages.length) throw new Error('В архиве нет сообщений для экспорта.');
+
+  const events = parseTabPlan(planText, messages.length);
+  const parts = planGoogleDocParts(messages, events);
+  const settings = await getSettings();
+  const docs = [];
+  let imageInsertedCount = 0;
+  let imageFailedCount = 0;
+  const failedImages = [];
+  let totalTabs = 0;
+  let totalHeadings = 0;
+
+  for (let partIndex = 0; partIndex < parts.length; partIndex++) {
+    const part = parts[partIndex];
+    const sections = buildTabbedSections(part.messages, part.events);
+    if (sections.length > 40) {
+      throw new Error(
+        'В части ' + (partIndex + 1) +
+        ' получилось больше 40 вкладок. Поставьте границы документов раньше.'
+      );
+    }
+
+    const browserTab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
+    if (!browserTab?.id) throw new Error('Не удалось открыть новый Google Doc.');
+    await waitForTabComplete(browserTab.id);
+    await sleep(2200);
+
+    const title = partTitle(conversation.title || 'ChatGPT conversation', part.partNumber, parts.length);
+    const renamed = await renameGoogleDoc(browserTab.id, title).catch(() => false);
+    const seenTabTokens = await inspectSingleNewGoogleDoc(browserTab.id);
+
+    if (partIndex > 0) {
+      const previous = docs[partIndex - 1];
+      await insertGoogleDocNavigation(
+        browserTab.id,
+        previous.title,
+        previous.url,
+        'start'
+      );
+    }
+
+    let completedTabs = 0;
+    try {
+      for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex++) {
+        const section = sections[sectionIndex];
+
+        if (sectionIndex > 0) {
+          const created = await createNextGoogleDocsTab(
+            browserTab.id,
+            seenTabTokens,
+            sectionIndex
+          );
+          if (created?.token) seenTabTokens.add(created.token);
+        }
+
+        const pasted = await pasteArchiveIntoGoogleDoc(
+          browserTab.id,
+          {
+            ...conversation,
+            title,
+            messages: part.messages
+          },
+          section.messages,
+          settings,
+          {
+            includeHeader: sectionIndex === 0,
+            appendToEnd: true
+          }
+        );
+
+        imageInsertedCount += Number(pasted.imageInsertedCount || 0);
+        imageFailedCount += Number(pasted.imageFailedCount || 0);
+        failedImages.push(...(pasted.failedImages || []));
+        completedTabs++;
+      }
+    } catch (error) {
+      throw new Error(
+        'Разделение остановлено в части ' + (partIndex + 1) +
+        ' после ' + completedTabs + ' из ' + sections.length +
+        ' вкладок. Документ оставлен открытым. Причина: ' +
+        (error?.message || String(error))
+      );
+    }
+
+    const verifiedTabCount = await verifyGoogleDocTabCount(browserTab.id, sections.length);
+    const finalTab = await chrome.tabs.get(browserTab.id);
+    const partConversation = {
+      ...conversation,
+      title,
+      messages: part.messages
+    };
+    await recordDocExport(partConversation, finalTab.url, { link: false });
+
+    docs.push({
+      partNumber: part.partNumber,
+      title,
+      url: finalTab.url,
+      renamed,
+      startMessageNumber: part.startMessageNumber,
+      endMessageNumber: part.endMessageNumber,
+      estimatedChars: part.estimatedChars,
+      tabCount: verifiedTabCount
+    });
+    totalTabs += verifiedTabCount;
+    totalHeadings += part.events.filter(event => event.type === 'heading').length;
+
+    if (partIndex > 0) {
+      const previous = docs[partIndex - 1];
+      const previousTab = await chrome.tabs.get(previous.browserTabId || 0).catch(() => null);
+      let previousTabId = previousTab?.id || null;
+      if (previousTabId == null) {
+        const reopened = await chrome.tabs.create({ url: previous.url, active: true });
+        previousTabId = reopened?.id || null;
+        if (previousTabId != null) {
+          await waitForTabComplete(previousTabId);
+          await sleep(1400);
+        }
+      }
+      if (previousTabId != null) {
+        await insertGoogleDocNavigation(previousTabId, title, finalTab.url, 'end');
+      }
+    }
+
+    docs[docs.length - 1].browserTabId = browserTab.id;
+  }
+
+  const finalDoc = docs[docs.length - 1];
+  const linkedDocBase = await recordDocExport(conversation, finalDoc.url, { link: true });
+  const linkedDoc = await setLinkedDoc(conversation.sourceUrl, {
+    ...(linkedDocBase || {}),
+    url: finalDoc.url,
+    docId: googleDocKey(finalDoc.url),
+    parts: docs.map(({ browserTabId, ...item }) => item)
+  });
 
   return {
-    docUrl: finalTab.url,
+    docUrl: finalDoc.url,
+    docs: docs.map(({ browserTabId, ...item }) => item),
+    documentCount: docs.length,
     archive: summarize(conversation),
     linkedDoc,
-    exportMode: 'tabbed-full',
+    exportMode: docs.length > 1 ? 'tabbed-multi-doc' : 'tabbed-full',
     addedCount: messages.length,
-    tabCount: verifiedTabCount,
-    headingCount,
+    tabCount: totalTabs,
+    headingCount: totalHeadings,
     imageInsertedCount,
     imageFailedCount,
     failedImages,
