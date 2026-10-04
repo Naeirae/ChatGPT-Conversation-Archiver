@@ -65,7 +65,6 @@ function renderCaptureProgress(job, running) {
     parts.push(seconds + ' с');
   }
   if (job?.iteration) parts.push('проход ' + job.iteration);
-  if (job?.coverageRetry) parts.push('повторный медленный проход');
   $('captureMeta').textContent = parts.join(' · ');
 }
 function renderRunLog(job) {
@@ -100,7 +99,7 @@ function renderRunLog(job) {
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
   if (job.reasoningBlockCount) meta.push(job.reasoningBlockCount + ' блоков размышлений');
-  if (job.draftCount) meta.push(job.draftCount + ' в черновике');
+  if (job.draftCount) meta.push(job.draftCount + ' в незавершённом проходе');
   $('runLogMeta').textContent = meta.join(' · ');
   $('runLogMessage').textContent = job.message || '';
 }
@@ -113,6 +112,99 @@ function renderDraft(draft) {
   $('draftTitle').textContent = draft.title || 'Незавершённый проход';
   $('draftMeta').textContent =
     (draft.messageCount || 0) + ' сообщений · ' + (draft.imageCount || 0) + ' изображений';
+}
+
+function renderUnfinishedPasses(items = []) {
+  const list = $('unfinishedPassesList');
+  const count = $('unfinishedPassesCount');
+  if (!list || !count) return;
+
+  const rows = Array.isArray(items) ? items : [];
+  count.textContent = String(rows.length);
+  list.textContent = '';
+
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'Сохранённых незавершённых проходов нет.';
+    list.appendChild(empty);
+    return;
+  }
+
+  for (const item of rows) {
+    const row = document.createElement('div');
+    row.className = 'history-item';
+
+    const head = document.createElement('div');
+    head.className = 'history-item-head';
+
+    const title = document.createElement('div');
+    title.className = 'history-item-title';
+    title.textContent = item.title || 'Незавершённый проход';
+
+    const status = document.createElement('div');
+    status.className = 'history-item-status error';
+    status.textContent = item.capturePhase || 'оборван';
+
+    head.append(title, status);
+
+    const meta = document.createElement('div');
+    meta.className = 'history-item-meta';
+    const when = item.capturedAt ? new Date(item.capturedAt).toLocaleString('ru-RU') : '—';
+    const parts = [
+      when,
+      (item.messageCount || 0) + ' сообщений',
+      (item.imageCount || 0) + ' изображений'
+    ];
+    if (item.navigationHighWater) parts.push('контрольный минимум: ' + item.navigationHighWater);
+    if (item.hasBoundary) parts.push('нижняя метка сохранена');
+    meta.textContent = parts.join(' · ');
+
+    const actions = document.createElement('div');
+    actions.className = 'actions';
+
+    const view = document.createElement('button');
+    view.textContent = 'Просмотреть';
+    view.onclick = async () => {
+      const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(item.id));
+      await chrome.tabs.create({ url });
+    };
+
+    const copy = document.createElement('button');
+    copy.textContent = 'Скопировать';
+    copy.onclick = async () => {
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_COPY_UNFINISHED_PASS',
+        passId: item.id
+      });
+      if (!result?.ok) {
+        setStatus(result?.error || 'Не удалось скопировать незавершённый проход.', true);
+        return;
+      }
+      setStatus('Незавершённый проход скопирован: ' + (result.count || 0) + ' сообщений.');
+    };
+
+    const remove = document.createElement('button');
+    remove.className = 'danger-outline';
+    remove.textContent = 'Удалить';
+    remove.onclick = async () => {
+      if (!confirm('Удалить этот сохранённый незавершённый проход?')) return;
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
+        passId: item.id
+      });
+      if (!result?.ok) {
+        setStatus(result?.error || 'Не удалось удалить незавершённый проход.', true);
+        return;
+      }
+      await getState();
+      setStatus('Незавершённый проход удалён.');
+    };
+
+    actions.append(view, copy, remove);
+    row.append(head, meta, actions);
+    list.appendChild(row);
+  }
 }
 
 
@@ -411,7 +503,7 @@ function render(data) {
   state = data || {};
   const job = state.job;
   const archive = state.archive;
-  const draft = state.draft;
+  const draft = state.unfinishedPass || state.draft || null;
   const running = job && ['starting', 'running', 'paused'].includes(job.status);
   const activelyRunning = job && ['starting', 'running'].includes(job.status);
   const paused = job?.status === 'paused';
@@ -419,6 +511,7 @@ function render(data) {
 
   renderCaptureState(job);
   renderHistory(state.history || []);
+  renderUnfinishedPasses(state.unfinishedPasses || []);
 
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
@@ -571,7 +664,7 @@ $('capture').onclick = async () => {
       ...state,
       job: result.job,
       archive: state?.archive || null,
-      draft: null
+      unfinishedPass: null
     });
     startPolling();
   } catch (error) {
@@ -598,7 +691,7 @@ $('compareArchive').onclick = async () => {
       ...state,
       job: result.job,
       archive: state?.archive || null,
-      draft: null,
+      unfinishedPass: null,
       canContinue: true
     });
     startPolling();
@@ -626,7 +719,7 @@ $('continue').onclick = async () => {
       ...state,
       job: result.job,
       archive: state?.archive || null,
-      draft: null,
+      unfinishedPass: null,
       canContinue: true,
       linkedDoc: result.linkedDoc || state?.linkedDoc || null
     });
@@ -661,7 +754,7 @@ $('syncDoc').onclick = async () => {
       ...state,
       job: result.job,
       archive: result.archive || state?.archive || null,
-      draft: null,
+      unfinishedPass: null,
       canContinue: true,
       linkedDoc: result.linkedDoc || state?.linkedDoc || null
     });
@@ -724,7 +817,7 @@ $('retryCurrent').onclick = async () => {
       ...state,
       job: result.job,
       archive: state?.archive || null,
-      draft: null
+      unfinishedPass: null
     });
     startPolling();
   } catch (error) {
@@ -823,7 +916,7 @@ $('recoverImages').onclick = async () => {
       ...state,
       job: result.job,
       archive: state?.archive || null,
-      draft: null,
+      unfinishedPass: null,
       canContinue: true
     });
     startPolling();
@@ -899,9 +992,9 @@ $('openFailedCapture').onclick = async () => {
 $('resumeFailedCapture').onclick = async () => {
   $('resumeFailedCapture').disabled = true;
   try {
-    setStatus('Ищу последний сохранённый стык в оставленной рабочей вкладке…');
+    setStatus('Возвращаю сохранённую рабочую вкладку к началу без пересчёта сообщений; затем повторю только проход вниз…');
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый проход.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось повторить хронологический проход.');
     await getState();
     startPolling();
   } catch (error) {
@@ -914,17 +1007,17 @@ $('resumeFailedCapture').onclick = async () => {
 $('deleteDraft').onclick = async () => {
   const draft = state?.draft;
   if (!draft) return;
-  if (!confirm('Удалить этот черновик незавершённого прохода? Сохранённая рабочая вкладка этого прохода тоже будет закрыта.')) return;
+  if (!confirm('Удалить этот незавершённый проход? Сохранённая рабочая вкладка этого прохода тоже будет закрыта.')) return;
 
   $('deleteDraft').disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_DELETE_DRAFT',
-      draftId: draft.id
+      type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
+      passId: draft.id
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить черновик.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый проход.');
     await getState();
-    setStatus('Черновик удалён.');
+    setStatus('Незавершённый проход удалён.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -957,11 +1050,11 @@ $('copyDraft').onclick = async () => {
   $('copyDraft').disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_COPY_DRAFT',
-      draftId: state?.draft?.id
+      type: 'ARCHIVER_COPY_UNFINISHED_PASS',
+      passId: (state?.unfinishedPass || state?.draft)?.id
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать черновик.');
-    setStatus('Черновик скопирован: ' + (result.count || 0) + ' сообщений.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать незавершённый проход.');
+    setStatus('Незавершённый проход скопирован: ' + (result.count || 0) + ' сообщений.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
