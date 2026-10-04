@@ -90,13 +90,24 @@ try {
       !contentSource.includes("collect(map, order, settings, boundary)")) {
     fail('content-chatgpt.js: missing fixed bottom snapshot boundary');
   }
-  if (!workerSource.includes('inspectGoogleDocTabsAttached') ||
-      !workerSource.includes('expectedBeforeCount') ||
-      !workerSource.includes('verifiedTabCount !== sections.length')) {
+  if (!contentSource.includes("'resume-draft'") ||
+      !contentSource.includes('allowDownwardFallback') ||
+      !contentSource.includes('existingDraftId')) {
+    fail('content-chatgpt.js: missing failed-capture draft recovery mode');
+  }
+  if (!serviceWorkerSource.includes('resumeFailedCaptureFromWorkingTab') ||
+      !serviceWorkerSource.includes('ARCHIVER_RESUME_FAILED_CAPTURE') ||
+      !serviceWorkerSource.includes('ARCHIVER_DELETE_DRAFT') ||
+      !serviceWorkerSource.includes('ARCHIVER_DELETE_ARCHIVE')) {
+    fail('service-worker.js: missing recovery/deletion commands');
+  }
+  if (!serviceWorkerSource.includes('inspectGoogleDocTabsAttached') ||
+      !serviceWorkerSource.includes('expectedBeforeCount') ||
+      !serviceWorkerSource.includes('verifiedTabCount !== sections.length')) {
     fail('service-worker.js: missing physical Google Docs tab-count verification');
   }
-  if (!workerSource.includes('ARCHIVER_PATCH_RECOVERED_IMAGES') ||
-      !workerSource.includes('DOC_IMAGE_PATCHES_KEY')) {
+  if (!serviceWorkerSource.includes('ARCHIVER_PATCH_RECOVERED_IMAGES') ||
+      !serviceWorkerSource.includes('DOC_IMAGE_PATCHES_KEY')) {
     fail('service-worker.js: missing recovered-image patch action');
   }
   console.log('OK: service-worker runtime helper declarations and reasoning adapter');
