@@ -151,6 +151,7 @@ async function getJob() {
 async function setJob(patch) {
   const current = await getJob();
   const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
+  delete next.coverageRetry;
   await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: next });
   if (next.tabId != null) {
     const running = next.status === 'running' || next.status === 'starting';
@@ -894,10 +895,10 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
       ? 'RUN_FAILED_RECOVERABLE'
       : (draftId ? 'RUN_FAILED_WITH_DRAFT' : 'RUN_FAILED'),
     message: recoveryAvailable
-      ? ('Сбор оборвался; сохранён черновик на ' + Number(draftCount || 0) +
+      ? ('Сбор оборвался; сохранён незавершённый проход на ' + Number(draftCount || 0) +
           ' сообщений и оставлена рабочая вкладка для продолжения.')
       : draftId
-        ? ('Сбор завершился ошибкой; сохранен черновик на ' + Number(draftCount || 0) + ' сообщений.')
+        ? ('Сбор завершился ошибкой; сохранён незавершённый проход на ' + Number(draftCount || 0) + ' сообщений.')
         : message,
     phase: job.phase || '',
     count: Number(job.count || 0)
@@ -908,7 +909,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
 async function focusRecoverableCaptureTab() {
   const job = await getJob();
   if (!job?.captureTabId || !job?.draftId) {
-    throw new Error('Нет сохранённой вкладки незавершённого прохода.');
+    throw new Error('Нет сохранённой рабочей вкладки незавершённого прохода.');
   }
 
   const tab = await chrome.tabs.get(job.captureTabId).catch(() => null);
@@ -933,7 +934,7 @@ async function resumeFailedCaptureFromWorkingTab() {
   }
 
   const draft = await getDraft(failedJob.draftId);
-  if (!draft?.messages?.length) throw new Error('Черновик незавершённого прохода не найден.');
+  if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
   if (!captureTab?.id || !isConversationUrl(captureTab.url || '')) {
@@ -943,34 +944,34 @@ async function resumeFailedCaptureFromWorkingTab() {
   const boundary = failedJob.captureBoundary || draft.captureBoundary || null;
   if (!boundary?.kind || !boundary?.key) {
     throw new Error(
-      'У этого старого черновика нет сохранённой нижней метки снимка. ' +
+      'У этого сохранённого незавершённого прохода нет нижней метки снимка. ' +
       'Автоматически продолжить его без риска захватить новые сообщения нельзя.'
     );
   }
 
   const lastMessage = draft.messages[draft.messages.length - 1] || null;
-  if (!lastMessage) throw new Error('В черновике нет точки, от которой можно продолжить.');
+  if (!lastMessage) throw new Error('В сохранённом незавершённом проходе нет точки, от которой можно продолжить.');
 
   const jobId = makeJobId();
   await setJob({
     jobId,
     status: 'starting',
     phase: 'top',
-    captureMode: 'resume-draft',
+    captureMode: 'retry-walk',
     captureTarget: 'copy',
     recoveryDraftId: draft.id,
     draftId: draft.id,
     draftCount: draft.messages.length,
     recoveryAvailable: false,
     captureTabId: captureTab.id,
-    message: 'Ищу последний сохранённый стык в оставленной рабочей вкладке…',
+    message: 'Возвращаю сохранённую рабочую вкладку к началу без пересчёта сообщений…',
     startedAt: Date.now(),
     finishedAt: null
   });
 
   try {
     await ensureChatGptContentScript(captureTab.id, jobId, {
-      mode: 'resume-draft',
+      mode: 'retry-walk',
       resumeAnchorId: lastMessage.id || '',
       resumeAnchorSignature: messageSignature(lastMessage.role, lastMessage.text),
       existingDraftId: draft.id,
@@ -994,11 +995,11 @@ async function resumeFailedCaptureFromWorkingTab() {
   const next = await appendRunLog({
     status: 'running',
     phase: 'top',
-    message: 'Продолжаю незавершённый проход в той же рабочей вкладке…'
+    message: 'Повторяю только хронологический проход вниз в той же рабочей вкладке…'
   }, {
     level: 'info',
-    code: 'DRAFT_RECOVERY_STARTED',
-    message: 'Черновик найден; ищу последний сохранённый стык и продолжаю до исходной нижней метки.',
+    code: 'UNFINISHED_PASS_RETRY_STARTED',
+    message: 'Сохранённый незавершённый проход найден; первый этап не повторяется, рабочая вкладка возвращается к началу и повторяется только проход вниз до исходной нижней метки.',
     phase: 'top',
     count: draft.messages.length
   });
@@ -1060,7 +1061,7 @@ async function handleCaptureComplete(message) {
   if (message.mode !== 'compare') {
     await indexArchive(archive);
   }
-  if (message.mode === 'resume-draft' && job.recoveryDraftId) {
+  if ((message.mode === 'resume-draft' || message.mode === 'retry-walk') && job.recoveryDraftId) {
     await removeDraft(job.recoveryDraftId).catch(() => {});
   }
 
@@ -1132,7 +1133,7 @@ async function handleCaptureComplete(message) {
   let docError = '';
 
   const isContinuation = message.mode === 'continue' || message.mode === 'sync';
-  const isDraftRecovery = message.mode === 'resume-draft';
+  const isDraftRecovery = message.mode === 'resume-draft' || message.mode === 'retry-walk';
   const shouldAutoAppend = Boolean(isContinuation && job.pendingDocUrl);
 
   if (shouldAutoAppend) {
@@ -2564,13 +2565,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ok: true,
           job,
           archive: summarize(archive),
-          draft: summarize(draft),
-          drafts: drafts.map(item => ({
+          unfinishedPass: summarize(draft),
+          unfinishedPasses: drafts.map(item => ({
             ...summarize(item),
             complete: Boolean(item.complete),
             error: item.error || '',
             captureMode: item.captureMode || '',
             capturePhase: item.capturePhase || '',
+            navigationHighWater: Number(item.navigationHighWater || 0),
+            chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
             hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key)
           })),
           linkedDoc,
@@ -2578,9 +2581,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           history: await getRunHistory()
         };
       }
-      case 'ARCHIVER_GET_DRAFT': {
-        const draft = await getDraft(message.draftId || '');
-        return { ok: true, draft };
+      case 'ARCHIVER_GET_DRAFT':
+      case 'ARCHIVER_GET_UNFINISHED_PASS': {
+        const draft = await getDraft(message.draftId || message.passId || '');
+        return { ok: true, unfinishedPass: draft, draft };
       }
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
@@ -2599,7 +2603,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_RESUME_FAILED_CAPTURE':
         return await resumeFailedCaptureFromWorkingTab();
       case 'ARCHIVER_DELETE_DRAFT':
-        return await deleteDraftAndRecoveryTab(message.draftId || '');
+      case 'ARCHIVER_DELETE_UNFINISHED_PASS':
+        return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
       case 'ARCHIVER_CAPTURE_PROGRESS': {
@@ -2678,9 +2683,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await writeClipboard(buildRichHtml(archive, settings), buildPlainText(archive, settings));
         return { ok: true, count: archive.messages?.length || 0 };
       }
-      case 'ARCHIVER_COPY_DRAFT': {
-        const draft = await getDraft(message.draftId);
-        if (!draft) throw new Error('Черновик текущего прохода не найден.');
+      case 'ARCHIVER_COPY_DRAFT':
+      case 'ARCHIVER_COPY_UNFINISHED_PASS': {
+        const draft = await getDraft(message.draftId || message.passId);
+        if (!draft) throw new Error('Сохранённый незавершённый проход не найден.');
         const settings = await getSettings();
         await writeClipboard(
           buildRichHtml(draft, settings, { includeHeader: true }),
@@ -2724,7 +2730,7 @@ chrome.tabs.onRemoved.addListener(async tabId => {
     await setJob({
       recoveryAvailable: false,
       captureTabId: null,
-      message: (job.message || 'Сбор оборвался.') + ' Сохранённая рабочая вкладка закрыта; черновик остаётся доступен.'
+      message: (job.message || 'Сбор оборвался.') + ' Сохранённая рабочая вкладка закрыта; незавершённый проход остаётся доступен.'
     });
     return;
   }
