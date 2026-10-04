@@ -272,7 +272,14 @@ async function resetCaptureState() {
     throw new Error('Сначала остановите текущий сбор.');
   }
   if (job?.draftId) {
-    await chrome.storage.local.remove('draft:' + job.draftId).catch(() => {});
+    await removeDraft(job.draftId).catch(() => {});
+  }
+  if (
+    job?.captureTarget === 'copy' &&
+    job?.captureTabId != null &&
+    job.captureTabId !== job.sourceTabId
+  ) {
+    await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
   if (job?.tabId != null) {
     await chrome.action.setBadgeText({ tabId: job.tabId, text: '' }).catch(() => {});
