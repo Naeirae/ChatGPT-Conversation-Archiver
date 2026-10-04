@@ -1360,7 +1360,16 @@
     }
 
     const unresolvedRefs = (navigationSequence || []).filter(ref => findResultIndex(ref) < 0);
-    unresolvedCount = Math.max(unresolvedCount, unresolvedRefs.length);
+    const unsequencedNavigation = navMessages.filter(message =>
+      !(navigationSequence || []).some(ref => matchesRef(message, ref)) &&
+      !result.some(existing =>
+        sameNavigationRef(navigationRef(existing), navigationRef(message))
+      )
+    );
+    unresolvedCount = Math.max(
+      unresolvedCount,
+      unresolvedRefs.length + unsequencedNavigation.length
+    );
 
     return {
       messages: result,
@@ -1557,7 +1566,6 @@
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
         recordNavigationWindow(navigationWindows, settings);
-      recordNavigationWindow(navigationWindows, settings);
 
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
