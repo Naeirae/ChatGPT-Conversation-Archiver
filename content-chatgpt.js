@@ -1957,29 +1957,31 @@
           }
         );
 
-        const finalCount = capturedMessages.length;
-        const hasNavigationFirst = capturedMessages.some(item =>
-          (navigationFirstId && item.id === navigationFirstId) ||
-          (navigationFirstSignature && messageTextSignature(item) === navigationFirstSignature)
-        );
-
-        if (
-          reconciliation.unresolvedCount > 0 ||
-          finalCount < navigationHighWater ||
-          (navigationFirstId || navigationFirstSignature) && !hasNavigationFirst
-        ) {
-          const missing = Math.max(0, navigationHighWater - finalCount);
-          throw new Error(
-            'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
-            'Навигационный минимум: ' + navigationHighWater +
-            ', хронологический проход: ' + reconciliation.chronologicalCount +
-            ', после сверки: ' + finalCount +
-            (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
-            (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
-            (missing ? ', не хватает минимум ' + missing : '') +
-            (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
-            ' Результат сохранён как черновик; повторный полный проход автоматически не запускается.'
+        if (mode === 'full') {
+          const finalCount = capturedMessages.length;
+          const hasNavigationFirst = capturedMessages.some(item =>
+            (navigationFirstId && item.id === navigationFirstId) ||
+            (navigationFirstSignature && messageTextSignature(item) === navigationFirstSignature)
           );
+
+          if (
+            reconciliation.unresolvedCount > 0 ||
+            finalCount < navigationHighWater ||
+            (navigationFirstId || navigationFirstSignature) && !hasNavigationFirst
+          ) {
+            const missing = Math.max(0, navigationHighWater - finalCount);
+            throw new Error(
+              'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
+              'Навигационный минимум: ' + navigationHighWater +
+              ', хронологический проход: ' + reconciliation.chronologicalCount +
+              ', после сверки: ' + finalCount +
+              (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
+              (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
+              (missing ? ', не хватает минимум ' + missing : '') +
+              (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
+              ' Результат сохранён как черновик; повторный полный проход автоматически не запускается.'
+            );
+          }
         }
       }
 
