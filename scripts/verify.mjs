@@ -85,6 +85,11 @@ try {
       !contentSource.includes("text.startsWith(statusLabel)")) {
     fail('content-chatgpt.js: reasoning status stripping must not erase expanded reasoning');
   }
+  if (!contentSource.includes('trimMessagesThroughBoundary') ||
+      !contentSource.includes('captureBoundaryKey') ||
+      !contentSource.includes("collect(map, order, settings, boundary)")) {
+    fail('content-chatgpt.js: missing fixed bottom snapshot boundary');
+  }
   if (!workerSource.includes('inspectGoogleDocTabsAttached') ||
       !workerSource.includes('expectedBeforeCount') ||
       !workerSource.includes('verifiedTabCount !== sections.length')) {
