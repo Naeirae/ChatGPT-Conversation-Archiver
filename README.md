@@ -6,7 +6,11 @@ Chrome extension for archiving complete ChatGPT conversations — including rich
 
 > Work in progress. Source is publicly visible for transparency and update delivery, but this is not open-source software. See `LICENSE`.
 
-Project docs: [User help](HELP.md) · [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
+Project docs: [User help](HELP.md) · [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md) · [Legal notice](LEGAL_NOTICE.md)
+
+## Правообладатель и лицензия
+
+© 2026 Naeirae. Исключительные права на программу принадлежат правообладателю. Использование допускается только на условиях `LICENSE`. Публичный доступ к исходному коду не означает разрешения копировать, модифицировать, распространять или использовать его в другом продукте.
 
 ## Goal
 
