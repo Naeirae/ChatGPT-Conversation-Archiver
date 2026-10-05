@@ -30,6 +30,10 @@ const INTERFACE_PALETTES = new Set([
   'custom'
 ]);
 
+const INTERFACE_FONT_PRESETS = new Set([
+  'segoe', 'arial', 'verdana', 'tahoma', 'georgia', 'consolas'
+]);
+
 const INTERFACE_FONT_STACKS = {
   segoe: '"Segoe UI", system-ui, sans-serif',
   arial: 'Arial, sans-serif',
@@ -456,10 +460,15 @@ function normalizeInterfaceAppearance(settings = {}) {
   const palette = INTERFACE_PALETTES.has(legacyPalette)
     ? legacyPalette
     : DEFAULT_INTERFACE_APPEARANCE.palette;
+  const fontPreset = INTERFACE_FONT_PRESETS.has(raw.fontPreset)
+    ? raw.fontPreset
+    : DEFAULT_INTERFACE_APPEARANCE.fontPreset;
   return {
     ...DEFAULT_INTERFACE_APPEARANCE,
     ...raw,
     palette,
+    fontPreset,
+    fontCustom: '',
     colors: {
       ...DEFAULT_INTERFACE_APPEARANCE.colors,
       ...(raw.colors || {})
@@ -1192,6 +1201,7 @@ $('newDoc').onclick = async () => {
       ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
       : '';
     setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.` + imagePart);
+    await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1217,6 +1227,7 @@ $('activeDoc').onclick = async () => {
         : '';
       setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.` + imagePart);
     }
+    await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
