@@ -25,7 +25,9 @@ const DEFAULT_SETTINGS = {
 
 const INTERFACE_PALETTES = new Set([
   'ocean', 'cobalt', 'sky', 'violet', 'rose',
-  'amber', 'forest', 'graphite', 'midnight', 'custom'
+  'amber', 'forest', 'graphite', 'midnight',
+  'gradient-ocean', 'gradient-sunset', 'gradient-mint', 'gradient-violet',
+  'custom'
 ]);
 
 const INTERFACE_FONT_STACKS = {
@@ -212,13 +214,13 @@ function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
   const count = $('savedArchivesCount');
   if (!list || !count) return;
-  const rows = Array.isArray(items) ? items.filter(item => item?.docUrl) : [];
+  const rows = Array.isArray(items) ? items : [];
   count.textContent = String(rows.length);
   list.textContent = '';
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'history-empty';
-    empty.textContent = 'Связанных Google Docs пока нет.';
+    empty.textContent = 'Сохранённых архивов пока нет.';
     list.appendChild(empty);
     return;
   }
@@ -241,14 +243,44 @@ function renderSavedArchives(items = []) {
     meta.textContent = parts.join(' · ');
     main.append(title, meta);
 
-    const open = document.createElement('a');
-    open.className = 'archive-link-open';
-    open.href = item.docUrl;
-    open.target = '_blank';
-    open.rel = 'noopener noreferrer';
-    open.textContent = 'Открыть ↗';
+    const actions = document.createElement('div');
+    actions.className = 'archive-link-actions';
 
-    row.append(main, open);
+    const resume = document.createElement('button');
+    resume.className = 'archive-link-open';
+    resume.type = 'button';
+    resume.textContent = 'Продолжить';
+    resume.disabled = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+    resume.onclick = async () => {
+      resume.disabled = true;
+      setStatus('Открываю сохранённый чат и ищу место продолжения…');
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
+          archiveId: item.id,
+          captureTarget: $('captureTarget').value
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сохранённый чат.');
+        render({ ...state, job: result.job });
+        startPolling();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        resume.disabled = false;
+      }
+    };
+    actions.appendChild(resume);
+
+    if (item.docUrl) {
+      const open = document.createElement('a');
+      open.className = 'archive-link-open';
+      open.href = item.docUrl;
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
+      open.textContent = 'Google Doc ↗';
+      actions.appendChild(open);
+    }
+
+    row.append(main, actions);
     list.appendChild(row);
   }
 }
@@ -499,8 +531,14 @@ function captureTargetLabel(value) {
 
 function updateCaptureTargetHint(value) {
   $('captureTargetHint').textContent = value === 'copy'
-    ? 'Отдельная вкладка физически прокрутит чат от начала до зафиксированного конца.'
-    : 'Архиватор физически прокручивает этот чат; во время сбора лучше не двигать страницу вручную.';
+    ? 'Сбор идёт в отдельной вкладке.'
+    : 'Сбор идёт в этой вкладке.';
+  const info = $('captureInfoText');
+  if (info) {
+    info.textContent = value === 'copy'
+      ? 'Архиватор откроет отдельную вкладку с этим чатом, физически прокрутит его от начала до зафиксированного конца и сохранит сообщения. Текущую вкладку можно не трогать.'
+      : 'Архиватор физически прокрутит этот чат в текущей вкладке. Пока идёт сбор, лучше не прокручивать страницу вручную.';
+  }
 }
 
 async function loadSettings() {
@@ -1189,6 +1227,14 @@ $('activeDoc').onclick = async () => {
   }
 };
 
+$('captureInfoToggle').onclick = () => {
+  const panel = $('captureInfo');
+  const button = $('captureInfoToggle');
+  const opening = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !opening);
+  button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+};
+
 $('userName').oninput = e => saveSettings({ userName: e.target.value });
 $('assistantName').oninput = e => saveSettings({ assistantName: e.target.value });
 $('alignUserRight').onchange = e => saveSettings({ alignUserRight: e.target.checked });
@@ -1247,6 +1293,17 @@ $('resetInterfaceAppearance').onclick = async () => {
   );
 };
 
+async function refreshUpdateNotice() {
+  const notice = $('updateNotice');
+  if (!notice) return;
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CHECK_UPDATE' }).catch(() => null);
+  const available = Boolean(result?.ok && result.available);
+  notice.classList.toggle('hidden', !available);
+  if (available) {
+    $('updateNoticeText').textContent = 'Доступно обновление ' + result.remoteVersion;
+  }
+}
+
 $('localVersion').textContent = chrome.runtime.getManifest().version || '—';
 
 $('reloadExtension').addEventListener('click', () => {
@@ -1264,6 +1321,7 @@ $('reloadExtension').addEventListener('click', () => {
     updateCaptureTargetHint($('captureTarget').value);
     renderInterfaceAppearanceControls(settings);
     applyInterfaceAppearance(settings);
+    await refreshUpdateNotice();
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();

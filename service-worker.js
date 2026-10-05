@@ -40,6 +40,9 @@ const RUN_HISTORY_KEY = 'captureRunHistory';
 const DOC_IMAGE_PATCHES_KEY = 'docImagePatches';
 const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
+const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/Naeirae/ChatGPT-Conversation-Archiver/main/manifest.json';
+const UPDATE_ALARM = 'archiver-update-check';
+
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
@@ -75,18 +78,74 @@ async function listLinkedArchives() {
     const archive = await getArchive(archiveId);
     if (!archive?.sourceUrl) continue;
     const linked = await getLinkedDoc(archive.sourceUrl);
-    if (!linked?.url) continue;
     rows.push({
       id: archive.id,
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       capturedAt: archive.capturedAt || '',
-      docUrl: linked.url,
-      updatedAt: linked.updatedAt || archive.capturedAt || ''
+      sourceUrl: archive.sourceUrl,
+      docUrl: linked?.url || '',
+      updatedAt: linked?.updatedAt || archive.capturedAt || ''
     });
   }
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
+}
+
+async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
+  const archive = await getArchive(archiveId);
+  if (!archive?.messages?.length || !archive?.sourceUrl) {
+    throw new Error('Сохранённый архив не найден.');
+  }
+  if (!isConversationUrl(archive.sourceUrl)) {
+    throw new Error('У архива нет рабочей ссылки на исходный чат.');
+  }
+
+  const sourceTab = await chrome.tabs.create({ url: archive.sourceUrl, active: true });
+  if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
+
+  await waitForChatTabComplete(sourceTab.id);
+  await waitForChatDomReady(sourceTab.id, 45000);
+
+  return await startCapture({
+    mode: 'continue',
+    existingArchive: archive,
+    captureTarget
+  });
+}
+
+function compareVersions(left = '', right = '') {
+  const a = String(left).split('.').map(value => Number(value) || 0);
+  const b = String(right).split('.').map(value => Number(value) || 0);
+  const length = Math.max(a.length, b.length);
+  for (let i = 0; i < length; i++) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff) return diff;
+  }
+  return 0;
+}
+
+async function checkForUpdate() {
+  const localVersion = chrome.runtime.getManifest().version || '0.0.0';
+  try {
+    const response = await fetch(REMOTE_MANIFEST_URL, { cache: 'no-store' });
+    if (!response.ok) throw new Error('GitHub ответил ' + response.status + '.');
+    const remote = await response.json();
+    const remoteVersion = String(remote?.version || '');
+    const available = Boolean(remoteVersion && compareVersions(remoteVersion, localVersion) > 0);
+
+    await chrome.action.setBadgeText({ text: available ? '↑' : '' });
+    if (available) {
+      await chrome.action.setBadgeBackgroundColor({ color: '#d94f4f' }).catch(() => {});
+      await chrome.action.setTitle({ title: 'Архиватор ChatGPT — доступно обновление ' + remoteVersion });
+    } else {
+      await chrome.action.setTitle({ title: 'Архиватор ChatGPT' });
+    }
+
+    return { ok: true, available, localVersion, remoteVersion };
+  } catch (error) {
+    return { ok: false, available: false, localVersion, remoteVersion: '', error: error?.message || String(error) };
+  }
 }
 
 function makeCaptureError(code, message) {
@@ -2797,6 +2856,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target === 'offscreen') return;
   (async () => {
     switch (message?.type) {
+      case 'ARCHIVER_CHECK_UPDATE':
+        return await checkForUpdate();
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
@@ -2813,6 +2874,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           docUrl: message.docUrl || '',
           captureTarget: message.captureTarget || 'copy'
         });
+      case 'ARCHIVER_CONTINUE_SAVED_ARCHIVE':
+        return await continueSavedArchive(
+          message.archiveId || '',
+          message.captureTarget || 'copy'
+        );
       case 'ARCHIVER_COMPARE_CURRENT':
         return await startCapture({
           mode: 'compare',
@@ -3059,4 +3125,20 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         : 'Рабочая копия ушла со страницы ChatGPT. Можно повторить в обычном режиме.'
     );
   }
+});
+
+
+chrome.runtime.onInstalled.addListener(() => {
+  chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
+  checkForUpdate().catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
+  checkForUpdate().catch(() => {});
+});
+
+chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm?.name !== UPDATE_ALARM) return;
+  checkForUpdate().catch(() => {});
 });

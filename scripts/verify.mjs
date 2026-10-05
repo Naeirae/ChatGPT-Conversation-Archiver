@@ -181,8 +181,10 @@ try {
   }
   if (!popupHtml.includes('id="compareArchive"') ||
       !popupHtml.includes('id="continue"') ||
-      popupHtml.includes('id="continue" class="hidden"')) {
-    fail('popup.html: compare and continue must be separate visible actions');
+      !popupHtml.includes('id="savedArchivesList"') ||
+      !popupHtml.includes('id="captureInfoToggle"') ||
+      !popupHtml.includes('id="updateNotice"')) {
+    fail('popup.html: compact capture/archive/update controls are incomplete');
   }
   if (!popupJs.includes('function applyInterfaceAppearance') ||
       !popupJs.includes('function normalizeInterfaceAppearance')) {

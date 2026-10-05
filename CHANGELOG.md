@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.44
+
+- restore the original solid color themes and add four explicit gradient themes instead of applying a subtle gradient to every palette;
+- make the capture info **i** open a compact explanation on click instead of relying on a hover/title tooltip;
+- tighten Russian interface copy and use **«Не обязательно»** for the ChatGPT-name placeholder;
+- collapse the completed local archive into one line, **«Сохранён последний запуск»**, with details on click and a red **«Сбросить»** action;
+- remove the standalone continuation card: unfinished captures continue from their recovery alert, while completed chats continue from the saved-archive library;
+- add **«Продолжить»** to every saved archive; the extension opens the source chat and resumes from the saved archive anchor;
+- keep Google Doc opening next to an archive when that archive has a linked document;
+- add update discovery: the extension checks GitHub periodically, shows an **↑** badge on the toolbar icon, and shows a compact **«Доступно обновление»** notice in the popup;
+- manifest -> 0.3.44.
+
 ## 0.3.43
 
 - rebuild the popup around the capture task: capture location and primary actions stay visible, while appearance/update settings move under a compact gear control;
