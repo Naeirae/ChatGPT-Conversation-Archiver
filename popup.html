@@ -12,19 +12,76 @@
       <img class="brand-mark" src="icons/icon-32.png" alt="" aria-hidden="true">
       <div class="hero-copy">
         <h1>Архиватор ChatGPT</h1>
-        <p class="subtitle">Сбор → проверка → архив → Google Docs</p>
+        <p class="subtitle">Собрать чат целиком и сохранить в редактируемом виде</p>
       </div>
+      <details class="settings-menu">
+        <summary class="icon-summary" title="Настройки" aria-label="Настройки">⚙</summary>
+        <div class="settings-popover">
+          <details id="interfaceSettings" class="settings interface-settings" open>
+            <summary><span>Оформление</span><small>тема · шрифт</small></summary>
+            <label class="field">
+              <span>Тема</span>
+              <select id="interfacePalette">
+                <option value="ocean">Океан · градиент</option>
+                <option value="cobalt">Кобальт · градиент</option>
+                <option value="sky">Небо · градиент</option>
+                <option value="violet">Фиолетовая · градиент</option>
+                <option value="rose">Розовая · градиент</option>
+                <option value="amber">Янтарная · градиент</option>
+                <option value="forest">Лесная · градиент</option>
+                <option value="graphite">Графит · градиент</option>
+                <option value="midnight">Полночь · градиент</option>
+                <option value="custom">Своя палитра…</option>
+              </select>
+            </label>
+            <div id="interfaceCustomColors" class="color-grid hidden">
+              <label class="color-field"><span>Акцент</span><input id="interfaceAccent" type="color" value="#1769e0"></label>
+              <label class="color-field"><span>Фон</span><input id="interfaceBackground" type="color" value="#f4f8ff"></label>
+              <label class="color-field"><span>Карточки</span><input id="interfacePanel" type="color" value="#ffffff"></label>
+              <label class="color-field"><span>Текст</span><input id="interfaceText" type="color" value="#12233f"></label>
+            </div>
+            <label class="field">
+              <span>Шрифт интерфейса</span>
+              <select id="interfaceFontPreset">
+                <option value="system">Системный</option>
+                <option value="segoe">Segoe UI</option>
+                <option value="arial">Arial</option>
+                <option value="verdana">Verdana</option>
+                <option value="tahoma">Tahoma</option>
+                <option value="georgia">Georgia</option>
+                <option value="consolas">Consolas</option>
+                <option value="custom">Другой установленный шрифт…</option>
+              </select>
+            </label>
+            <label id="interfaceFontCustomWrap" class="field hidden">
+              <span>Название установленного шрифта</span>
+              <input id="interfaceFontCustom" type="text" maxlength="100" placeholder="Например, PT Sans" autocomplete="off">
+            </label>
+            <button id="resetInterfaceAppearance" class="compact-button" type="button">Сбросить оформление</button>
+            <div id="interfaceSettingsSaved" class="saved" aria-live="polite"></div>
+          </details>
+
+          <details class="settings update">
+            <summary><span>Версия и обновление</span><small><span id="localVersion">—</span></small></summary>
+            <div class="update-actions">
+              <a id="updateExtension" class="update-action" href="updater.html" target="_blank" rel="noopener">Обновить</a>
+              <button id="reloadExtension" type="button">Перезагрузить</button>
+              <a class="update-github" href="https://github.com/Naeirae/ChatGPT-Conversation-Archiver" target="_blank" rel="noreferrer">GitHub</a>
+            </div>
+          </details>
+        </div>
+      </details>
     </header>
 
     <div class="status-bar">
       <p id="status" class="status" role="status" aria-live="polite">Готово.</p>
-      <button id="retryCurrent" class="hidden compact-button">Повторить в обычном режиме</button>
+      <button id="retryCurrent" class="hidden compact-button">Повторить в текущей вкладке</button>
     </div>
 
     <section class="workspace-card capture-card">
       <div class="section-heading">
         <div>
-          <div class="archive-label">Основное действие</div>
+          <div class="archive-label">Текущий чат</div>
           <strong>Сбор переписки</strong>
         </div>
         <span id="captureStateBadge" class="state-badge">Готово</span>
@@ -33,6 +90,17 @@
       <div id="captureProgress" class="capture-progress inline-progress hidden" aria-live="polite">
         <strong id="capturePhase"></strong>
         <div id="captureMeta" class="muted"></div>
+      </div>
+
+      <div class="capture-location">
+        <label class="field compact-field">
+          <span>Где собирать <span class="info-dot" tabindex="0" title="В фоновой вкладке архиватор открывает отдельную копию этого чата, физически прокручивает её от начала до зафиксированного конца и сохраняет сообщения. Текущую вкладку можно не трогать.">i</span></span>
+          <select id="captureTarget">
+            <option value="copy">В фоновой вкладке</option>
+            <option value="current">В текущей вкладке</option>
+          </select>
+        </label>
+        <div id="captureTargetHint" class="muted"></div>
       </div>
 
       <div class="button-grid primary-actions">
@@ -46,46 +114,49 @@
         <button id="cancel" class="cancel hidden">Остановить</button>
         <button id="resetCapture" class="compact-button">Сбросить запуск</button>
       </div>
-
       <div id="compareResult" class="muted compare-result" aria-live="polite"></div>
 
-      <details class="capture-options">
-        <summary>Режим и параметры сбора</summary>
+      <details class="accessibility-options">
+        <summary>Специальные возможности</summary>
         <label class="field">
-          <span>Режим сбора</span>
-          <select id="captureTarget">
-            <option value="copy">Фоновый режим — рабочая копия</option>
-            <option value="current">Обычный режим — текущая вкладка</option>
-          </select>
+          <span>Как именовать пользователя</span>
+          <input id="userName" type="text" maxlength="80" placeholder="Если пусто — «Пользователь»" autocomplete="off">
         </label>
-        <div id="captureTargetHint" class="muted"></div>
-      </details>
-
-      <details id="runLog" class="run-log hidden">
-        <summary>Детали последнего запуска</summary>
-        <strong id="runLogTitle"></strong>
-        <div id="runLogMeta" class="muted"></div>
-        <div id="runLogMessage" class="muted"></div>
-        <button id="copyRunLog" class="compact-button">Скопировать лог запуска</button>
+        <label class="field">
+          <span>Как именовать ChatGPT</span>
+          <input id="assistantName" type="text" maxlength="80" placeholder="Необязательно" autocomplete="off">
+        </label>
+        <label class="check">
+          <input id="alignUserRight" type="checkbox">
+          <span>Пользовательские реплики — по правому краю</span>
+        </label>
+        <div id="settingsSaved" class="saved" aria-live="polite"></div>
       </details>
     </section>
 
-    <section id="draft" class="archive draft-card hidden">
-      <div class="archive-label">Незавершённый проход</div>
-      <strong id="draftTitle"></strong>
-      <div id="draftMeta" class="muted"></div>
-      <div class="actions">
-        <button id="copyDraft">Скопировать незавершённый проход</button>
-        <button id="openFailedCapture" class="hidden">Открыть вкладку сбора</button>
-        <button id="resumeFailedCapture" class="hidden primary">Найти стык и продолжить</button>
-        <button id="deleteDraft" class="danger-outline">Удалить незавершённый проход</button>
+    <section id="draft" class="draft-alert hidden" aria-live="polite">
+      <div class="draft-alert-main">
+        <span class="draft-dot" aria-hidden="true"></span>
+        <div class="draft-copy">
+          <strong id="draftTitle">Сбор не завершён</strong>
+          <div id="draftMeta" class="muted"></div>
+        </div>
       </div>
-      <div id="draftRecoveryHint" class="muted hidden">
-        Рабочая вкладка оставлена открытой. Можно открыть её, вручную домотать ближе к месту обрыва и затем продолжить: архиватор найдёт последний сохранённый стык и пойдёт дальше до исходной нижней метки снимка.
+      <div class="draft-actions">
+        <button id="resumeFailedCapture" class="primary">Дособрать</button>
+        <button id="copyDraft" class="compact-button">Скопировать</button>
+        <button id="openFailedCapture" class="compact-button hidden">Открыть вкладку сбора</button>
+        <button id="deleteDraft" class="danger-outline compact-button">Удалить</button>
       </div>
+      <div id="draftRecoveryHint" class="muted hidden">Если автоматический стык не найдётся, проход сохранится: его можно просмотреть и быстро перейти к последнему сохранённому сообщению.</div>
     </section>
 
-    <details id="unfinishedPassesPanel" class="settings history-panel">\n      <summary><span>Сохранённые незавершённые проходы</span><small id="unfinishedPassesCount">0</small></summary>\n      <div class="muted">Оборванные хронологические проходы: просмотр, повтор прохода вниз и удаление.</div>\n      <div id="unfinishedPassesList" class="history-list"></div>\n    </details>\n\n    <section id="archive" class="archive hidden">
+    <details id="unfinishedPassesPanel" class="compact-panel unfinished-panel">
+      <summary><span>Незавершённые проходы</span><small id="unfinishedPassesCount">0</small></summary>
+      <div id="unfinishedPassesList" class="history-list compact-list"></div>
+    </details>
+
+    <section id="archive" class="archive compact-archive hidden">
       <div class="section-heading">
         <div>
           <div class="archive-label">Локальный архив</div>
@@ -93,31 +164,19 @@
         </div>
       </div>
       <div id="archiveMeta" class="muted"></div>
-      <div class="actions">
-        <button id="copyArchive">Скопировать архив</button>
+      <div class="actions compact-actions">
+        <button id="copyArchive">Скопировать</button>
         <button id="recoverImages">Добрать картинки</button>
-        <button id="deleteArchive" class="danger-outline">Удалить архив</button>
+        <button id="deleteArchive" class="danger-outline">Удалить</button>
       </div>
-      <div class="muted">
-        Если при плохой сети часть картинок пропала, запустите «Добрать картинки». Обычный сбор от этого не меняется и не замедляется.
-      </div>
-      <button id="patchRecoveredImages">Довставить добранные картинки в связанный Google Doc</button>
+      <button id="patchRecoveredImages" class="compact-button">Довставить добранные картинки в связанный Google Doc</button>
     </section>
 
-    <section class="doc-link">
+    <section class="doc-link compact-card">
       <div class="section-heading">
-        <div>
-          <div class="archive-label">После первого архива</div>
-          <strong>Добрать новые сообщения</strong>
-        </div>
+        <div><div class="archive-label">Продолжение</div><strong>Добрать новые сообщения</strong></div>
       </div>
-
-      <div class="muted">
-        Ищет последний сохранённый стык и собирает только новое. Локальный архив остаётся основной точкой продолжения.
-      </div>
-
       <button id="continue" class="primary">Добрать новое</button>
-
       <details class="continuation-options">
         <summary>Google Doc для продолжения</summary>
         <label class="field doc-link-field">
@@ -125,161 +184,51 @@
           <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
         </label>
         <div id="linkedDocHint" class="muted"></div>
-        <div class="muted">
-          Другая ссылка действует только для текущего запуска и не заменяет основной связанный документ.
-        </div>
-
         <details class="recovery-settings">
           <summary>Восстановить точку продолжения из Google Doc</summary>
-          <div class="muted">
-            Резервный путь, если локальный стык потерян: документ читается как исходная точка и сверяется с текущим чатом.
-          </div>
           <button id="syncDoc">Восстановить стык по Google Doc</button>
         </details>
       </details>
     </section>
 
-    <section class="export-card">
+    <section class="export-card compact-card">
       <div class="section-heading">
-        <div>
-          <div class="archive-label">Результат</div>
-          <strong>Экспорт в Google Docs</strong>
-        </div>
+        <div><div class="archive-label">Экспорт</div><strong>Google Docs</strong></div>
       </div>
-
-      <div class="actions">
-        <button id="newDoc" disabled>Сохранить в новый Google Doc</button>
-        <button id="activeDoc" disabled>Вставить в открытый Google Doc</button>
+      <div class="actions compact-actions">
+        <button id="newDoc" disabled>Новый Google Doc</button>
+        <button id="activeDoc" disabled>В открытый Google Doc</button>
       </div>
-
       <details class="tab-export-inner">
-        <summary>Разбить архив по вкладкам и темам</summary>
-        <div class="muted tab-help">
-          Откроется отдельная страница разметки: границы вкладок и подзаголовки можно поставить у нужных реплик.
-        </div>
+        <summary>Разбить по вкладкам и темам</summary>
         <button id="openPlanner" disabled>Разметить архив</button>
       </details>
     </section>
 
-    <details id="historyPanel" class="settings history-panel">
-      <summary>
-        <span>История сборов</span>
-        <small id="historyCount">0 запусков</small>
-      </summary>
-      <div id="captureHistory" class="history-list"></div>
-      <button id="clearHistory" class="compact-button danger-outline">Очистить историю запусков</button>
+    <details id="savedArchivesPanel" class="compact-panel archives-panel">
+      <summary><span>Сохранённые архивы</span><small id="savedArchivesCount">0</small></summary>
+      <div id="savedArchivesList" class="archive-links-list"></div>
     </details>
 
-    <details class="settings archive-settings">
-      <summary>
-        <span>Оформление архива</span>
-        <small>имена · выравнивание · размышления</small>
-      </summary>
+    <details id="technicalPanel" class="compact-panel technical-panel">
+      <summary><span>Техническая информация</span><small>логи · история</small></summary>
 
-      <label class="field">
-        <span>Имя пользователя</span>
-        <input id="userName" type="text" maxlength="80" placeholder="Если пусто — «Пользователь»" autocomplete="off">
-      </label>
+      <details id="runLog" class="run-log hidden">
+        <summary>Последний запуск</summary>
+        <strong id="runLogTitle"></strong>
+        <div id="runLogMeta" class="muted"></div>
+        <div id="runLogMessage" class="muted"></div>
+        <button id="copyRunLog" class="compact-button">Скопировать лог</button>
+      </details>
 
-      <label class="field">
-        <span>Имя ChatGPT</span>
-        <input id="assistantName" type="text" maxlength="80" placeholder="Необязательно" autocomplete="off">
-      </label>
-
-      <label class="check">
-        <input id="alignUserRight" type="checkbox">
-        <span>Пользовательские реплики — по правому краю</span>
-      </label>
-
-      <label class="check">
-        <input id="includeReasoning" type="checkbox">
-        <span>Сохранять доступные размышления</span>
-      </label>
-
-      <div id="settingsSaved" class="saved" aria-live="polite"></div>
+      <details id="historyPanel" class="history-panel">
+        <summary><span>История запусков</span><small id="historyCount">0</small></summary>
+        <div id="captureHistory" class="history-list"></div>
+        <button id="clearHistory" class="compact-button danger-outline">Очистить историю</button>
+      </details>
     </details>
 
-    <details id="interfaceSettings" class="settings interface-settings">
-      <summary>
-        <span>Внешний вид интерфейса</span>
-        <small>палитра · цвета · шрифт</small>
-      </summary>
-
-      <label class="field">
-        <span>Палитра</span>
-        <select id="interfacePalette">
-          <option value="ocean">Океан</option>
-          <option value="cobalt">Кобальт</option>
-          <option value="sky">Небо</option>
-          <option value="violet">Фиолетовая</option>
-          <option value="rose">Розовая</option>
-          <option value="amber">Янтарная</option>
-          <option value="forest">Лесная</option>
-          <option value="graphite">Графит</option>
-          <option value="midnight">Полночь</option>
-          <option value="custom">Своя палитра…</option>
-        </select>
-      </label>
-
-      <div id="interfaceCustomColors" class="color-grid hidden">
-        <label class="color-field">
-          <span>Акцент</span>
-          <input id="interfaceAccent" type="color" value="#1769e0">
-        </label>
-        <label class="color-field">
-          <span>Фон</span>
-          <input id="interfaceBackground" type="color" value="#f4f8ff">
-        </label>
-        <label class="color-field">
-          <span>Карточки</span>
-          <input id="interfacePanel" type="color" value="#ffffff">
-        </label>
-        <label class="color-field">
-          <span>Текст</span>
-          <input id="interfaceText" type="color" value="#12233f">
-        </label>
-      </div>
-
-      <label class="field">
-        <span>Шрифт интерфейса</span>
-        <select id="interfaceFontPreset">
-          <option value="system">Системный</option>
-          <option value="segoe">Segoe UI</option>
-          <option value="arial">Arial</option>
-          <option value="verdana">Verdana</option>
-          <option value="tahoma">Tahoma</option>
-          <option value="georgia">Georgia</option>
-          <option value="consolas">Consolas</option>
-          <option value="custom">Другой установленный шрифт…</option>
-        </select>
-      </label>
-
-      <label id="interfaceFontCustomWrap" class="field hidden">
-        <span>Название установленного шрифта</span>
-        <input id="interfaceFontCustom" type="text" maxlength="100" placeholder="Например, PT Sans" autocomplete="off">
-      </label>
-
-      <button id="resetInterfaceAppearance" class="compact-button" type="button">Сбросить оформление интерфейса</button>
-      <div id="interfaceSettingsSaved" class="saved" aria-live="polite"></div>
-    </details>
-
-    <details class="settings update">
-      <summary>
-        <span>Версия и обновление</span>
-        <small>локально: <span id="localVersion">—</span></small>
-      </summary>
-      <div class="update-copy">
-        <div class="muted">Локальная копия обновляется из публичного GitHub.</div>
-      </div>
-      <div class="update-actions">
-        <a id="updateExtension" class="update-action" href="updater.html" target="_blank" rel="noopener">Обновить</a>
-        <button id="reloadExtension" type="button">Перезагрузить</button>
-        <a class="update-github" href="https://github.com/Naeirae/ChatGPT-Conversation-Archiver" target="_blank" rel="noreferrer">GitHub</a>
-      </div>
-      <div class="muted update-note">«Обновить» открывает отдельную страницу с прогрессом и логом. <strong>update.cmd</strong> остаётся резервным способом.</div>
-    </details>
-
-    <p class="note">Во время полного сбора можно поставить процесс на паузу, продолжить или остановить. «Сбросить запуск» очищает только состояние последнего прохода, но не удаляет завершённый локальный архив и историю.</p>
+    <p class="note">Пауза запоминает текущий контекст. При продолжении архиватор сначала проверяет место остановки; если позиция потеряна, ищет сохранённый стык назад и не продолжает наугад.</p>
   </main>
   <script src="popup.js"></script>
 </body>
