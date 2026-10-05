@@ -172,8 +172,12 @@ try {
       fail('popup.html: missing UI control ' + id);
     }
   }
-  if (popupHtml.indexOf('id="status"') > popupHtml.indexOf('id="interfaceSettings"')) {
-    fail('popup.html: service status must stay above interface settings');
+  if (!popupHtml.includes('class="settings-menu"') ||
+      !popupHtml.includes('id="savedArchivesList"') ||
+      !popupHtml.includes('id="viewDraft"') ||
+      popupHtml.includes('id="includeReasoning"') ||
+      popupHtml.includes('\\n\\n    <section')) {
+    fail('popup.html: compact settings/archive/draft structure regression');
   }
   if (!popupHtml.includes('id="compareArchive"') ||
       !popupHtml.includes('id="continue"') ||
