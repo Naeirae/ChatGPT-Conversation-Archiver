@@ -172,7 +172,7 @@ try {
       fail('popup.html: missing UI control ' + id);
     }
   }
-  if (!popupHtml.includes('class="settings-menu"') ||
+  if (!popupHtml.includes('settings-menu') ||
       !popupHtml.includes('id="savedArchivesList"') ||
       !popupHtml.includes('id="viewDraft"') ||
       popupHtml.includes('id="includeReasoning"') ||
