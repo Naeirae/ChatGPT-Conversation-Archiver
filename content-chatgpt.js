@@ -215,7 +215,7 @@
 
   async function getSettings() {
     const result = await chrome.storage.local.get(SETTINGS_KEY);
-    return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+    return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}), includeReasoning: false };
   }
 
   function hashText(text) {
@@ -2557,6 +2557,8 @@
       state.jobId = null;
       state.cancel = false;
       state.paused = false;
+      state.pauseCheckpoint = null;
+      state.resumeFailure = '';
     }
   }
 
