@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.48
+
+- persist an unfinished-pass checkpoint while the chronological walk is running, including the source chat URL and fixed snapshot boundary;
+- preserve that checkpoint when the working capture tab closes so the popup can offer **«Продолжить сбор»** instead of only a full retry;
+- delete temporary recovery checkpoints after a successful capture;
+- close already-open Help/Settings popovers before starting the walkthrough, while still opening the exact panel required by each walkthrough step;
+- make the popup update notice explicitly green as well as the Chrome toolbar update badge;
+- manifest -> 0.3.48.
+
 ## 0.3.47
 
 - remove the blurred onboarding backdrop and keep the interface readable during the walkthrough;
