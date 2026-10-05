@@ -1687,6 +1687,7 @@ $('reloadExtension').addEventListener('click', () => {
     renderInterfaceAppearanceControls(settings);
     applyInterfaceAppearance(settings);
     await refreshUpdateNotice();
+    await showWhatsNewIfNeeded();
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
