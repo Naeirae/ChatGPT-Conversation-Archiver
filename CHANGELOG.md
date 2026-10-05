@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.46
+
+- fix the first-run walkthrough so the highlighted control no longer renders above and covers the help card;
+- position the walkthrough card on the opposite side of the current target when possible;
+- highlight compact controls instead of the whole capture card;
+- keep conceptual steps such as unfinished-pass recovery readable even when the corresponding UI is not currently visible;
+- manifest -> 0.3.46.
+
 ## 0.3.45
 
 - rebuild the popup around one clear flow: collect the current chat, then work with the saved archive;
