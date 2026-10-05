@@ -13,9 +13,8 @@
       <div class="hero-copy">
         <div class="product-line">
           <h1>Архиватор ChatGPT</h1>
-          <span class="version-badge">v<span id="localVersion">—</span></span>
         </div>
-        <p class="byline">@naeirae</p>
+        <p class="product-meta"><span class="version-badge">v<span id="localVersion">—</span></span><span aria-hidden="true">·</span><span class="byline">@naeirae</span></p>
         <p class="subtitle">Собирает чат целиком и сохраняет его в редактируемом виде</p>
       </div>
 
@@ -111,6 +110,14 @@
       <a id="updateNoticeAction" href="updater.html" target="_blank" rel="noopener">Обновить</a>
     </div>
 
+    <section id="whatsNew" class="whats-new hidden" aria-live="polite">
+      <div class="whats-new-head">
+        <strong id="whatsNewTitle">Что изменилось</strong>
+        <button id="dismissWhatsNew" class="text-button" type="button">Понятно</button>
+      </div>
+      <ul id="whatsNewList"></ul>
+    </section>
+
     <div class="status-bar">
       <p id="status" class="status" role="status" aria-live="polite">Готово.</p>
       <button id="retryCurrent" class="hidden compact-button">Повторить в текущей вкладке</button>
@@ -120,7 +127,7 @@
       <div class="section-heading">
         <div>
           <div class="archive-label">Текущий чат</div>
-          <strong>Собрать переписку</strong>
+          <strong>Собрать чат целиком</strong>
         </div>
         <span id="captureStateBadge" class="state-badge">Готово</span>
       </div>
@@ -159,14 +166,14 @@
       <div id="compareResult" class="hidden" aria-live="polite"></div>
 
       <details class="accessibility-options" data-tour="accessibility">
-        <summary>Специальные возможности</summary>
+        <summary>Оформление переписки</summary>
         <label class="field">
-          <span>Как именовать пользователя</span>
-          <input id="userName" type="text" maxlength="80" placeholder="Если пусто — «Пользователь»" autocomplete="off">
+          <span>Имя пользователя в документе</span>
+          <input id="userName" type="text" maxlength="80" placeholder="Например, Иван Петрович" autocomplete="off">
         </label>
         <label class="field">
-          <span>Как именовать ChatGPT</span>
-          <input id="assistantName" type="text" maxlength="80" placeholder="Не обязательно" autocomplete="off">
+          <span>Имя ChatGPT в документе</span>
+          <input id="assistantName" type="text" maxlength="80" placeholder="Например, Пётр Иваныч" autocomplete="off">
         </label>
         <label class="check">
           <input id="alignUserRight" type="checkbox">
@@ -226,7 +233,8 @@
     </details>
 
     <details id="savedArchivesPanel" class="compact-panel archives-panel" data-tour="library">
-      <summary><span>Сохранённые архивы</span><small id="savedArchivesCount">0</small></summary>
+      <summary><span>Сохранённые чаты</span><small id="savedArchivesCount">0</small></summary>
+      <div id="savedArchivesNotice" class="archive-save-notice hidden"></div>
       <div id="savedArchivesList" class="archive-links-list"></div>
     </details>
 
@@ -262,6 +270,7 @@
     </details>
 
     <div id="tourOverlay" class="tour-overlay hidden" aria-hidden="true">
+      <div id="tourSpotlight" class="tour-spotlight hidden" aria-hidden="true"></div>
       <div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
         <div id="tourStep" class="tour-step"></div>
         <h2 id="tourTitle"></h2>

@@ -67,8 +67,8 @@ function renderCaptureProgress(job, running) {
   $('capturePhase').textContent = PHASE_LABELS[job?.phase] || 'Сбор переписки';
   const parts = [];
   if (job?.navigationHighWater && job?.phase === 'walk') {
-    parts.push('минимум найдено: ' + Number(job.navigationHighWater || 0));
-    parts.push('хронологически: ' + Number(job.chronologicalCount ?? job.count ?? 0));
+    parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
+    parts.push('собрано по порядку: ' + Number(job.chronologicalCount ?? job.count ?? 0));
   } else {
     parts.push((job?.count || 0) + ' сообщений');
   }
@@ -165,12 +165,33 @@ function renderUnfinishedPasses(items = []) {
       (item.messageCount || 0) + ' сообщений',
       (item.imageCount || 0) + ' изображений'
     ];
-    if (item.navigationHighWater) parts.push('контрольный минимум: ' + item.navigationHighWater);
-    if (item.hasBoundary) parts.push('нижняя метка сохранена');
+    if (item.navigationHighWater) parts.push('найдено на первом проходе: ' + item.navigationHighWater);
+    if (item.hasBoundary) parts.push('конец исходного чата сохранён');
     meta.textContent = parts.join(' · ');
 
     const actions = document.createElement('div');
     actions.className = 'actions';
+
+    const resume = document.createElement('button');
+    resume.className = 'primary';
+    resume.textContent = 'Продолжить';
+    resume.onclick = async () => {
+      resume.disabled = true;
+      setStatus('Открываю исходный чат и ищу место остановки…');
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+          passId: item.id,
+          captureTarget: $('captureTarget').value
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый проход.');
+        render({ ...state, job: result.job });
+        startPolling();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        resume.disabled = false;
+      }
+    };
 
     const view = document.createElement('button');
     view.textContent = 'Просмотреть';
@@ -210,7 +231,7 @@ function renderUnfinishedPasses(items = []) {
       setStatus('Незавершённый проход удалён.');
     };
 
-    actions.append(view, copy, remove);
+    actions.append(resume, view, copy, remove);
     row.append(head, meta, actions);
     list.appendChild(row);
   }
@@ -220,16 +241,27 @@ function renderUnfinishedPasses(items = []) {
 function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
   const count = $('savedArchivesCount');
+  const notice = $('savedArchivesNotice');
   if (!list || !count) return;
 
   const rows = Array.isArray(items) ? items : [];
   count.textContent = String(rows.length);
   list.textContent = '';
 
+  const withoutDocument = rows.filter(item => !item.destination?.saved).length;
+  if (notice) {
+    notice.classList.toggle('hidden', !withoutDocument);
+    notice.textContent = withoutDocument
+      ? (withoutDocument === 1
+          ? '1 чат есть в Архиваторе, но ещё не перенесён в документ.'
+          : withoutDocument + ' чатов есть в Архиваторе, но ещё не перенесены в документ.')
+      : '';
+  }
+
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'history-empty';
-    empty.textContent = 'Сохранённых архивов пока нет.';
+    empty.textContent = 'Сохранённых чатов пока нет.';
     list.appendChild(empty);
     return;
   }
@@ -245,18 +277,45 @@ function renderSavedArchives(items = []) {
 
     const title = document.createElement('div');
     title.className = 'archive-link-title';
-    title.textContent = item.title || 'Архив ChatGPT';
+    title.textContent = item.title || 'Чат ChatGPT';
 
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
     const parts = [];
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
-    parts.push(item.docUrl ? 'сохранён в Google Docs' : 'локальная копия');
-    if (item.updatedAt) {
-      try { parts.push(new Date(item.updatedAt).toLocaleString('ru-RU')); } catch (_) {}
+    if (item.capturedAt) {
+      try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
     }
     meta.textContent = parts.join(' · ');
-    main.append(title, meta);
+
+    const destination = document.createElement('div');
+    destination.className = 'archive-destination';
+
+    const destinationText = document.createElement('span');
+    if (item.destination?.saved) {
+      if (item.destination.kind === 'google-doc') {
+        destinationText.textContent = 'Сохранён в Google Docs';
+      } else if (item.destination.url) {
+        destinationText.textContent = 'Сохранён отдельно';
+      } else {
+        destinationText.textContent = 'Сохранён отдельно';
+      }
+    } else {
+      destinationText.textContent = 'Не перенесён в документ';
+    }
+    destination.appendChild(destinationText);
+
+    const destinationUrl = item.destination?.url || item.docUrl || '';
+    if (destinationUrl) {
+      const destinationLink = document.createElement('a');
+      destinationLink.href = destinationUrl;
+      destinationLink.target = '_blank';
+      destinationLink.rel = 'noopener noreferrer';
+      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть Google Doc ↗' : 'Открыть ↗';
+      destination.appendChild(destinationLink);
+    }
+
+    main.append(title, meta, destination);
 
     const actions = document.createElement('div');
     actions.className = 'archive-link-actions';
@@ -268,14 +327,14 @@ function renderSavedArchives(items = []) {
     resume.disabled = busy;
     resume.onclick = async () => {
       resume.disabled = true;
-      setStatus('Открываю сохранённый чат и ищу место продолжения…');
+      setStatus('Открываю чат и ищу место продолжения…');
       try {
         const result = await chrome.runtime.sendMessage({
           type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
           archiveId: item.id,
           captureTarget: $('captureTarget').value
         });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сохранённый чат.');
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить чат.');
         render({ ...state, job: result.job });
         startPolling();
       } catch (error) {
@@ -297,8 +356,8 @@ function renderSavedArchives(items = []) {
           type: 'ARCHIVER_COPY_ARCHIVE',
           archiveId: item.id
         });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать архив.');
-        setStatus('Архив скопирован: ' + (result.count || 0) + ' сообщений.');
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать чат.');
+        setStatus('Скопировано: ' + (result.count || 0) + ' сообщений.');
       } catch (error) {
         setStatus(error.message || String(error), true);
       } finally {
@@ -323,10 +382,10 @@ function renderSavedArchives(items = []) {
       exportButton.disabled = busy;
       exportButton.onclick = async () => {
         exportButton.disabled = true;
-        setStatus('Создаю Google Doc из сохранённого архива…');
+        setStatus('Создаю Google Doc…');
         try {
           const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-          setStatus('Готово. В Google Docs сохранено ' + (result.addedCount || 0) + ' сообщений.');
+          setStatus('Сохранено в Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
           await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
@@ -336,10 +395,17 @@ function renderSavedArchives(items = []) {
       actions.appendChild(exportButton);
     }
 
+    const mark = document.createElement('button');
+    mark.className = 'archive-link-more';
+    mark.type = 'button';
+    mark.textContent = item.destination?.saved ? 'Изменить' : 'Отметить как сохранённый';
+    mark.disabled = busy;
+    actions.appendChild(mark);
+
     const plan = document.createElement('button');
     plan.className = 'archive-link-more';
     plan.type = 'button';
-    plan.textContent = 'Разметить';
+    plan.textContent = 'Разбить по темам';
     plan.disabled = busy;
     plan.onclick = async () => {
       const url = chrome.runtime.getURL('planner.html?archiveId=' + encodeURIComponent(item.id));
@@ -347,7 +413,74 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(plan);
 
-    row.append(main, actions);
+    const destinationEditor = document.createElement('div');
+    destinationEditor.className = 'archive-destination-editor hidden';
+
+    const destinationInput = document.createElement('input');
+    destinationInput.type = 'url';
+    destinationInput.placeholder = 'Ссылка на документ или страницу — необязательно';
+    destinationInput.value = item.destination?.kind === 'manual' ? (item.destination?.url || '') : '';
+    destinationInput.autocomplete = 'off';
+
+    const editorActions = document.createElement('div');
+    editorActions.className = 'archive-destination-editor-actions';
+
+    const saveDestination = document.createElement('button');
+    saveDestination.type = 'button';
+    saveDestination.className = 'primary';
+    saveDestination.textContent = 'Сохранить отметку';
+    saveDestination.onclick = async () => {
+      saveDestination.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_SET_ARCHIVE_DESTINATION',
+          archiveId: item.id,
+          saved: true,
+          url: destinationInput.value.trim()
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить отметку.');
+        await getState();
+        setStatus('Отметка сохранена.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        saveDestination.disabled = false;
+      }
+    };
+    editorActions.appendChild(saveDestination);
+
+    if (item.destination?.saved && item.destination.kind !== 'google-doc') {
+      const clearDestination = document.createElement('button');
+      clearDestination.type = 'button';
+      clearDestination.className = 'danger-outline';
+      clearDestination.textContent = 'Снять отметку';
+      clearDestination.onclick = async () => {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_SET_ARCHIVE_DESTINATION',
+          archiveId: item.id,
+          saved: false
+        });
+        if (!result?.ok) {
+          setStatus(result?.error || 'Не удалось снять отметку.', true);
+          return;
+        }
+        await getState();
+      };
+      editorActions.appendChild(clearDestination);
+    }
+
+    const cancelDestination = document.createElement('button');
+    cancelDestination.type = 'button';
+    cancelDestination.textContent = 'Отмена';
+    cancelDestination.onclick = () => destinationEditor.classList.add('hidden');
+    editorActions.appendChild(cancelDestination);
+
+    destinationEditor.append(destinationInput, editorActions);
+    mark.onclick = () => {
+      destinationEditor.classList.toggle('hidden');
+      if (!destinationEditor.classList.contains('hidden')) destinationInput.focus();
+    };
+
+    row.append(main, actions, destinationEditor);
     list.appendChild(row);
   }
 }
@@ -358,7 +491,7 @@ function renderHistory(history = []) {
   if (!list || !count) return;
 
   const items = Array.isArray(history) ? history : [];
-  count.textContent = items.length + (items.length === 1 ? ' запуск' : (items.length >= 2 && items.length <= 4 ? ' запуска' : ' запусков'));
+  count.textContent = String(items.length);
   list.textContent = '';
 
   if (!items.length) {
@@ -710,14 +843,14 @@ function render(data) {
   $('draftRecoveryHint').classList.toggle('hidden', !draft);
   $('deleteDraft').disabled = Boolean(running || !draft);
 
-  $('archive').classList.toggle('hidden', !archive);
+  $('archive').classList.add('hidden');
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
     ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
       (archive.lastImageRecoveredCount ? ` · добор изображений +${archive.lastImageRecoveredCount}` : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
-  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в Google Docs' : 'Сохранён последний запуск';
+  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в Google Docs' : 'Чат сохранён';
   $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
   $('archiveDocStatus').textContent = linkedUrl
     ? 'Google Doc связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
@@ -743,19 +876,17 @@ function render(data) {
     setStatus(job.message || 'Сбор идет в фоне…');
   } else if (job?.status === 'error') {
     const attempted = Number(job.count || 0);
-    const saved = Number(archive?.messageCount || 0);
+    const hasDraft = Boolean(draft?.messageCount);
     const attemptText = attempted
-      ? `Текущий запуск остановился после ${attempted} собранных сообщений. Этот неполный проход не заменил архив.`
-      : 'Текущий запуск завершился с ошибкой до сохранения нового архива.';
-    const savedText = archive
-      ? ` Последний завершенный локальный архив: ${saved} сообщений.`
-      : ' Завершенного локального архива пока нет.';
-    setStatus(attemptText + savedText + ' ' + (job.message || ''), true);
+      ? `Сбор остановился после ${attempted} сообщений.`
+      : 'Сбор остановился.';
+    const nextText = hasDraft ? ' Незавершённый сбор можно продолжить ниже.' : '';
+    setStatus(attemptText + nextText + ' ' + (job.message || ''), true);
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
     setStatus(attempted
-      ? `Сбор отменен. В текущем проходе было собрано ${attempted} сообщений; завершенный локальный архив не изменен.`
-      : 'Сбор отменен. Завершенный локальный архив не изменен.');
+      ? `Сбор отменён после ${attempted} сообщений.`
+      : 'Сбор отменён.');
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
     setStatus(
@@ -1250,6 +1381,7 @@ $('activeDoc').onclick = async () => {
       setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.` + imagePart);
     }
     await getState();
+    await showWhatsNewIfNeeded();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1314,47 +1446,112 @@ $('resetInterfaceAppearance').onclick = async () => {
 };
 
 const TOUR_STORAGE_KEY = 'archiverIntroSeen';
+const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 const TOUR_STEPS = [
   {
-    selector: '[data-tour="capture"]',
-    title: 'Соберите чат',
-    text: 'Выберите фоновую или текущую вкладку и нажмите «Собрать чат». Фоновый режим оставляет исходный чат свободным.'
+    selector: '#captureTarget',
+    title: 'Выберите, где собирать',
+    text: 'Фоновый режим собирает чат в отдельной рабочей вкладке и оставляет исходный диалог свободным. Текущая вкладка — резервный вариант.'
   },
   {
-    selector: '#captureControls',
-    title: 'Пауза не теряет место',
-    text: 'Во время сбора можно поставить проход на паузу. При продолжении Архиватор сначала проверит сохранённый контекст и не пойдёт дальше наугад.'
+    selector: '#capture',
+    title: 'Запустите сбор',
+    text: 'Нажмите «Собрать чат». Архиватор зафиксирует конец переписки, дойдёт до начала и соберёт сообщения в хронологическом порядке.'
   },
   {
-    selector: '[data-tour="unfinished"]',
-    title: 'Незавершённый сбор можно продолжить',
-    text: 'Если проход оборвётся после сохранения части сообщений, здесь появятся действия «Продолжить», «Просмотреть» и «Удалить».'
+    selector: '',
+    title: 'Оборванный проход не пропадает',
+    text: 'Если сбор прервётся после сохранения части сообщений, появится отдельный незавершённый проход. Его можно продолжить, просмотреть, скопировать или удалить.'
   },
   {
-    selector: '[data-tour="library"]',
-    title: 'Готовые чаты лежат в библиотеке',
-    text: 'Из сохранённого архива можно продолжить исходный чат, открыть связанный Google Doc или сохранить архив в Google Docs.'
+    selector: '#savedArchivesPanel > summary',
+    title: 'Готовые чаты — в одном списке',
+    text: 'Здесь можно продолжить чат, скопировать его, сохранить в Google Docs или разбить по темам.'
   },
   {
-    selector: '[data-tour="accessibility"]',
-    title: 'Подписи можно настроить',
-    text: 'Здесь можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
+    selector: '.accessibility-options > summary',
+    title: 'Настройте подписи',
+    text: 'Здесь можно изменить имена пользователя и ChatGPT в сохранённом тексте и выровнять реплики пользователя справа.'
   },
   {
-    selector: '.settings-menu',
+    openDetails: '.settings-menu',
+    selector: '#interfacePalette',
     title: 'Оформление и обновление',
-    text: 'В настройках находятся темы, шрифт и обновление расширения.'
+    text: 'В настройках можно выбрать тему и шрифт. Здесь же находится проверка обновлений.'
   },
   {
-    selector: '.help-menu',
+    openDetails: '.help-menu',
+    selector: '#showTour',
     title: 'Справка всегда рядом',
-    text: 'Здесь можно снова открыть знакомство, прочитать полную справку и скопировать контакт разработчика.'
+    text: 'В справке можно снова запустить это знакомство, открыть полную инструкцию и скопировать контакт разработчика.'
   }
 ];
 let tourIndex = 0;
+let tourOpenedDetails = null;
+
+function closeTourOpenedDetails() {
+  if (tourOpenedDetails) {
+    tourOpenedDetails.open = false;
+    tourOpenedDetails = null;
+  }
+}
 
 function clearTourTarget() {
   document.querySelectorAll('.tour-target').forEach(node => node.classList.remove('tour-target'));
+  const spotlight = $('tourSpotlight');
+  if (spotlight) {
+    spotlight.classList.add('hidden');
+    spotlight.removeAttribute('style');
+  }
+}
+
+function positionTour(target) {
+  const overlay = $('tourOverlay');
+  const card = document.querySelector('.tour-card');
+  const spotlight = $('tourSpotlight');
+  if (!overlay || !card) return;
+
+  const margin = 10;
+  const gap = 10;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const cardWidth = Math.min(300, vw - margin * 2);
+
+  card.style.width = cardWidth + 'px';
+  card.style.left = margin + 'px';
+  card.style.top = margin + 'px';
+
+  if (!target) {
+    const rect = card.getBoundingClientRect();
+    card.style.left = Math.max(margin, Math.round((vw - rect.width) / 2)) + 'px';
+    card.style.top = Math.max(margin, Math.round((vh - rect.height) / 2)) + 'px';
+    return;
+  }
+
+  const tr = target.getBoundingClientRect();
+  if (spotlight) {
+    const pad = 5;
+    spotlight.classList.remove('hidden');
+    spotlight.style.left = Math.max(4, tr.left - pad) + 'px';
+    spotlight.style.top = Math.max(4, tr.top - pad) + 'px';
+    spotlight.style.width = Math.min(vw - 8, tr.width + pad * 2) + 'px';
+    spotlight.style.height = Math.min(vh - 8, tr.height + pad * 2) + 'px';
+  }
+
+  const cr = card.getBoundingClientRect();
+  const roomBelow = vh - tr.bottom;
+  const roomAbove = tr.top;
+  let top = roomBelow >= cr.height + gap
+    ? tr.bottom + gap
+    : roomAbove >= cr.height + gap
+      ? tr.top - cr.height - gap
+      : Math.max(margin, Math.min(vh - cr.height - margin, vh - cr.height - margin));
+
+  let left = Math.round(tr.left + tr.width / 2 - cr.width / 2);
+  left = Math.max(margin, Math.min(vw - cr.width - margin, left));
+
+  card.style.left = left + 'px';
+  card.style.top = Math.max(margin, top) + 'px';
 }
 
 function renderTourStep() {
@@ -1363,13 +1560,20 @@ function renderTourStep() {
   if (!overlay || !step) return;
 
   clearTourTarget();
-  const target = document.querySelector(step.selector);
-  if (target) {
-    if (target.classList.contains('hidden')) target.classList.remove('tour-target');
-    else {
-      target.classList.add('tour-target');
-      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  closeTourOpenedDetails();
+
+  if (step.openDetails) {
+    const details = document.querySelector(step.openDetails);
+    if (details) {
+      details.open = true;
+      tourOpenedDetails = details;
     }
+  }
+
+  const target = step.selector ? document.querySelector(step.selector) : null;
+  if (target && !target.classList.contains('hidden')) {
+    target.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    target.classList.add('tour-target');
   }
 
   $('tourStep').textContent = (tourIndex + 1) + ' из ' + TOUR_STEPS.length;
@@ -1377,6 +1581,8 @@ function renderTourStep() {
   $('tourText').textContent = step.text;
   $('tourPrev').disabled = tourIndex === 0;
   $('tourNext').textContent = tourIndex === TOUR_STEPS.length - 1 ? 'Готово' : 'Далее';
+
+  requestAnimationFrame(() => positionTour(target && !target.classList.contains('hidden') ? target : null));
 }
 
 async function openTour() {
@@ -1388,10 +1594,41 @@ async function openTour() {
 
 async function closeTour(markSeen = true) {
   clearTourTarget();
+  closeTourOpenedDetails();
   $('tourOverlay').classList.add('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'true');
   if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
 }
+
+const WHATS_NEW_COPY = {
+  '0.3.46': [
+    'Незавершённый сбор можно продолжить прямо из списка.',
+    'В «Сохранённых архивах» видно, перенесён ли чат в документ. Можно отметить это вручную и добавить любую ссылку.',
+    'Знакомство точнее подсвечивает элементы интерфейса.'
+  ]
+};
+
+async function showWhatsNewIfNeeded() {
+  const result = await chrome.storage.local.get(WHATS_NEW_PENDING_KEY);
+  const pending = result[WHATS_NEW_PENDING_KEY];
+  if (!pending?.version) return;
+
+  const items = WHATS_NEW_COPY[pending.version] || ['Расширение обновлено. Изменения перечислены в журнале версии.'];
+  $('whatsNewTitle').textContent = 'Новое в ' + pending.version;
+  const list = $('whatsNewList');
+  list.textContent = '';
+  for (const item of items) {
+    const li = document.createElement('li');
+    li.textContent = item;
+    list.appendChild(li);
+  }
+  $('whatsNew').classList.remove('hidden');
+}
+
+$('dismissWhatsNew').onclick = async () => {
+  $('whatsNew').classList.add('hidden');
+  await chrome.storage.local.remove(WHATS_NEW_PENDING_KEY);
+};
 
 $('showTour').onclick = () => openTour();
 $('tourSkip').onclick = () => closeTour(true);
@@ -1450,6 +1687,7 @@ $('reloadExtension').addEventListener('click', () => {
     renderInterfaceAppearanceControls(settings);
     applyInterfaceAppearance(settings);
     await refreshUpdateNotice();
+    await showWhatsNewIfNeeded();
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();

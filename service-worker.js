@@ -42,6 +42,7 @@ const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/Naeirae/ChatGPT-Conversation-Archiver/main/manifest.json';
 const UPDATE_ALARM = 'archiver-update-check';
+const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
@@ -63,6 +64,8 @@ const {
   indexArchive,
   getLinkedDoc,
   setLinkedDoc,
+  getArchiveDestination,
+  setArchiveDestination,
   getDocExport,
   recordDocExport
 } = archiveStore;
@@ -71,25 +74,93 @@ const summarize = summarizeArchive;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function listLinkedArchives() {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.archiveIndex);
+  const result = await chrome.storage.local.get(null);
   const index = result[STORAGE_KEYS.archiveIndex] || {};
-  const rows = [];
+  const indexedIds = new Set(Object.values(index).filter(Boolean));
+  const archives = [];
+
+  for (const [key, value] of Object.entries(result || {})) {
+    if (!key.startsWith(STORAGE_KEYS.archivePrefix)) continue;
+    if (!value?.id || !value?.sourceUrl) continue;
+    archives.push(value);
+    indexedIds.add(value.id);
+  }
+
   for (const archiveId of Object.values(index)) {
+    if (!archiveId || archives.some(item => item.id === archiveId)) continue;
     const archive = await getArchive(archiveId);
-    if (!archive?.sourceUrl) continue;
+    if (archive?.id && archive?.sourceUrl) archives.push(archive);
+  }
+
+  const rows = [];
+  const seen = new Set();
+  const repairedIndex = { ...index };
+  let indexChanged = false;
+
+  for (const archive of archives) {
+    if (seen.has(archive.id)) continue;
+    seen.add(archive.id);
+
+    const key = conversationKey(archive.sourceUrl || '');
+    if (key && repairedIndex[key] !== archive.id) {
+      repairedIndex[key] = archive.id;
+      indexChanged = true;
+    }
+
     const linked = await getLinkedDoc(archive.sourceUrl);
+    let destination = await getArchiveDestination(archive.id);
+    if (!destination && linked?.url) {
+      destination = await setArchiveDestination(archive.id, {
+        saved: true,
+        url: linked.url,
+        kind: 'google-doc',
+        label: 'Google Docs'
+      });
+    }
     rows.push({
       id: archive.id,
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
+      imageCount: archive.imageCount || 0,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
       docUrl: linked?.url || '',
-      updatedAt: linked?.updatedAt || archive.capturedAt || ''
+      destination,
+      updatedAt: destination?.updatedAt || linked?.updatedAt || archive.capturedAt || ''
     });
   }
+
+  if (indexChanged) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.archiveIndex]: repairedIndex });
+  }
+
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
+}
+
+async function setArchiveSavedDestination(archiveId = '', { saved = true, url = '', label = '' } = {}) {
+  const archive = await getArchive(archiveId);
+  if (!archive?.id) throw new Error('Сохранённый чат не найден.');
+
+  const normalizedUrl = String(url || '').trim();
+  if (normalizedUrl) {
+    let parsed;
+    try { parsed = new URL(normalizedUrl); } catch (_) {
+      throw new Error('Проверьте ссылку: она должна начинаться с http:// или https://.');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Проверьте ссылку: она должна начинаться с http:// или https://.');
+    }
+  }
+
+  const destination = await setArchiveDestination(archive.id, saved ? {
+    saved: true,
+    url: normalizedUrl,
+    kind: 'manual',
+    label: String(label || '').trim()
+  } : null);
+
+  return { ok: true, archiveId: archive.id, destination };
 }
 
 async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
@@ -650,6 +721,8 @@ async function startCapture({
   mode = 'full',
   docUrl = '',
   existingArchive: providedArchive = null,
+  existingDraft: providedDraft = null,
+  fixedCaptureBoundary = null,
   resumeTailSignatures = [],
   captureTarget = 'copy'
 } = {}) {
@@ -670,6 +743,7 @@ async function startCapture({
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
   let existingArchive = providedArchive;
+  const existingDraft = providedDraft;
 
   if ((mode === 'continue' || mode === 'sync' || mode === 'compare' || mode === 'images') && !existingArchive) {
     existingArchive = await getArchiveForUrl(inspection.href);
@@ -677,6 +751,12 @@ async function startCapture({
 
   if ((mode === 'continue' || mode === 'compare' || mode === 'images') && !existingArchive?.messages?.length) {
     throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по Google Doc.');
+  }
+  if (mode === 'resume-draft' && !existingDraft?.messages?.length) {
+    throw new Error('Сохранённый незавершённый проход не найден.');
+  }
+  if (mode === 'resume-draft' && (!fixedCaptureBoundary?.kind || !fixedCaptureBoundary?.key)) {
+    throw new Error('У незавершённого прохода нет сохранённой нижней метки. Без неё продолжить проход безопасно нельзя.');
   }
 
   const requestedDocUrl = normalizeGoogleDocUrl(docUrl);
@@ -726,7 +806,9 @@ async function startCapture({
           ? 'продолжение'
           : mode === 'images'
             ? 'добор изображений'
-            : 'полный сбор';
+            : mode === 'resume-draft'
+              ? 'продолжение незавершённого прохода'
+              : 'полный сбор';
     const targetLabel = captureTarget === 'current' ? 'текущая вкладка' : 'рабочая копия';
 
     await setJob({
@@ -740,6 +822,10 @@ async function startCapture({
       captureMode: mode,
       captureTarget,
       baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
+      recoveryDraftId: mode === 'resume-draft' ? (existingDraft?.id || '') : '',
+      draftId: mode === 'resume-draft' ? (existingDraft?.id || '') : '',
+      draftCount: mode === 'resume-draft' ? (existingDraft?.messages?.length || 0) : 0,
+      captureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null,
       pendingDocUrl,
       pendingDocMode,
       message: mode === 'full'
@@ -750,9 +836,13 @@ async function startCapture({
           ? (captureTarget === 'current'
               ? 'Текущая вкладка готова; добираю изображения по всей переписке…'
               : 'Рабочая копия загружена; добираю изображения по всей переписке…')
-          : (captureTarget === 'current'
-              ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
-              : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
+          : mode === 'resume-draft'
+            ? (captureTarget === 'current'
+                ? 'Текущая вкладка готова; ищу место остановки незавершённого прохода…'
+                : 'Рабочая копия загружена; ищу место остановки незавершённого прохода…')
+            : (captureTarget === 'current'
+                ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
+                : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
       count: 0,
       addedCount: 0,
       imageCount: 0,
@@ -777,17 +867,26 @@ async function startCapture({
     });
 
     const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
-    const resumeAnchorId = (mode === 'sync' || mode === 'images') ? '' : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
-    const resumeAnchorSignature = mode === 'sync'
-      ? (resumeTailSignatures[resumeTailSignatures.length - 1] || '')
-      : (lastExistingMessage ? messageSignature(lastExistingMessage.role, lastExistingMessage.text) : '');
+    const lastDraftMessage = existingDraft?.messages?.[existingDraft.messages.length - 1] || null;
+    const resumeAnchorId = mode === 'resume-draft'
+      ? (lastDraftMessage?.id || '')
+      : (mode === 'sync' || mode === 'images')
+        ? ''
+        : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
+    const resumeAnchorSignature = mode === 'resume-draft'
+      ? (lastDraftMessage ? messageSignature(lastDraftMessage.role, lastDraftMessage.text) : '')
+      : mode === 'sync'
+        ? (resumeTailSignatures[resumeTailSignatures.length - 1] || '')
+        : (lastExistingMessage ? messageSignature(lastExistingMessage.role, lastExistingMessage.text) : '');
 
     await ensureChatGptContentScript(captureTab.id, jobId, {
       mode,
       resumeAnchorId,
       resumeAnchorSignature,
       resumeTailSignatures,
-      existingArchiveId: existingArchive?.id || ''
+      existingArchiveId: existingArchive?.id || '',
+      existingDraftId: existingDraft?.id || '',
+      fixedCaptureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null
     });
 
     if (captureTarget === 'copy') {
@@ -1075,6 +1174,35 @@ async function resumeFailedCaptureFromWorkingTab() {
   });
 
   return { ok: true, job: next };
+}
+
+async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
+  const draft = await getDraft(passId);
+  if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  if (!isConversationUrl(draft.sourceUrl || '')) {
+    throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
+  }
+  const boundary = draft.captureBoundary || null;
+  if (!boundary?.kind || !boundary?.key) {
+    throw new Error('У этого незавершённого прохода нет нижней метки. Без неё безопасно продолжить сбор нельзя.');
+  }
+
+  const active = await getActiveTab();
+  const activeMatches = Boolean(active?.id && conversationKey(active.url || '') === conversationKey(draft.sourceUrl || ''));
+
+  if (!activeMatches) {
+    const sourceTab = await chrome.tabs.create({ url: draft.sourceUrl, active: true });
+    if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
+    await waitForChatTabComplete(sourceTab.id, 45000);
+    await waitForChatDomReady(sourceTab.id, 45000);
+  }
+
+  return startCapture({
+    mode: 'resume-draft',
+    existingDraft: draft,
+    fixedCaptureBoundary: boundary,
+    captureTarget
+  });
 }
 
 async function deleteDraftAndRecoveryTab(draftId = '') {
@@ -2948,11 +3076,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await focusRecoverableCaptureTab();
       case 'ARCHIVER_RESUME_FAILED_CAPTURE':
         return await resumeFailedCaptureFromWorkingTab();
+      case 'ARCHIVER_RESUME_UNFINISHED_PASS':
+        return await resumeSavedUnfinishedPass(
+          message.passId || message.draftId || '',
+          message.captureTarget || 'copy'
+        );
       case 'ARCHIVER_DELETE_DRAFT':
       case 'ARCHIVER_DELETE_UNFINISHED_PASS':
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
+      case 'ARCHIVER_SET_ARCHIVE_DESTINATION':
+        return await setArchiveSavedDestination(
+          message.archiveId || '',
+          {
+            saved: message.saved !== false,
+            url: message.url || '',
+            label: message.label || ''
+          }
+        );
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
@@ -3140,9 +3282,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(details => {
   chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
   checkForUpdate().catch(() => {});
+
+  if (details?.reason === 'update') {
+    chrome.storage.local.set({
+      [WHATS_NEW_PENDING_KEY]: {
+        version: chrome.runtime.getManifest().version || '',
+        previousVersion: details.previousVersion || '',
+        updatedAt: Date.now()
+      }
+    }).catch(() => {});
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => {
