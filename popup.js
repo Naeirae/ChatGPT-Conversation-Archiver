@@ -818,12 +818,16 @@ function render(data) {
   $('linkedDocHint').textContent = state.linkedDoc?.url
     ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
     : 'Связанного Google Doc для этого чата сейчас нет.';
+  const latestUnfinished = (state.unfinishedPasses || [])[0] || null;
+  const canResumeUnfinished = Boolean(!running && latestUnfinished?.id);
   const canRetryCurrent = Boolean(
     !running &&
+    !canResumeUnfinished &&
     job?.status === 'error' &&
     job?.captureTarget === 'copy'
   );
-  $('retryCurrent').classList.toggle('hidden', !canRetryCurrent);
+  $('retryCurrent').textContent = canResumeUnfinished ? 'Продолжить сбор' : 'Повторить в текущей вкладке';
+  $('retryCurrent').classList.toggle('hidden', !(canResumeUnfinished || canRetryCurrent));
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
@@ -1022,8 +1026,29 @@ $('syncDoc').onclick = async () => {
 };
 
 $('retryCurrent').onclick = async () => {
-  const previousMode = state?.job?.captureMode || 'full';
+  const latestUnfinished = (state?.unfinishedPasses || [])[0] || null;
   $('retryCurrent').disabled = true;
+
+  if (latestUnfinished?.id) {
+    try {
+      setStatus('Продолжаю незавершённый сбор…');
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+        passId: latestUnfinished.id,
+        captureTarget: $('captureTarget').value
+      });
+      if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый сбор.');
+      render({ ...state, job: result.job });
+      startPolling();
+    } catch (error) {
+      setStatus(error.message || String(error), true);
+    } finally {
+      $('retryCurrent').disabled = false;
+    }
+    return;
+  }
+
+  const previousMode = state?.job?.captureMode || 'full';
   $('captureTarget').value = 'current';
   updateCaptureTargetHint('current');
 
@@ -1032,34 +1057,34 @@ $('retryCurrent').onclick = async () => {
     if (previousMode === 'sync') {
       const docUrl = $('docUrl').value.trim();
       if (!docUrl) throw new Error('Для восстановления по Google Doc нужна ссылка.');
-      setStatus('Повторяю восстановление стыка в обычном режиме…');
+      setStatus('Повторяю восстановление в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_SYNC_CURRENT',
         docUrl,
         captureTarget: 'current'
       });
     } else if (previousMode === 'continue') {
-      setStatus('Повторяю продолжение в обычном режиме…');
+      setStatus('Повторяю продолжение в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_CONTINUE_CURRENT',
         docUrl: $('docUrl').value.trim(),
         captureTarget: 'current'
       });
     } else if (previousMode === 'images') {
-      setStatus('Повторяю добор картинок в обычном режиме…');
+      setStatus('Повторяю добор изображений в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
         captureTarget: 'current'
       });
     } else {
-      setStatus('Повторяю полный сбор в обычном режиме…');
+      setStatus('Повторяю полный сбор в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_CURRENT',
         captureTarget: 'current'
       });
     }
 
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить обычный режим.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
     render({
       ...state,
       job: result.job,
