@@ -818,12 +818,16 @@ function render(data) {
   $('linkedDocHint').textContent = state.linkedDoc?.url
     ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
     : 'Связанного Google Doc для этого чата сейчас нет.';
+  const latestUnfinished = (state.unfinishedPasses || [])[0] || null;
+  const canResumeUnfinished = Boolean(!running && latestUnfinished?.id);
   const canRetryCurrent = Boolean(
     !running &&
+    !canResumeUnfinished &&
     job?.status === 'error' &&
     job?.captureTarget === 'copy'
   );
-  $('retryCurrent').classList.toggle('hidden', !canRetryCurrent);
+  $('retryCurrent').textContent = canResumeUnfinished ? 'Продолжить сбор' : 'Повторить в текущей вкладке';
+  $('retryCurrent').classList.toggle('hidden', !(canResumeUnfinished || canRetryCurrent));
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
@@ -1022,8 +1026,29 @@ $('syncDoc').onclick = async () => {
 };
 
 $('retryCurrent').onclick = async () => {
-  const previousMode = state?.job?.captureMode || 'full';
+  const latestUnfinished = (state?.unfinishedPasses || [])[0] || null;
   $('retryCurrent').disabled = true;
+
+  if (latestUnfinished?.id) {
+    try {
+      setStatus('Продолжаю незавершённый сбор…');
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+        passId: latestUnfinished.id,
+        captureTarget: $('captureTarget').value
+      });
+      if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый сбор.');
+      render({ ...state, job: result.job });
+      startPolling();
+    } catch (error) {
+      setStatus(error.message || String(error), true);
+    } finally {
+      $('retryCurrent').disabled = false;
+    }
+    return;
+  }
+
+  const previousMode = state?.job?.captureMode || 'full';
   $('captureTarget').value = 'current';
   updateCaptureTargetHint('current');
 
@@ -1032,34 +1057,34 @@ $('retryCurrent').onclick = async () => {
     if (previousMode === 'sync') {
       const docUrl = $('docUrl').value.trim();
       if (!docUrl) throw new Error('Для восстановления по Google Doc нужна ссылка.');
-      setStatus('Повторяю восстановление стыка в обычном режиме…');
+      setStatus('Повторяю восстановление в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_SYNC_CURRENT',
         docUrl,
         captureTarget: 'current'
       });
     } else if (previousMode === 'continue') {
-      setStatus('Повторяю продолжение в обычном режиме…');
+      setStatus('Повторяю продолжение в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_CONTINUE_CURRENT',
         docUrl: $('docUrl').value.trim(),
         captureTarget: 'current'
       });
     } else if (previousMode === 'images') {
-      setStatus('Повторяю добор картинок в обычном режиме…');
+      setStatus('Повторяю добор изображений в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
         captureTarget: 'current'
       });
     } else {
-      setStatus('Повторяю полный сбор в обычном режиме…');
+      setStatus('Повторяю полный сбор в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_CURRENT',
         captureTarget: 'current'
       });
     }
 
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить обычный режим.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
     render({
       ...state,
       job: result.job,
@@ -1499,10 +1524,7 @@ function closeTourOpenedDetails() {
 function clearTourTarget() {
   document.querySelectorAll('.tour-target').forEach(node => node.classList.remove('tour-target'));
   const spotlight = $('tourSpotlight');
-  if (spotlight) {
-    spotlight.classList.add('hidden');
-    spotlight.removeAttribute('style');
-  }
+  if (spotlight) spotlight.classList.add('hidden');
 }
 
 function positionTour(target) {
@@ -1529,15 +1551,6 @@ function positionTour(target) {
   }
 
   const tr = target.getBoundingClientRect();
-  if (spotlight) {
-    const pad = 5;
-    spotlight.classList.remove('hidden');
-    spotlight.style.left = Math.max(4, tr.left - pad) + 'px';
-    spotlight.style.top = Math.max(4, tr.top - pad) + 'px';
-    spotlight.style.width = Math.min(vw - 8, tr.width + pad * 2) + 'px';
-    spotlight.style.height = Math.min(vh - 8, tr.height + pad * 2) + 'px';
-  }
-
   const cr = card.getBoundingClientRect();
   const roomBelow = vh - tr.bottom;
   const roomAbove = tr.top;
@@ -1601,6 +1614,10 @@ async function closeTour(markSeen = true) {
 }
 
 const WHATS_NEW_COPY = {
+  '0.3.47': [
+    'После оборванного сбора Архиватор предлагает продолжить сохранённый проход, а не начинать заново.',
+    'Знакомство больше не размывает интерфейс и подсвечивает сам элемент управления.'
+  ],
   '0.3.46': [
     'Незавершённый сбор можно продолжить прямо из списка.',
     'В «Сохранённых архивах» видно, перенесён ли чат в документ. Можно отметить это вручную и добавить любую ссылку.',

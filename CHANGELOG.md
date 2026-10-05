@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.47
+
+- remove the blurred onboarding backdrop and keep the interface readable during the walkthrough;
+- highlight the real interface control instead of drawing an approximate detached rectangle;
+- prefer **«Продолжить сбор»** after a failed pass when a saved unfinished pass exists;
+- keep **«Повторить в текущей вкладке»** only as a fallback when there is no resumable unfinished pass;
+- manifest -> 0.3.47.
+
 ## 0.3.46
 
 - fix the first-run walkthrough so the help card no longer sits under the highlighted interface;
