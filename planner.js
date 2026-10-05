@@ -280,6 +280,7 @@ $('exportTabbed').addEventListener('click', async () => {
     const planText = serializeTabPlan(markers);
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_EXPORT_TABBED_NEW_DOC',
+      archiveId: archive?.id || requestedArchiveId || '',
       planText
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось выполнить экспорт.');

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.45
+
+- rebuild the popup around one clear flow: collect the current chat, then work with the saved archive;
+- show version next to the product name and developer **@naeirae** directly under it;
+- replace the text gear with a sourced settings icon and keep settings/help popovers inside the visible popup width;
+- remove the misleading primary **«Сверить с сохранённым»** action; unfinished captures resume from unfinished passes, completed archives continue from the archive library;
+- hide **«Незавершённые сборы»** completely when there are none;
+- move Google Docs actions into the completed archive and saved-archive flows instead of a detached export card;
+- show whether the current local archive is already linked to Google Docs and keep the local copy available for continuation or reset;
+- add **«Скопировать»** to saved archives so rich text can be pasted into other apps without PDF export;
+- show run duration in minutes and seconds for longer passes;
+- replace the ambiguous system/custom font controls with named font choices;
+- add a first-run walkthrough and a help menu with **@naeirae**, copyable contact, GitHub and a formatted local help page;
+- keep the canonical Russian user help in **HELP.md**, including the browser-debugger explanation;
+- allow Google Docs export and tab planning for a specifically selected saved archive, not only the most recent one;
+- update the product-wide proprietary license so the same license can cover free and paid editions;
+- manifest -> 0.3.45.
+
 ## 0.3.44
 
 - restore the original solid color themes and add four explicit gradient themes instead of applying a subtle gradient to every palette;

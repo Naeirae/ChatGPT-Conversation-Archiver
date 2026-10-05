@@ -6,7 +6,7 @@ Chrome extension for archiving complete ChatGPT conversations — including rich
 
 > Work in progress. Source is publicly visible for transparency and update delivery, but this is not open-source software. See `LICENSE`.
 
-Project docs: [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
+Project docs: [User help](HELP.md) · [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
 
 ## Goal
 
@@ -56,13 +56,15 @@ The trade-off is intentional: structured extraction is more sensitive to ChatGPT
 
 Лог последнего запуска можно скопировать отдельной кнопкой. Runtime-log и архив — разные сущности: лог объясняет, что происходило, архив/черновик содержит сам текст.
 
-Для уже сохраненного чата доступны три режима:
+Основной пользовательский маршрут разделён по состоянию:
 
-- **Собрать заново** — полный проход от начала до конца снимка.
-- **Продолжить** — взять локальный последний подтвержденный anchor, добрать только сообщения после него и, если указан или уже связан Google Doc, дописать туда ту же дельту.
-- **Сверить** — использовать фактический Google Doc как baseline. Расширение читает документ по вкладкам, берет хвост последних непустых реплик, ищет в ChatGPT надежный стык по нескольким соседним сообщениям и продолжает только после него.
+- **Собрать чат** — полный проход текущего диалога от начала до зафиксированного конца.
+- Если проход оборвался, его можно **продолжить из незавершённых сборов**.
+- Готовый чат попадает в **Сохранённые архивы**, откуда его можно **Продолжить**, **Скопировать**, сохранить в Google Docs или разметить по вкладкам.
+- Если архив уже связан с Google Doc, продолжение добирает только новые сообщения и дописывает подтверждённую дельту в связанный документ.
+- Восстановление точки продолжения по Google Doc остаётся техническим резервным инструментом, а не основной кнопкой интерфейса.
 
-Вкладки Google Docs считаются одной последовательностью архива: граница вкладки не является ошибкой. Если хвост короткий, сверка может использовать сообщения из предыдущей вкладки. После подтвержденного стыка дельта дописывается в ту вкладку, где находился хвост baseline.
+Вкладки Google Docs считаются одной последовательностью архива: граница вкладки не является ошибкой.
 
 Popup и badge показывают этапы 1/3 → 2/3 → 3/3, число собранных сообщений и текущий проход.
 
@@ -217,7 +219,7 @@ The MVP stores the captured conversation locally in the browser extension profil
 
 ## License
 
-This repository uses a proprietary source-available license. Public visibility does not grant permission to run, copy, modify, redistribute, sell, or incorporate the code into another product. GitHub's own Terms of Service still allow the platform-level viewing and forking rights that come with a public repository. Authorized users may receive separate end-user or commercial rights. See [`LICENSE`](LICENSE).
+ChatGPT Conversation Archiver uses one product-wide proprietary source-available license across its repositories, builds and update channels. Public visibility does not grant a general right to install, run, copy, modify, redistribute, sell, or reuse the code. Use is allowed only for a valid license holder or someone expressly authorized by the copyright holder. GitHub's own platform rights for public repositories still apply. See [`LICENSE`](LICENSE).
 
 ## Быстрое обновление локальной копии
 

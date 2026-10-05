@@ -4,7 +4,7 @@ let state = null;
 
 const DEFAULT_INTERFACE_APPEARANCE = {
   palette: 'ocean',
-  fontPreset: 'system',
+  fontPreset: 'segoe',
   fontCustom: '',
   colors: {
     accent: '#1769e0',
@@ -30,8 +30,11 @@ const INTERFACE_PALETTES = new Set([
   'custom'
 ]);
 
+const INTERFACE_FONT_PRESETS = new Set([
+  'segoe', 'arial', 'verdana', 'tahoma', 'georgia', 'consolas'
+]);
+
 const INTERFACE_FONT_STACKS = {
-  system: 'Inter, "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
   segoe: '"Segoe UI", system-ui, sans-serif',
   arial: 'Arial, sans-serif',
   verdana: 'Verdana, sans-serif',
@@ -46,6 +49,14 @@ const PHASE_LABELS = {
   finalizing: 'Этап 3/3 · Сохраняю локальный архив',
   paused: 'Сбор приостановлен'
 };
+
+function formatDuration(ms) {
+  const totalSeconds = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  if (totalSeconds < 60) return totalSeconds + ' с';
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return minutes + ' мин ' + seconds + ' с';
+}
 
 function renderCaptureProgress(job, running) {
   const box = $('captureProgress');
@@ -62,8 +73,7 @@ function renderCaptureProgress(job, running) {
     parts.push((job?.count || 0) + ' сообщений');
   }
   if (job?.startedAt) {
-    const seconds = Math.max(0, Math.floor((Date.now() - job.startedAt) / 1000));
-    parts.push(seconds + ' с');
+    parts.push(formatDuration(Date.now() - job.startedAt));
   }
   if (job?.iteration) parts.push('проход ' + job.iteration);
   $('captureMeta').textContent = parts.join(' · ');
@@ -102,6 +112,9 @@ function renderRunLog(job) {
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
   if (job.draftCount) meta.push(job.draftCount + ' в незавершённом проходе');
+  if (job.startedAt && (job.finishedAt || !['starting', 'running', 'paused'].includes(job.status))) {
+    meta.push(formatDuration((job.finishedAt || Date.now()) - job.startedAt));
+  }
   $('runLogMeta').textContent = meta.join(' · ');
   $('runLogMessage').textContent = job.message || '';
 }
@@ -125,13 +138,7 @@ function renderUnfinishedPasses(items = []) {
   count.textContent = String(rows.length);
   list.textContent = '';
 
-  if (!rows.length) {
-    const empty = document.createElement('div');
-    empty.className = 'history-empty';
-    empty.textContent = 'Сохранённых незавершённых проходов нет.';
-    list.appendChild(empty);
-    return;
-  }
+  if (!rows.length) return;
 
   for (const item of rows) {
     const row = document.createElement('div');
@@ -214,9 +221,11 @@ function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
   const count = $('savedArchivesCount');
   if (!list || !count) return;
+
   const rows = Array.isArray(items) ? items : [];
   count.textContent = String(rows.length);
   list.textContent = '';
+
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'history-empty';
@@ -224,19 +233,25 @@ function renderSavedArchives(items = []) {
     list.appendChild(empty);
     return;
   }
+
+  const busy = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+
   for (const item of rows) {
     const row = document.createElement('div');
     row.className = 'archive-link-row';
 
     const main = document.createElement('div');
     main.className = 'archive-link-main';
+
     const title = document.createElement('div');
     title.className = 'archive-link-title';
     title.textContent = item.title || 'Архив ChatGPT';
+
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
     const parts = [];
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
+    parts.push(item.docUrl ? 'сохранён в Google Docs' : 'локальная копия');
     if (item.updatedAt) {
       try { parts.push(new Date(item.updatedAt).toLocaleString('ru-RU')); } catch (_) {}
     }
@@ -250,7 +265,7 @@ function renderSavedArchives(items = []) {
     resume.className = 'archive-link-open';
     resume.type = 'button';
     resume.textContent = 'Продолжить';
-    resume.disabled = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+    resume.disabled = busy;
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus('Открываю сохранённый чат и ищу место продолжения…');
@@ -270,6 +285,28 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(resume);
 
+    const copyButton = document.createElement('button');
+    copyButton.className = 'archive-link-open';
+    copyButton.type = 'button';
+    copyButton.textContent = 'Скопировать';
+    copyButton.disabled = busy;
+    copyButton.onclick = async () => {
+      copyButton.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_COPY_ARCHIVE',
+          archiveId: item.id
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать архив.');
+        setStatus('Архив скопирован: ' + (result.count || 0) + ' сообщений.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        copyButton.disabled = false;
+      }
+    };
+    actions.appendChild(copyButton);
+
     if (item.docUrl) {
       const open = document.createElement('a');
       open.className = 'archive-link-open';
@@ -278,13 +315,42 @@ function renderSavedArchives(items = []) {
       open.rel = 'noopener noreferrer';
       open.textContent = 'Google Doc ↗';
       actions.appendChild(open);
+    } else {
+      const exportButton = document.createElement('button');
+      exportButton.className = 'archive-link-open';
+      exportButton.type = 'button';
+      exportButton.textContent = 'В Google Docs';
+      exportButton.disabled = busy;
+      exportButton.onclick = async () => {
+        exportButton.disabled = true;
+        setStatus('Создаю Google Doc из сохранённого архива…');
+        try {
+          const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
+          setStatus('Готово. В Google Docs сохранено ' + (result.addedCount || 0) + ' сообщений.');
+          await getState();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          exportButton.disabled = false;
+        }
+      };
+      actions.appendChild(exportButton);
     }
+
+    const plan = document.createElement('button');
+    plan.className = 'archive-link-more';
+    plan.type = 'button';
+    plan.textContent = 'Разметить';
+    plan.disabled = busy;
+    plan.onclick = async () => {
+      const url = chrome.runtime.getURL('planner.html?archiveId=' + encodeURIComponent(item.id));
+      await chrome.tabs.create({ url });
+    };
+    actions.appendChild(plan);
 
     row.append(main, actions);
     list.appendChild(row);
   }
 }
-
 
 function renderHistory(history = []) {
   const list = $('captureHistory');
@@ -339,6 +405,7 @@ function renderHistory(history = []) {
     const when = item.finishedAt || item.startedAt;
     const time = when ? new Date(when).toLocaleString('ru-RU') : '—';
     const parts = [time, captureTargetLabel(item.captureTarget), (item.count || 0) + ' сообщений'];
+    if (item.startedAt && item.finishedAt) parts.push(formatDuration(item.finishedAt - item.startedAt));
     if (item.addedCount) parts.push('+' + item.addedCount + ' новых');
     meta.textContent = parts.join(' · ');
 
@@ -415,10 +482,15 @@ function normalizeInterfaceAppearance(settings = {}) {
   const palette = INTERFACE_PALETTES.has(legacyPalette)
     ? legacyPalette
     : DEFAULT_INTERFACE_APPEARANCE.palette;
+  const fontPreset = INTERFACE_FONT_PRESETS.has(raw.fontPreset)
+    ? raw.fontPreset
+    : DEFAULT_INTERFACE_APPEARANCE.fontPreset;
   return {
     ...DEFAULT_INTERFACE_APPEARANCE,
     ...raw,
     palette,
+    fontPreset,
+    fontCustom: '',
     colors: {
       ...DEFAULT_INTERFACE_APPEARANCE.colors,
       ...(raw.colors || {})
@@ -427,16 +499,7 @@ function normalizeInterfaceAppearance(settings = {}) {
 }
 
 function customFontStack(appearance) {
-  if (appearance.fontPreset !== 'custom') {
-    return INTERFACE_FONT_STACKS[appearance.fontPreset] || INTERFACE_FONT_STACKS.system;
-  }
-  const clean = String(appearance.fontCustom || '')
-    .trim()
-    .replace(/[;{}]/g, '')
-    .replace(/"/g, '\"');
-  return clean
-    ? '"' + clean + '", "Segoe UI", system-ui, sans-serif'
-    : INTERFACE_FONT_STACKS.system;
+  return INTERFACE_FONT_STACKS[appearance.fontPreset] || INTERFACE_FONT_STACKS.segoe;
 }
 
 function applyInterfaceAppearance(settings = {}) {
@@ -476,16 +539,14 @@ function applyInterfaceAppearance(settings = {}) {
 
 function updateInterfaceControlVisibility() {
   const palette = $('interfacePalette')?.value || 'ocean';
-  const fontPreset = $('interfaceFontPreset')?.value || 'system';
   $('interfaceCustomColors')?.classList.toggle('hidden', palette !== 'custom');
-  $('interfaceFontCustomWrap')?.classList.toggle('hidden', fontPreset !== 'custom');
 }
 
 function readInterfaceAppearanceControls() {
   return {
     palette: $('interfacePalette').value,
     fontPreset: $('interfaceFontPreset').value,
-    fontCustom: $('interfaceFontCustom').value.trim(),
+    fontCustom: '',
     colors: {
       accent: $('interfaceAccent').value,
       background: $('interfaceBackground').value,
@@ -499,7 +560,7 @@ function renderInterfaceAppearanceControls(settings) {
   const appearance = normalizeInterfaceAppearance(settings);
   $('interfacePalette').value = appearance.palette;
   $('interfaceFontPreset').value = appearance.fontPreset;
-  $('interfaceFontCustom').value = appearance.fontCustom || '';
+  $('interfaceFontCustom').value = '';
   $('interfaceAccent').value = normalizeHex(
     appearance.colors.accent,
     DEFAULT_INTERFACE_APPEARANCE.colors.accent
@@ -599,14 +660,15 @@ function render(data) {
   renderHistory(state.history || []);
   renderUnfinishedPasses(state.unfinishedPasses || []);
   renderSavedArchives(state.savedArchives || []);
-  $('unfinishedPassesPanel')?.classList.toggle('has-items', Boolean((state.unfinishedPasses || []).length));
+  const hasUnfinished = Boolean((state.unfinishedPasses || []).length);
+  $('unfinishedPassesPanel')?.classList.toggle('hidden', !hasUnfinished);
+  $('unfinishedPassesPanel')?.classList.toggle('has-items', hasUnfinished);
 
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
-    ? (job?.captureTarget === 'copy' ? 'Сбор идет в рабочей копии…' : 'Сбор идет в текущей вкладке…')
-    : 'Собрать заново';
+    ? (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…')
+    : 'Собрать чат';
   $('continue').disabled = Boolean(running || !state.canContinue);
-  $('compareArchive').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
   $('docUrl').disabled = Boolean(running);
   $('captureTarget').disabled = Boolean(running);
@@ -618,12 +680,7 @@ function render(data) {
   $('resetCapture').disabled = Boolean(running || !job);
   $('clearHistory').disabled = Boolean(running || !(state.history || []).length);
 
-  const compared = job?.status === 'done' && job?.captureMode === 'compare';
-  $('compareResult').textContent = compared
-    ? (Number(job.addedCount || 0) > 0
-        ? 'Новых сообщений относительно локального архива: ' + Number(job.addedCount || 0) + '.'
-        : 'Новых сообщений относительно локального архива нет.')
-    : '';
+  $('compareResult').textContent = '';
 
   $('linkedDocHint').textContent = state.linkedDoc?.url
     ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
@@ -657,9 +714,16 @@ function render(data) {
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
     ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
-      (archive.imageCount ? ` · ${archive.imageBinaryReady || 0} подготовлено · ${archive.imageBinaryFailed || 0} ошибок` : '') +
-      (archive.lastImageRecoveredCount ? ` · последний добор +${archive.lastImageRecoveredCount}` : ''))
+      (archive.lastImageRecoveredCount ? ` · добор изображений +${archive.lastImageRecoveredCount}` : ''))
     : '';
+  const linkedUrl = state.linkedDoc?.url || '';
+  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в Google Docs' : 'Сохранён последний запуск';
+  $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
+  $('archiveDocStatus').textContent = linkedUrl
+    ? 'Google Doc связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
+    : 'Архив пока хранится только локально.';
+  $('archiveDocLink').classList.toggle('hidden', !linkedUrl);
+  $('archiveDocLink').href = linkedUrl || '#';
 
   // A failed new capture must not hide or disable the previously completed
   // local archive. Export is disabled only while a capture is actively running.
@@ -761,34 +825,6 @@ $('capture').onclick = async () => {
   }
 };
 
-$('compareArchive').onclick = async () => {
-  if (!state?.canContinue) {
-    setStatus('Для сверки нужен локальный архив этого чата. Сначала нажмите «Собрать заново».', true);
-    return;
-  }
-
-  $('compareArchive').disabled = true;
-  setStatus('Сверяю текущий чат с локальным архивом и считаю новые сообщения…');
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_COMPARE_CURRENT',
-      captureTarget: $('captureTarget').value
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить чат с локальным архивом.');
-    render({
-      ...state,
-      job: result.job,
-      archive: state?.archive || null,
-      unfinishedPass: null,
-      canContinue: true
-    });
-    startPolling();
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-    $('compareArchive').disabled = false;
-  }
-};
-
 $('continue').onclick = async () => {
   $('continue').disabled = true;
   setStatus(
@@ -828,7 +864,6 @@ $('syncDoc').onclick = async () => {
   $('syncDoc').disabled = true;
   $('continue').disabled = true;
   $('capture').disabled = true;
-  $('compareArchive').disabled = true;
   setStatus('Читаю Google Doc как резервную точку продолжения и ищу его хвост в текущем чате…');
 
   try {
@@ -852,7 +887,6 @@ $('syncDoc').onclick = async () => {
     $('syncDoc').disabled = false;
     $('continue').disabled = false;
     $('capture').disabled = false;
-    $('compareArchive').disabled = !state?.canContinue;
   }
 };
 
@@ -864,13 +898,7 @@ $('retryCurrent').onclick = async () => {
 
   try {
     let result;
-    if (previousMode === 'compare') {
-      setStatus('Повторяю сверку с локальным архивом в обычном режиме…');
-      result = await chrome.runtime.sendMessage({
-        type: 'ARCHIVER_COMPARE_CURRENT',
-        captureTarget: 'current'
-      });
-    } else if (previousMode === 'sync') {
+    if (previousMode === 'sync') {
       const docUrl = $('docUrl').value.trim();
       if (!docUrl) throw new Error('Для восстановления по Google Doc нужна ссылка.');
       setStatus('Повторяю восстановление стыка в обычном режиме…');
@@ -1190,11 +1218,12 @@ $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
   setStatus('Открываю Google Docs и вставляю переписку…');
   try {
-    const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC');
+    const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
     const imagePart = (result.imageInsertedCount || result.imageFailedCount)
       ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
       : '';
     setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.` + imagePart);
+    await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1206,7 +1235,7 @@ $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
   setStatus('Проверяю, что уже вставлено в этот Google Doc…');
   try {
-    const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC');
+    const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC', { archiveId: state?.archive?.id || '' });
     if (result.noChanges) {
       setStatus('В этом Google Doc уже есть все сообщения из локального архива.');
     } else if (result.exportMode === 'delta') {
@@ -1220,6 +1249,7 @@ $('activeDoc').onclick = async () => {
         : '';
       setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.` + imagePart);
     }
+    await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1271,16 +1301,6 @@ for (const id of ['interfaceAccent', 'interfaceBackground', 'interfacePanel', 'i
   });
 }
 
-$('interfaceFontCustom').oninput = () => {
-  previewInterfaceAppearance();
-  clearTimeout(saveInterfaceAppearanceFromControls.timer);
-  saveInterfaceAppearanceFromControls.timer = setTimeout(() => {
-    saveInterfaceAppearanceFromControls().catch(error => {
-      setStatus(error.message || String(error), true);
-    });
-  }, 240);
-};
-
 $('resetInterfaceAppearance').onclick = async () => {
   const appearance = {
     ...DEFAULT_INTERFACE_APPEARANCE,
@@ -1291,6 +1311,114 @@ $('resetInterfaceAppearance').onclick = async () => {
     { interfaceAppearance: appearance, palette: appearance.palette },
     'interfaceSettingsSaved'
   );
+};
+
+const TOUR_STORAGE_KEY = 'archiverIntroSeen';
+const TOUR_STEPS = [
+  {
+    selector: '[data-tour="capture"]',
+    title: 'Соберите чат',
+    text: 'Выберите фоновую или текущую вкладку и нажмите «Собрать чат». Фоновый режим оставляет исходный чат свободным.'
+  },
+  {
+    selector: '#captureControls',
+    title: 'Пауза не теряет место',
+    text: 'Во время сбора можно поставить проход на паузу. При продолжении Архиватор сначала проверит сохранённый контекст и не пойдёт дальше наугад.'
+  },
+  {
+    selector: '[data-tour="unfinished"]',
+    title: 'Незавершённый сбор можно продолжить',
+    text: 'Если проход оборвётся после сохранения части сообщений, здесь появятся действия «Продолжить», «Просмотреть» и «Удалить».'
+  },
+  {
+    selector: '[data-tour="library"]',
+    title: 'Готовые чаты лежат в библиотеке',
+    text: 'Из сохранённого архива можно продолжить исходный чат, открыть связанный Google Doc или сохранить архив в Google Docs.'
+  },
+  {
+    selector: '[data-tour="accessibility"]',
+    title: 'Подписи можно настроить',
+    text: 'Здесь можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
+  },
+  {
+    selector: '.settings-menu',
+    title: 'Оформление и обновление',
+    text: 'В настройках находятся темы, шрифт и обновление расширения.'
+  },
+  {
+    selector: '.help-menu',
+    title: 'Справка всегда рядом',
+    text: 'Здесь можно снова открыть знакомство, прочитать полную справку и скопировать контакт разработчика.'
+  }
+];
+let tourIndex = 0;
+
+function clearTourTarget() {
+  document.querySelectorAll('.tour-target').forEach(node => node.classList.remove('tour-target'));
+}
+
+function renderTourStep() {
+  const overlay = $('tourOverlay');
+  const step = TOUR_STEPS[tourIndex];
+  if (!overlay || !step) return;
+
+  clearTourTarget();
+  const target = document.querySelector(step.selector);
+  if (target) {
+    if (target.classList.contains('hidden')) target.classList.remove('tour-target');
+    else {
+      target.classList.add('tour-target');
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+
+  $('tourStep').textContent = (tourIndex + 1) + ' из ' + TOUR_STEPS.length;
+  $('tourTitle').textContent = step.title;
+  $('tourText').textContent = step.text;
+  $('tourPrev').disabled = tourIndex === 0;
+  $('tourNext').textContent = tourIndex === TOUR_STEPS.length - 1 ? 'Готово' : 'Далее';
+}
+
+async function openTour() {
+  tourIndex = 0;
+  $('tourOverlay').classList.remove('hidden');
+  $('tourOverlay').setAttribute('aria-hidden', 'false');
+  renderTourStep();
+}
+
+async function closeTour(markSeen = true) {
+  clearTourTarget();
+  $('tourOverlay').classList.add('hidden');
+  $('tourOverlay').setAttribute('aria-hidden', 'true');
+  if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
+}
+
+$('showTour').onclick = () => openTour();
+$('tourSkip').onclick = () => closeTour(true);
+$('tourPrev').onclick = () => {
+  if (tourIndex > 0) {
+    tourIndex--;
+    renderTourStep();
+  }
+};
+$('tourNext').onclick = () => {
+  if (tourIndex >= TOUR_STEPS.length - 1) {
+    closeTour(true);
+    return;
+  }
+  tourIndex++;
+  renderTourStep();
+};
+
+$('copyContact').onclick = async () => {
+  const email = 'nekurismarieykjuri@gmail.com';
+  try {
+    await navigator.clipboard.writeText(email);
+    $('contactCopied').textContent = 'Почта скопирована';
+    setTimeout(() => { $('contactCopied').textContent = ''; }, 1200);
+  } catch (_) {
+    setStatus('Не удалось скопировать почту. Адрес: ' + email, true);
+  }
 };
 
 async function refreshUpdateNotice() {
@@ -1325,6 +1453,11 @@ $('reloadExtension').addEventListener('click', () => {
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
+
+    const introState = await chrome.storage.local.get(TOUR_STORAGE_KEY);
+    if (!introState[TOUR_STORAGE_KEY]) {
+      setTimeout(() => openTour(), 180);
+    }
   } catch (error) {
     setStatus(error.message || String(error), true);
   }

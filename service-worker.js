@@ -2460,14 +2460,14 @@ async function appendMessagesToGoogleDocUrl(
   }
 }
 
-async function exportConversation({ activeDoc = false } = {}) {
-  const conversation = await getLastArchive();
+async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
+  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
   if (!activeDoc) {
     const autoParts = planGoogleDocParts(conversation.messages || [], []);
     if (autoParts.length > 1) {
-      return exportTabbedConversation('');
+      return exportTabbedConversation('', conversation.id);
     }
   }
 
@@ -2695,8 +2695,8 @@ async function verifyGoogleDocTabCount(tabId, expectedCount) {
   return verifiedTabCount;
 }
 
-async function exportTabbedConversation(planText = '') {
-  const conversation = await getLastArchive();
+async function exportTabbedConversation(planText = '', archiveId = '') {
+  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
   const messages = conversation.messages || [];
@@ -2899,6 +2899,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc = await getLinkedDoc(tab.url);
         }
         const archive = currentArchive || await getLastArchive();
+        if (!linkedDoc && archive?.sourceUrl) {
+          linkedDoc = await getLinkedDoc(archive.sourceUrl);
+        }
         const draft = job?.draftId ? await getDraft(job.draftId) : null;
         const drafts = await listDrafts();
         return {
@@ -3047,11 +3050,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await handleCaptureComplete(message);
         return { ok: true };
       case 'ARCHIVER_EXPORT_NEW_DOC':
-        return { ok: true, ...(await exportConversation({ activeDoc: false })) };
+        return { ok: true, ...(await exportConversation({
+          activeDoc: false,
+          archiveId: message.archiveId || ''
+        })) };
       case 'ARCHIVER_EXPORT_TABBED_NEW_DOC':
-        return { ok: true, ...(await exportTabbedConversation(message.planText || '')) };
+        return { ok: true, ...(await exportTabbedConversation(
+          message.planText || '',
+          message.archiveId || ''
+        )) };
       case 'ARCHIVER_EXPORT_ACTIVE_DOC':
-        return { ok: true, ...(await exportConversation({ activeDoc: true })) };
+        return { ok: true, ...(await exportConversation({
+          activeDoc: true,
+          archiveId: message.archiveId || ''
+        })) };
       case 'ARCHIVER_PATCH_RECOVERED_IMAGES':
         return { ok: true, ...(await patchRecoveredImagesToLinkedDoc(message.archiveId || '')) };
       default:
