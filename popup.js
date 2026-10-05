@@ -253,8 +253,8 @@ function renderSavedArchives(items = []) {
     notice.classList.toggle('hidden', !withoutDocument);
     notice.textContent = withoutDocument
       ? (withoutDocument === 1
-          ? '1 чат сохранён в Архиваторе, но ещё не отмечен как сохранённый в документ.'
-          : withoutDocument + ' чатов сохранены в Архиваторе, но ещё не отмечены как сохранённые в документ.')
+          ? '1 чат есть в Архиваторе, но ещё не перенесён в документ.'
+          : withoutDocument + ' чатов есть в Архиваторе, но ещё не перенесены в документ.')
       : '';
   }
 
@@ -296,12 +296,12 @@ function renderSavedArchives(items = []) {
       if (item.destination.kind === 'google-doc') {
         destinationText.textContent = 'Сохранён в Google Docs';
       } else if (item.destination.url) {
-        destinationText.textContent = 'Отмечен как сохранённый';
+        destinationText.textContent = 'Сохранён отдельно';
       } else {
-        destinationText.textContent = 'Отмечен как сохранённый вне Архиватора';
+        destinationText.textContent = 'Сохранён отдельно';
       }
     } else {
-      destinationText.textContent = 'Ещё не отмечен как сохранённый в документ';
+      destinationText.textContent = 'Не перенесён в документ';
     }
     destination.appendChild(destinationText);
 
@@ -398,7 +398,7 @@ function renderSavedArchives(items = []) {
     const mark = document.createElement('button');
     mark.className = 'archive-link-more';
     mark.type = 'button';
-    mark.textContent = item.destination?.saved ? 'Изменить отметку' : 'Отметить сохранённым';
+    mark.textContent = item.destination?.saved ? 'Изменить' : 'Отметить как сохранённый';
     mark.disabled = busy;
     actions.appendChild(mark);
 
@@ -1381,6 +1381,7 @@ $('activeDoc').onclick = async () => {
       setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.` + imagePart);
     }
     await getState();
+    await showWhatsNewIfNeeded();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1445,8 +1446,7 @@ $('resetInterfaceAppearance').onclick = async () => {
 };
 
 const TOUR_STORAGE_KEY = 'archiverIntroSeen';
-const TOUR_REVISION_KEY = 'archiverIntroRevision';
-const TOUR_REVISION = 2;
+const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 const TOUR_STEPS = [
   {
     selector: '#captureTarget',
@@ -1597,13 +1597,38 @@ async function closeTour(markSeen = true) {
   closeTourOpenedDetails();
   $('tourOverlay').classList.add('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'true');
-  if (markSeen) {
-    await chrome.storage.local.set({
-      [TOUR_STORAGE_KEY]: true,
-      [TOUR_REVISION_KEY]: TOUR_REVISION
-    });
-  }
+  if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
 }
+
+const WHATS_NEW_COPY = {
+  '0.3.46': [
+    'Незавершённый сбор можно продолжить прямо из списка.',
+    'В «Сохранённых архивах» видно, перенесён ли чат в документ. Можно отметить это вручную и добавить любую ссылку.',
+    'Знакомство точнее подсвечивает элементы интерфейса.'
+  ]
+};
+
+async function showWhatsNewIfNeeded() {
+  const result = await chrome.storage.local.get(WHATS_NEW_PENDING_KEY);
+  const pending = result[WHATS_NEW_PENDING_KEY];
+  if (!pending?.version) return;
+
+  const items = WHATS_NEW_COPY[pending.version] || ['Расширение обновлено. Изменения перечислены в журнале версии.'];
+  $('whatsNewTitle').textContent = 'Новое в ' + pending.version;
+  const list = $('whatsNewList');
+  list.textContent = '';
+  for (const item of items) {
+    const li = document.createElement('li');
+    li.textContent = item;
+    list.appendChild(li);
+  }
+  $('whatsNew').classList.remove('hidden');
+}
+
+$('dismissWhatsNew').onclick = async () => {
+  $('whatsNew').classList.add('hidden');
+  await chrome.storage.local.remove(WHATS_NEW_PENDING_KEY);
+};
 
 $('showTour').onclick = () => openTour();
 $('tourSkip').onclick = () => closeTour(true);
@@ -1666,10 +1691,8 @@ $('reloadExtension').addEventListener('click', () => {
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
 
-    const introState = await chrome.storage.local.get([TOUR_STORAGE_KEY, TOUR_REVISION_KEY]);
-    const seenRevision = Number(introState[TOUR_REVISION_KEY] || 0);
-    const shouldShowTour = !introState[TOUR_STORAGE_KEY] || seenRevision < TOUR_REVISION;
-    if (shouldShowTour) {
+    const introState = await chrome.storage.local.get(TOUR_STORAGE_KEY);
+    if (!introState[TOUR_STORAGE_KEY]) {
       setTimeout(() => openTour(), 180);
     }
   } catch (error) {
