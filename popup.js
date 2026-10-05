@@ -358,7 +358,7 @@ function renderHistory(history = []) {
   if (!list || !count) return;
 
   const items = Array.isArray(history) ? history : [];
-  count.textContent = items.length + (items.length === 1 ? ' запуск' : (items.length >= 2 && items.length <= 4 ? ' запуска' : ' запусков'));
+  count.textContent = String(items.length);
   list.textContent = '';
 
   if (!items.length) {
