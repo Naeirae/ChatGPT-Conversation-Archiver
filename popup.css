@@ -940,8 +940,7 @@ main { padding:14px 16px 16px; }
   z-index:200;
   display:block;
   padding:0;
-  background:rgba(14,23,40,.46);
-  backdrop-filter:blur(1.5px);
+  background:rgba(14,23,40,.28);
 }
 .tour-spotlight {
   position:fixed;
