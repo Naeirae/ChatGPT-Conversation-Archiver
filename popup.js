@@ -241,16 +241,27 @@ function renderUnfinishedPasses(items = []) {
 function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
   const count = $('savedArchivesCount');
+  const notice = $('savedArchivesNotice');
   if (!list || !count) return;
 
   const rows = Array.isArray(items) ? items : [];
   count.textContent = String(rows.length);
   list.textContent = '';
 
+  const withoutDocument = rows.filter(item => !item.destination?.saved).length;
+  if (notice) {
+    notice.classList.toggle('hidden', !withoutDocument);
+    notice.textContent = withoutDocument
+      ? (withoutDocument === 1
+          ? '1 чат сохранён в Архиваторе, но ещё не отмечен как сохранённый в документ.'
+          : withoutDocument + ' чатов сохранены в Архиваторе, но ещё не отмечены как сохранённые в документ.')
+      : '';
+  }
+
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'history-empty';
-    empty.textContent = 'Сохранённых архивов пока нет.';
+    empty.textContent = 'Сохранённых чатов пока нет.';
     list.appendChild(empty);
     return;
   }
@@ -266,18 +277,45 @@ function renderSavedArchives(items = []) {
 
     const title = document.createElement('div');
     title.className = 'archive-link-title';
-    title.textContent = item.title || 'Архив ChatGPT';
+    title.textContent = item.title || 'Чат ChatGPT';
 
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
     const parts = [];
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
-    parts.push(item.docUrl ? 'сохранён в Google Docs' : 'локальная копия');
-    if (item.updatedAt) {
-      try { parts.push(new Date(item.updatedAt).toLocaleString('ru-RU')); } catch (_) {}
+    if (item.capturedAt) {
+      try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
     }
     meta.textContent = parts.join(' · ');
-    main.append(title, meta);
+
+    const destination = document.createElement('div');
+    destination.className = 'archive-destination';
+
+    const destinationText = document.createElement('span');
+    if (item.destination?.saved) {
+      if (item.destination.kind === 'google-doc') {
+        destinationText.textContent = 'Сохранён в Google Docs';
+      } else if (item.destination.url) {
+        destinationText.textContent = 'Отмечен как сохранённый';
+      } else {
+        destinationText.textContent = 'Отмечен как сохранённый вне Архиватора';
+      }
+    } else {
+      destinationText.textContent = 'Ещё не отмечен как сохранённый в документ';
+    }
+    destination.appendChild(destinationText);
+
+    const destinationUrl = item.destination?.url || item.docUrl || '';
+    if (destinationUrl) {
+      const destinationLink = document.createElement('a');
+      destinationLink.href = destinationUrl;
+      destinationLink.target = '_blank';
+      destinationLink.rel = 'noopener noreferrer';
+      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть Google Doc ↗' : 'Открыть ↗';
+      destination.appendChild(destinationLink);
+    }
+
+    main.append(title, meta, destination);
 
     const actions = document.createElement('div');
     actions.className = 'archive-link-actions';
@@ -289,14 +327,14 @@ function renderSavedArchives(items = []) {
     resume.disabled = busy;
     resume.onclick = async () => {
       resume.disabled = true;
-      setStatus('Открываю сохранённый чат и ищу место продолжения…');
+      setStatus('Открываю чат и ищу место продолжения…');
       try {
         const result = await chrome.runtime.sendMessage({
           type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
           archiveId: item.id,
           captureTarget: $('captureTarget').value
         });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сохранённый чат.');
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить чат.');
         render({ ...state, job: result.job });
         startPolling();
       } catch (error) {
@@ -318,8 +356,8 @@ function renderSavedArchives(items = []) {
           type: 'ARCHIVER_COPY_ARCHIVE',
           archiveId: item.id
         });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать архив.');
-        setStatus('Архив скопирован: ' + (result.count || 0) + ' сообщений.');
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать чат.');
+        setStatus('Скопировано: ' + (result.count || 0) + ' сообщений.');
       } catch (error) {
         setStatus(error.message || String(error), true);
       } finally {
@@ -344,10 +382,10 @@ function renderSavedArchives(items = []) {
       exportButton.disabled = busy;
       exportButton.onclick = async () => {
         exportButton.disabled = true;
-        setStatus('Создаю Google Doc из сохранённого архива…');
+        setStatus('Создаю Google Doc…');
         try {
           const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-          setStatus('Готово. В Google Docs сохранено ' + (result.addedCount || 0) + ' сообщений.');
+          setStatus('Сохранено в Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
           await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
@@ -356,6 +394,13 @@ function renderSavedArchives(items = []) {
       };
       actions.appendChild(exportButton);
     }
+
+    const mark = document.createElement('button');
+    mark.className = 'archive-link-more';
+    mark.type = 'button';
+    mark.textContent = item.destination?.saved ? 'Изменить отметку' : 'Отметить сохранённым';
+    mark.disabled = busy;
+    actions.appendChild(mark);
 
     const plan = document.createElement('button');
     plan.className = 'archive-link-more';
@@ -368,7 +413,74 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(plan);
 
-    row.append(main, actions);
+    const destinationEditor = document.createElement('div');
+    destinationEditor.className = 'archive-destination-editor hidden';
+
+    const destinationInput = document.createElement('input');
+    destinationInput.type = 'url';
+    destinationInput.placeholder = 'Ссылка на документ или страницу — необязательно';
+    destinationInput.value = item.destination?.kind === 'manual' ? (item.destination?.url || '') : '';
+    destinationInput.autocomplete = 'off';
+
+    const editorActions = document.createElement('div');
+    editorActions.className = 'archive-destination-editor-actions';
+
+    const saveDestination = document.createElement('button');
+    saveDestination.type = 'button';
+    saveDestination.className = 'primary';
+    saveDestination.textContent = 'Сохранить отметку';
+    saveDestination.onclick = async () => {
+      saveDestination.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_SET_ARCHIVE_DESTINATION',
+          archiveId: item.id,
+          saved: true,
+          url: destinationInput.value.trim()
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить отметку.');
+        await getState();
+        setStatus('Отметка сохранена.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        saveDestination.disabled = false;
+      }
+    };
+    editorActions.appendChild(saveDestination);
+
+    if (item.destination?.saved && item.destination.kind !== 'google-doc') {
+      const clearDestination = document.createElement('button');
+      clearDestination.type = 'button';
+      clearDestination.className = 'danger-outline';
+      clearDestination.textContent = 'Снять отметку';
+      clearDestination.onclick = async () => {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_SET_ARCHIVE_DESTINATION',
+          archiveId: item.id,
+          saved: false
+        });
+        if (!result?.ok) {
+          setStatus(result?.error || 'Не удалось снять отметку.', true);
+          return;
+        }
+        await getState();
+      };
+      editorActions.appendChild(clearDestination);
+    }
+
+    const cancelDestination = document.createElement('button');
+    cancelDestination.type = 'button';
+    cancelDestination.textContent = 'Отмена';
+    cancelDestination.onclick = () => destinationEditor.classList.add('hidden');
+    editorActions.appendChild(cancelDestination);
+
+    destinationEditor.append(destinationInput, editorActions);
+    mark.onclick = () => {
+      destinationEditor.classList.toggle('hidden');
+      if (!destinationEditor.classList.contains('hidden')) destinationInput.focus();
+    };
+
+    row.append(main, actions, destinationEditor);
     list.appendChild(row);
   }
 }
@@ -731,7 +843,7 @@ function render(data) {
   $('draftRecoveryHint').classList.toggle('hidden', !draft);
   $('deleteDraft').disabled = Boolean(running || !draft);
 
-  $('archive').classList.toggle('hidden', !archive);
+  $('archive').classList.add('hidden');
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
     ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
@@ -764,19 +876,17 @@ function render(data) {
     setStatus(job.message || 'Сбор идет в фоне…');
   } else if (job?.status === 'error') {
     const attempted = Number(job.count || 0);
-    const saved = Number(archive?.messageCount || 0);
+    const hasDraft = Boolean(draft?.messageCount);
     const attemptText = attempted
       ? `Сбор остановился после ${attempted} сообщений.`
-      : 'Сбор остановился до сохранения нового результата.';
-    const savedText = archive
-      ? ` Последняя успешно сохранённая версия осталась на месте: ${saved} сообщений.`
-      : ' Успешно сохранённой версии этого чата пока нет.';
-    setStatus(attemptText + savedText + ' ' + (job.message || ''), true);
+      : 'Сбор остановился.';
+    const nextText = hasDraft ? ' Незавершённый сбор можно продолжить ниже.' : '';
+    setStatus(attemptText + nextText + ' ' + (job.message || ''), true);
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
     setStatus(attempted
-      ? `Сбор отменён после ${attempted} сообщений. Последняя успешно сохранённая версия осталась на месте.`
-      : 'Сбор отменён. Последняя успешно сохранённая версия осталась на месте.');
+      ? `Сбор отменён после ${attempted} сообщений.`
+      : 'Сбор отменён.');
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
     setStatus(
