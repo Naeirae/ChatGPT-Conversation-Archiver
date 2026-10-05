@@ -940,7 +940,7 @@ main { padding:14px 16px 16px; }
   z-index:200;
   display:block;
   padding:0;
-  background:rgba(14,23,40,.28);
+  background:rgba(14,23,40,.10);
 }
 .tour-spotlight {
   position:fixed;
@@ -993,6 +993,10 @@ main { padding:14px 16px 16px; }
 .tour-target {
   position:relative;
   z-index:205;
+  outline:3px solid color-mix(in srgb,var(--accent) 72%,white);
+  outline-offset:3px;
+  border-radius:10px;
+  box-shadow:0 0 0 5px color-mix(in srgb,var(--accent) 16%,transparent);
 }
 
 @media (max-width:440px) {
