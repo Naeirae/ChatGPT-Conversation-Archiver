@@ -217,9 +217,11 @@ function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
   const count = $('savedArchivesCount');
   if (!list || !count) return;
+
   const rows = Array.isArray(items) ? items : [];
   count.textContent = String(rows.length);
   list.textContent = '';
+
   if (!rows.length) {
     const empty = document.createElement('div');
     empty.className = 'history-empty';
@@ -227,19 +229,25 @@ function renderSavedArchives(items = []) {
     list.appendChild(empty);
     return;
   }
+
+  const busy = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+
   for (const item of rows) {
     const row = document.createElement('div');
     row.className = 'archive-link-row';
 
     const main = document.createElement('div');
     main.className = 'archive-link-main';
+
     const title = document.createElement('div');
     title.className = 'archive-link-title';
     title.textContent = item.title || 'Архив ChatGPT';
+
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
     const parts = [];
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
+    parts.push(item.docUrl ? 'сохранён в Google Docs' : 'локальная копия');
     if (item.updatedAt) {
       try { parts.push(new Date(item.updatedAt).toLocaleString('ru-RU')); } catch (_) {}
     }
@@ -253,7 +261,7 @@ function renderSavedArchives(items = []) {
     resume.className = 'archive-link-open';
     resume.type = 'button';
     resume.textContent = 'Продолжить';
-    resume.disabled = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+    resume.disabled = busy;
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus('Открываю сохранённый чат и ищу место продолжения…');
@@ -281,13 +289,42 @@ function renderSavedArchives(items = []) {
       open.rel = 'noopener noreferrer';
       open.textContent = 'Google Doc ↗';
       actions.appendChild(open);
+    } else {
+      const exportButton = document.createElement('button');
+      exportButton.className = 'archive-link-open';
+      exportButton.type = 'button';
+      exportButton.textContent = 'В Google Docs';
+      exportButton.disabled = busy;
+      exportButton.onclick = async () => {
+        exportButton.disabled = true;
+        setStatus('Создаю Google Doc из сохранённого архива…');
+        try {
+          const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
+          setStatus('Готово. В Google Docs сохранено ' + (result.addedCount || 0) + ' сообщений.');
+          await getState();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          exportButton.disabled = false;
+        }
+      };
+      actions.appendChild(exportButton);
     }
+
+    const plan = document.createElement('button');
+    plan.className = 'archive-link-more';
+    plan.type = 'button';
+    plan.textContent = 'Разметить';
+    plan.disabled = busy;
+    plan.onclick = async () => {
+      const url = chrome.runtime.getURL('planner.html?archiveId=' + encodeURIComponent(item.id));
+      await chrome.tabs.create({ url });
+    };
+    actions.appendChild(plan);
 
     row.append(main, actions);
     list.appendChild(row);
   }
 }
-
 
 function renderHistory(history = []) {
   const list = $('captureHistory');
