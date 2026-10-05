@@ -71,12 +71,39 @@ const summarize = summarizeArchive;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function listLinkedArchives() {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.archiveIndex);
+  const result = await chrome.storage.local.get(null);
   const index = result[STORAGE_KEYS.archiveIndex] || {};
-  const rows = [];
+  const indexedIds = new Set(Object.values(index).filter(Boolean));
+  const archives = [];
+
+  for (const [key, value] of Object.entries(result || {})) {
+    if (!key.startsWith(STORAGE_KEYS.archivePrefix)) continue;
+    if (!value?.id || !value?.sourceUrl) continue;
+    archives.push(value);
+    indexedIds.add(value.id);
+  }
+
   for (const archiveId of Object.values(index)) {
+    if (!archiveId || archives.some(item => item.id === archiveId)) continue;
     const archive = await getArchive(archiveId);
-    if (!archive?.sourceUrl) continue;
+    if (archive?.id && archive?.sourceUrl) archives.push(archive);
+  }
+
+  const rows = [];
+  const seen = new Set();
+  const repairedIndex = { ...index };
+  let indexChanged = false;
+
+  for (const archive of archives) {
+    if (seen.has(archive.id)) continue;
+    seen.add(archive.id);
+
+    const key = conversationKey(archive.sourceUrl || '');
+    if (key && repairedIndex[key] !== archive.id) {
+      repairedIndex[key] = archive.id;
+      indexChanged = true;
+    }
+
     const linked = await getLinkedDoc(archive.sourceUrl);
     rows.push({
       id: archive.id,
@@ -88,6 +115,11 @@ async function listLinkedArchives() {
       updatedAt: linked?.updatedAt || archive.capturedAt || ''
     });
   }
+
+  if (indexChanged) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.archiveIndex]: repairedIndex });
+  }
+
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
 }
