@@ -1600,6 +1600,9 @@ function renderTourStep() {
 
 async function openTour() {
   tourIndex = 0;
+  document.querySelectorAll('.header-menu[open]').forEach(details => {
+    details.open = false;
+  });
   $('tourOverlay').classList.remove('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'false');
   renderTourStep();
@@ -1614,6 +1617,11 @@ async function closeTour(markSeen = true) {
 }
 
 const WHATS_NEW_COPY = {
+  '0.3.48': [
+    'Незавершённый проход теперь сохраняется по ходу хронологического сбора, поэтому закрытие рабочей вкладки не должно терять точку продолжения.',
+    'Знакомство автоматически сворачивает открытую справку или настройки перед первым шагом.',
+    'Индикатор доступного обновления в popup теперь всегда зелёный.'
+  ],
   '0.3.47': [
     'После оборванного сбора Архиватор предлагает продолжить сохранённый проход, а не начинать заново.',
     'Знакомство больше не размывает интерфейс и подсвечивает сам элемент управления.'
