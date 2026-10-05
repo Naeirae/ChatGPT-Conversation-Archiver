@@ -1025,3 +1025,47 @@ main { padding:14px 16px 16px; }
   flex:0 0 auto;
   margin:0;
 }
+
+.archive-save-notice {
+  margin:8px 10px 0;
+  padding:8px 10px;
+  border-radius:10px;
+  background:color-mix(in srgb,var(--accent) 8%,var(--panel));
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.4;
+}
+.archive-destination {
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px 8px;
+  align-items:center;
+  margin-top:3px;
+  color:var(--muted);
+  font-size:10.5px;
+}
+.archive-destination a {
+  color:var(--accent);
+  text-decoration:none;
+}
+.archive-destination-editor {
+  grid-column:1 / -1;
+  display:grid;
+  gap:6px;
+  margin-top:7px;
+  padding-top:7px;
+  border-top:1px solid color-mix(in srgb,var(--border) 72%,transparent);
+}
+.archive-destination-editor input {
+  width:100%;
+  min-width:0;
+}
+.archive-destination-editor-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.archive-destination-editor-actions button {
+  width:auto;
+  margin:0;
+}
