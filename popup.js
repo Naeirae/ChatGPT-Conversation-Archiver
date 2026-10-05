@@ -165,8 +165,8 @@ function renderUnfinishedPasses(items = []) {
       (item.messageCount || 0) + ' сообщений',
       (item.imageCount || 0) + ' изображений'
     ];
-    if (item.navigationHighWater) parts.push('контрольный минимум: ' + item.navigationHighWater);
-    if (item.hasBoundary) parts.push('нижняя метка сохранена');
+    if (item.navigationHighWater) parts.push('найдено на первом проходе: ' + item.navigationHighWater);
+    if (item.hasBoundary) parts.push('конец исходного чата сохранён');
     meta.textContent = parts.join(' · ');
 
     const actions = document.createElement('div');
@@ -738,7 +738,7 @@ function render(data) {
       (archive.lastImageRecoveredCount ? ` · добор изображений +${archive.lastImageRecoveredCount}` : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
-  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в Google Docs' : 'Сохранён последний запуск';
+  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в Google Docs' : 'Чат сохранён';
   $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
   $('archiveDocStatus').textContent = linkedUrl
     ? 'Google Doc связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
@@ -766,17 +766,17 @@ function render(data) {
     const attempted = Number(job.count || 0);
     const saved = Number(archive?.messageCount || 0);
     const attemptText = attempted
-      ? `Текущий запуск остановился после ${attempted} собранных сообщений. Этот неполный проход не заменил архив.`
-      : 'Текущий запуск завершился с ошибкой до сохранения нового архива.';
+      ? `Сбор остановился после ${attempted} сообщений.`
+      : 'Сбор остановился до сохранения нового результата.';
     const savedText = archive
-      ? ` Последний завершенный локальный архив: ${saved} сообщений.`
-      : ' Завершенного локального архива пока нет.';
+      ? ` Последняя успешно сохранённая версия осталась на месте: ${saved} сообщений.`
+      : ' Успешно сохранённой версии этого чата пока нет.';
     setStatus(attemptText + savedText + ' ' + (job.message || ''), true);
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
     setStatus(attempted
-      ? `Сбор отменен. В текущем проходе было собрано ${attempted} сообщений; завершенный локальный архив не изменен.`
-      : 'Сбор отменен. Завершенный локальный архив не изменен.');
+      ? `Сбор отменён после ${attempted} сообщений. Последняя успешно сохранённая версия осталась на месте.`
+      : 'Сбор отменён. Последняя успешно сохранённая версия осталась на месте.');
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
     setStatus(
@@ -1335,6 +1335,8 @@ $('resetInterfaceAppearance').onclick = async () => {
 };
 
 const TOUR_STORAGE_KEY = 'archiverIntroSeen';
+const TOUR_REVISION_KEY = 'archiverIntroRevision';
+const TOUR_REVISION = 2;
 const TOUR_STEPS = [
   {
     selector: '#captureTarget',
@@ -1485,7 +1487,12 @@ async function closeTour(markSeen = true) {
   closeTourOpenedDetails();
   $('tourOverlay').classList.add('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'true');
-  if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
+  if (markSeen) {
+    await chrome.storage.local.set({
+      [TOUR_STORAGE_KEY]: true,
+      [TOUR_REVISION_KEY]: TOUR_REVISION
+    });
+  }
 }
 
 $('showTour').onclick = () => openTour();
@@ -1549,8 +1556,10 @@ $('reloadExtension').addEventListener('click', () => {
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
 
-    const introState = await chrome.storage.local.get(TOUR_STORAGE_KEY);
-    if (!introState[TOUR_STORAGE_KEY]) {
+    const introState = await chrome.storage.local.get([TOUR_STORAGE_KEY, TOUR_REVISION_KEY]);
+    const seenRevision = Number(introState[TOUR_REVISION_KEY] || 0);
+    const shouldShowTour = !introState[TOUR_STORAGE_KEY] || seenRevision < TOUR_REVISION;
+    if (shouldShowTour) {
       setTimeout(() => openTour(), 180);
     }
   } catch (error) {
