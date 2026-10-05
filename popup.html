@@ -180,7 +180,7 @@
         </div>
       </div>
       <div class="draft-actions">
-        <button id="resumeFailedCapture" class="primary">Дособрать</button>
+        <button id="resumeFailedCapture" class="primary">Продолжить</button>
         <button id="viewDraft" class="compact-button">Просмотреть</button>
         <button id="copyDraft" class="compact-button hidden">Скопировать</button>
         <button id="openFailedCapture" class="compact-button hidden">Открыть вкладку сбора</button>
@@ -192,28 +192,6 @@
     <details id="unfinishedPassesPanel" class="compact-panel unfinished-panel">
       <summary><span>Незавершённые сборы</span><small id="unfinishedPassesCount">0</small></summary>
       <div id="unfinishedPassesList" class="history-list compact-list"></div>
-    </details>
-
-    <details id="continuationPanel" class="compact-panel action-panel">
-      <summary><span>Добрать новые сообщения</span><small>по необходимости</small></summary>
-      <div class="panel-body">
-        <div class="muted">Архиватор найдёт конец сохранённой версии и добавит только новые сообщения.</div>
-        <button id="continue" class="primary">Добрать</button>
-
-        <details class="continuation-options">
-          <summary>Сразу добавить их в Google Doc</summary>
-          <label class="field doc-link-field">
-            <span>Ссылка на Google Doc</span>
-            <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
-          </label>
-          <div id="linkedDocHint" class="muted"></div>
-
-          <details class="recovery-settings">
-            <summary>Если точка продолжения потерялась</summary>
-            <button id="syncDoc">Найти её по Google Doc</button>
-          </details>
-        </details>
-      </div>
     </details>
 
     <details class="compact-panel action-panel export-card">
@@ -238,6 +216,17 @@
     <details id="technicalPanel" class="compact-panel technical-panel">
       <summary><span>Техническая информация</span><small>логи · история</small></summary>
       <div class="panel-body">
+        <details class="manual-recovery">
+          <summary>Восстановить продолжение по Google Doc</summary>
+          <label class="field doc-link-field">
+            <span>Ссылка на Google Doc</span>
+            <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
+          </label>
+          <div id="linkedDocHint" class="muted"></div>
+          <button id="syncDoc" class="compact-button">Найти точку продолжения</button>
+          <button id="continue" class="hidden" type="button" aria-hidden="true" tabindex="-1">Продолжить</button>
+        </details>
+
         <details id="runLog" class="run-log hidden">
           <summary>Последний запуск</summary>
           <strong id="runLogTitle"></strong>
