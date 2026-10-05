@@ -12,36 +12,48 @@
       <img class="brand-mark" src="icons/icon-32.png" alt="" aria-hidden="true">
       <div class="hero-copy">
         <h1>Архиватор ChatGPT</h1>
-        <p class="subtitle">Собрать чат целиком и сохранить в редактируемом виде</p>
+        <p class="subtitle">Собирает весь чат и сохраняет его в редактируемом виде</p>
       </div>
+
       <details class="settings-menu">
         <summary class="icon-summary" title="Настройки" aria-label="Настройки">⚙</summary>
         <div class="settings-popover">
           <details id="interfaceSettings" class="settings interface-settings" open>
             <summary><span>Оформление</span><small>тема · шрифт</small></summary>
+
             <label class="field">
               <span>Тема</span>
               <select id="interfacePalette">
-                <option value="ocean">Океан · градиент</option>
-                <option value="cobalt">Кобальт · градиент</option>
-                <option value="sky">Небо · градиент</option>
-                <option value="violet">Фиолетовая · градиент</option>
-                <option value="rose">Розовая · градиент</option>
-                <option value="amber">Янтарная · градиент</option>
-                <option value="forest">Лесная · градиент</option>
-                <option value="graphite">Графит · градиент</option>
-                <option value="midnight">Полночь · градиент</option>
-                <option value="custom">Своя палитра…</option>
+                <optgroup label="Однотонные">
+                  <option value="ocean">Океан</option>
+                  <option value="cobalt">Кобальт</option>
+                  <option value="sky">Небо</option>
+                  <option value="violet">Фиолетовая</option>
+                  <option value="rose">Розовая</option>
+                  <option value="amber">Янтарная</option>
+                  <option value="forest">Лесная</option>
+                  <option value="graphite">Графит</option>
+                  <option value="midnight">Полночь</option>
+                </optgroup>
+                <optgroup label="Градиентные">
+                  <option value="gradient-ocean">Градиент · Океан</option>
+                  <option value="gradient-sunset">Градиент · Закат</option>
+                  <option value="gradient-mint">Градиент · Мята</option>
+                  <option value="gradient-violet">Градиент · Сирень</option>
+                </optgroup>
+                <option value="custom">Свои цвета…</option>
               </select>
             </label>
+
             <div id="interfaceCustomColors" class="color-grid hidden">
               <label class="color-field"><span>Акцент</span><input id="interfaceAccent" type="color" value="#1769e0"></label>
               <label class="color-field"><span>Фон</span><input id="interfaceBackground" type="color" value="#f4f8ff"></label>
               <label class="color-field"><span>Карточки</span><input id="interfacePanel" type="color" value="#ffffff"></label>
               <label class="color-field"><span>Текст</span><input id="interfaceText" type="color" value="#12233f"></label>
             </div>
+
             <label class="field">
-              <span>Шрифт интерфейса</span>
+              <span>Шрифт</span>
               <select id="interfaceFontPreset">
                 <option value="system">Системный</option>
                 <option value="segoe">Segoe UI</option>
@@ -53,10 +65,12 @@
                 <option value="custom">Другой установленный шрифт…</option>
               </select>
             </label>
+
             <label id="interfaceFontCustomWrap" class="field hidden">
-              <span>Название установленного шрифта</span>
+              <span>Название шрифта</span>
               <input id="interfaceFontCustom" type="text" maxlength="100" placeholder="Например, PT Sans" autocomplete="off">
             </label>
+
             <button id="resetInterfaceAppearance" class="compact-button" type="button">Сбросить оформление</button>
             <div id="interfaceSettingsSaved" class="saved" aria-live="polite"></div>
           </details>
@@ -82,7 +96,7 @@
       <div class="section-heading">
         <div>
           <div class="archive-label">Текущий чат</div>
-          <strong>Сбор переписки</strong>
+          <strong>Собрать переписку</strong>
         </div>
         <span id="captureStateBadge" class="state-badge">Готово</span>
       </div>
@@ -94,26 +108,33 @@
 
       <div class="capture-location">
         <label class="field compact-field">
-          <span>Где собирать <span class="info-dot" tabindex="0" title="В фоновой вкладке архиватор открывает отдельную копию этого чата, физически прокручивает её от начала до зафиксированного конца и сохраняет сообщения. Текущую вкладку можно не трогать.">i</span></span>
+          <span class="field-label-with-info">
+            Где собирать
+            <button id="captureInfoToggle" class="info-dot" type="button" aria-expanded="false" aria-controls="captureInfo" aria-label="Как работает сбор">i</button>
+          </span>
           <select id="captureTarget">
             <option value="copy">В фоновой вкладке</option>
             <option value="current">В текущей вкладке</option>
           </select>
         </label>
+
+        <div id="captureInfo" class="info-popover hidden">
+          <div id="captureInfoText"></div>
+        </div>
         <div id="captureTargetHint" class="muted"></div>
       </div>
 
       <div class="button-grid primary-actions">
         <button id="capture" class="primary">Собрать заново</button>
-        <button id="compareArchive">Сверить с архивом</button>
+        <button id="compareArchive">Сверить с сохранённым</button>
       </div>
 
       <div id="captureControls" class="capture-controls">
         <button id="pauseCapture" class="hidden">Пауза</button>
-        <button id="resumeCapture" class="hidden primary">Продолжить сбор</button>
+        <button id="resumeCapture" class="hidden primary">Продолжить</button>
         <button id="cancel" class="cancel hidden">Остановить</button>
-        <button id="resetCapture" class="compact-button">Сбросить запуск</button>
       </div>
+
       <div id="compareResult" class="muted compare-result" aria-live="polite"></div>
 
       <details class="accessibility-options">
@@ -124,14 +145,30 @@
         </label>
         <label class="field">
           <span>Как именовать ChatGPT</span>
-          <input id="assistantName" type="text" maxlength="80" placeholder="Необязательно" autocomplete="off">
+          <input id="assistantName" type="text" maxlength="80" placeholder="Не обязательно" autocomplete="off">
         </label>
         <label class="check">
           <input id="alignUserRight" type="checkbox">
-          <span>Пользовательские реплики — по правому краю</span>
+          <span>Реплики пользователя — справа</span>
         </label>
         <div id="settingsSaved" class="saved" aria-live="polite"></div>
       </details>
+
+      <div id="archive" class="saved-run-row hidden">
+        <details class="saved-run-details">
+          <summary>Сохранён последний запуск</summary>
+          <div class="saved-run-body">
+            <strong id="archiveTitle"></strong>
+            <div id="archiveMeta" class="muted"></div>
+            <div class="compact-actions">
+              <button id="copyArchive">Скопировать</button>
+              <button id="recoverImages">Добрать изображения</button>
+              <button id="patchRecoveredImages">Добавить найденные изображения в Google Doc</button>
+            </div>
+          </div>
+        </details>
+        <button id="deleteArchive" class="text-danger" type="button">Сбросить</button>
+      </div>
     </section>
 
     <section id="draft" class="draft-alert hidden" aria-live="polite">
@@ -149,87 +186,74 @@
         <button id="openFailedCapture" class="compact-button hidden">Открыть вкладку сбора</button>
         <button id="deleteDraft" class="danger-outline compact-button">Удалить</button>
       </div>
-      <div id="draftRecoveryHint" class="muted hidden">Если автоматический стык не найдётся, проход сохранится: его можно просмотреть и быстро перейти к последнему сохранённому сообщению.</div>
+      <div id="draftRecoveryHint" class="muted hidden">Если архиватор не найдёт место остановки, сохранённую часть можно открыть и проверить вручную.</div>
     </section>
 
     <details id="unfinishedPassesPanel" class="compact-panel unfinished-panel">
-      <summary><span>Незавершённые проходы</span><small id="unfinishedPassesCount">0</small></summary>
+      <summary><span>Незавершённые сборы</span><small id="unfinishedPassesCount">0</small></summary>
       <div id="unfinishedPassesList" class="history-list compact-list"></div>
     </details>
 
-    <section id="archive" class="archive compact-archive hidden">
-      <div class="section-heading">
-        <div>
-          <div class="archive-label">Локальный архив</div>
-          <strong id="archiveTitle"></strong>
-        </div>
-      </div>
-      <div id="archiveMeta" class="muted"></div>
-      <div class="actions compact-actions">
-        <button id="copyArchive">Скопировать</button>
-        <button id="recoverImages">Добрать картинки</button>
-        <button id="deleteArchive" class="danger-outline">Удалить</button>
-      </div>
-      <button id="patchRecoveredImages" class="compact-button">Довставить добранные картинки в связанный Google Doc</button>
-    </section>
+    <details id="continuationPanel" class="compact-panel action-panel">
+      <summary><span>Добрать новые сообщения</span><small>по необходимости</small></summary>
+      <div class="panel-body">
+        <div class="muted">Архиватор найдёт конец сохранённой версии и добавит только новые сообщения.</div>
+        <button id="continue" class="primary">Добрать</button>
 
-    <section class="doc-link compact-card">
-      <div class="section-heading">
-        <div><div class="archive-label">Продолжение</div><strong>Добрать новые сообщения</strong></div>
-      </div>
-      <button id="continue" class="primary">Добрать новое</button>
-      <details class="continuation-options">
-        <summary>Google Doc для продолжения</summary>
-        <label class="field doc-link-field">
-          <span>Добавить новое в этот Google Doc — необязательно</span>
-          <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
-        </label>
-        <div id="linkedDocHint" class="muted"></div>
-        <details class="recovery-settings">
-          <summary>Восстановить точку продолжения из Google Doc</summary>
-          <button id="syncDoc">Восстановить стык по Google Doc</button>
+        <details class="continuation-options">
+          <summary>Сразу добавить их в Google Doc</summary>
+          <label class="field doc-link-field">
+            <span>Ссылка на Google Doc</span>
+            <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
+          </label>
+          <div id="linkedDocHint" class="muted"></div>
+
+          <details class="recovery-settings">
+            <summary>Если точка продолжения потерялась</summary>
+            <button id="syncDoc">Найти её по Google Doc</button>
+          </details>
         </details>
-      </details>
-    </section>
+      </div>
+    </details>
 
-    <section class="export-card compact-card">
-      <div class="section-heading">
-        <div><div class="archive-label">Экспорт</div><strong>Google Docs</strong></div>
+    <details class="compact-panel action-panel export-card">
+      <summary><span>Сохранить в Google Docs</span><small>документ · вкладки</small></summary>
+      <div class="panel-body">
+        <div class="compact-actions">
+          <button id="newDoc" disabled>В новый документ</button>
+          <button id="activeDoc" disabled>В открытый документ</button>
+        </div>
+        <details class="tab-export-inner">
+          <summary>Разбить по вкладкам и темам</summary>
+          <button id="openPlanner" disabled>Разметить архив</button>
+        </details>
       </div>
-      <div class="actions compact-actions">
-        <button id="newDoc" disabled>Новый Google Doc</button>
-        <button id="activeDoc" disabled>В открытый Google Doc</button>
-      </div>
-      <details class="tab-export-inner">
-        <summary>Разбить по вкладкам и темам</summary>
-        <button id="openPlanner" disabled>Разметить архив</button>
-      </details>
-    </section>
+    </details>
 
     <details id="savedArchivesPanel" class="compact-panel archives-panel">
-      <summary><span>Сохранённые архивы</span><small id="savedArchivesCount">0</small></summary>
+      <summary><span>Архивы в Google Docs</span><small id="savedArchivesCount">0</small></summary>
       <div id="savedArchivesList" class="archive-links-list"></div>
     </details>
 
     <details id="technicalPanel" class="compact-panel technical-panel">
       <summary><span>Техническая информация</span><small>логи · история</small></summary>
+      <div class="panel-body">
+        <details id="runLog" class="run-log hidden">
+          <summary>Последний запуск</summary>
+          <strong id="runLogTitle"></strong>
+          <div id="runLogMeta" class="muted"></div>
+          <div id="runLogMessage" class="muted"></div>
+          <button id="copyRunLog" class="compact-button">Скопировать лог</button>
+          <button id="resetCapture" class="text-danger technical-reset" type="button">Сбросить состояние запуска</button>
+        </details>
 
-      <details id="runLog" class="run-log hidden">
-        <summary>Последний запуск</summary>
-        <strong id="runLogTitle"></strong>
-        <div id="runLogMeta" class="muted"></div>
-        <div id="runLogMessage" class="muted"></div>
-        <button id="copyRunLog" class="compact-button">Скопировать лог</button>
-      </details>
-
-      <details id="historyPanel" class="history-panel">
-        <summary><span>История запусков</span><small id="historyCount">0</small></summary>
-        <div id="captureHistory" class="history-list"></div>
-        <button id="clearHistory" class="compact-button danger-outline">Очистить историю</button>
-      </details>
+        <details id="historyPanel" class="history-panel">
+          <summary><span>История запусков</span><small id="historyCount">0</small></summary>
+          <div id="captureHistory" class="history-list"></div>
+          <button id="clearHistory" class="compact-button danger-outline">Очистить историю</button>
+        </details>
+      </div>
     </details>
-
-    <p class="note">Пауза запоминает текущий контекст. При продолжении архиватор сначала проверяет место остановки; если позиция потеряна, ищет сохранённый стык назад и не продолжает наугад.</p>
   </main>
   <script src="popup.js"></script>
 </body>
