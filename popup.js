@@ -20,7 +20,6 @@ const DEFAULT_SETTINGS = {
   palette: 'ocean',
   interfaceAppearance: DEFAULT_INTERFACE_APPEARANCE,
   alignUserRight: true,
-  includeReasoning: false,
   captureTarget: 'copy'
 };
 
@@ -100,7 +99,6 @@ function renderRunLog(job) {
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
-  if (job.reasoningBlockCount) meta.push(job.reasoningBlockCount + ' блоков размышлений');
   if (job.draftCount) meta.push(job.draftCount + ' в незавершённом проходе');
   $('runLogMeta').textContent = meta.join(' · ');
   $('runLogMessage').textContent = job.message || '';
@@ -111,7 +109,7 @@ function renderDraft(draft) {
   if (!box) return;
   box.classList.toggle('hidden', !draft);
   if (!draft) return;
-  $('draftTitle').textContent = draft.title || 'Незавершённый проход';
+  $('draftTitle').textContent = 'Сбор не завершён' + (draft.title ? ' · ' + draft.title : '');
   $('draftMeta').textContent =
     (draft.messageCount || 0) + ' сообщений · ' + (draft.imageCount || 0) + ' изображений';
 }
@@ -205,6 +203,52 @@ function renderUnfinishedPasses(items = []) {
 
     actions.append(view, copy, remove);
     row.append(head, meta, actions);
+    list.appendChild(row);
+  }
+}
+
+
+function renderSavedArchives(items = []) {
+  const list = $('savedArchivesList');
+  const count = $('savedArchivesCount');
+  if (!list || !count) return;
+  const rows = Array.isArray(items) ? items.filter(item => item?.docUrl) : [];
+  count.textContent = String(rows.length);
+  list.textContent = '';
+  if (!rows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = 'Связанных Google Docs пока нет.';
+    list.appendChild(empty);
+    return;
+  }
+  for (const item of rows) {
+    const row = document.createElement('div');
+    row.className = 'archive-link-row';
+
+    const main = document.createElement('div');
+    main.className = 'archive-link-main';
+    const title = document.createElement('div');
+    title.className = 'archive-link-title';
+    title.textContent = item.title || 'Архив ChatGPT';
+    const meta = document.createElement('div');
+    meta.className = 'archive-link-meta';
+    const parts = [];
+    if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
+    if (item.updatedAt) {
+      try { parts.push(new Date(item.updatedAt).toLocaleString('ru-RU')); } catch (_) {}
+    }
+    meta.textContent = parts.join(' · ');
+    main.append(title, meta);
+
+    const open = document.createElement('a');
+    open.className = 'archive-link-open';
+    open.href = item.docUrl;
+    open.target = '_blank';
+    open.rel = 'noopener noreferrer';
+    open.textContent = 'Открыть ↗';
+
+    row.append(main, open);
     list.appendChild(row);
   }
 }
@@ -370,7 +414,7 @@ function applyInterfaceAppearance(settings = {}) {
   root.style.setProperty('--font-ui', customFontStack(appearance));
 
   const customVars = [
-    '--bg', '--panel', '--text', '--muted',
+    '--bg', '--bg-gradient', '--panel', '--text', '--muted',
     '--accent', '--accent-2', '--soft', '--border', '--shadow'
   ];
   for (const name of customVars) root.style.removeProperty(name);
@@ -383,6 +427,7 @@ function applyInterfaceAppearance(settings = {}) {
     const dark = isDarkHex(background);
 
     root.style.setProperty('--bg', background);
+    root.style.setProperty('--bg-gradient', 'linear-gradient(145deg,' + background + ' 0%,' + mixHex(accent, background, 0.10) + ' 52%,' + background + ' 100%)');
     root.style.setProperty('--panel', panel);
     root.style.setProperty('--text', text);
     root.style.setProperty('--accent', accent);
@@ -449,13 +494,13 @@ function previewInterfaceAppearance() {
 }
 
 function captureTargetLabel(value) {
-  return value === 'copy' ? 'фоновый режим' : 'обычный режим';
+  return value === 'copy' ? 'в фоновой вкладке' : 'в текущей вкладке';
 }
 
 function updateCaptureTargetHint(value) {
   $('captureTargetHint').textContent = value === 'copy'
-    ? 'По умолчанию. Отдельная рабочая вкладка кратко откроется для загрузки, затем фокус вернется в исходный чат; сбор продолжится в фоне.'
-    : 'Резервный режим. Архиватор физически прокручивает этот чат; до завершения лучше его не трогать.';
+    ? 'Отдельная вкладка физически прокрутит чат от начала до зафиксированного конца.'
+    : 'Архиватор физически прокручивает этот чат; во время сбора лучше не двигать страницу вручную.';
 }
 
 async function loadSettings() {
@@ -515,6 +560,8 @@ function render(data) {
   renderCaptureState(job);
   renderHistory(state.history || []);
   renderUnfinishedPasses(state.unfinishedPasses || []);
+  renderSavedArchives(state.savedArchives || []);
+  $('unfinishedPassesPanel')?.classList.toggle('has-items', Boolean((state.unfinishedPasses || []).length));
 
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
@@ -564,14 +611,14 @@ function render(data) {
   );
   $('openFailedCapture').classList.toggle('hidden', !recoverableDraft);
   $('resumeFailedCapture').classList.toggle('hidden', !recoverableDraft);
-  $('draftRecoveryHint').classList.toggle('hidden', !recoverableDraft);
+  $('resumeFailedCapture').disabled = Boolean(running || !recoverableDraft);
+  $('draftRecoveryHint').classList.toggle('hidden', !draft);
   $('deleteDraft').disabled = Boolean(running || !draft);
 
   $('archive').classList.toggle('hidden', !archive);
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
     ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
-      (archive.reasoningBlockCount ? ` · ${archive.reasoningBlockCount} блоков размышлений` : '') +
       (archive.imageCount ? ` · ${archive.imageBinaryReady || 0} подготовлено · ${archive.imageBinaryFailed || 0} ошибок` : '') +
       (archive.lastImageRecoveredCount ? ` · последний добор +${archive.lastImageRecoveredCount}` : ''))
     : '';
@@ -1049,6 +1096,13 @@ $('deleteArchive').onclick = async () => {
   }
 };
 
+$('viewDraft').onclick = async () => {
+  const passId = (state?.unfinishedPass || state?.draft)?.id;
+  if (!passId) return;
+  const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(passId));
+  await chrome.tabs.create({ url });
+};
+
 $('copyDraft').onclick = async () => {
   $('copyDraft').disabled = true;
   try {
@@ -1138,7 +1192,6 @@ $('activeDoc').onclick = async () => {
 $('userName').oninput = e => saveSettings({ userName: e.target.value });
 $('assistantName').oninput = e => saveSettings({ assistantName: e.target.value });
 $('alignUserRight').onchange = e => saveSettings({ alignUserRight: e.target.checked });
-$('includeReasoning').onchange = e => saveSettings({ includeReasoning: e.target.checked });
 $('captureTarget').onchange = e => {
   updateCaptureTargetHint(e.target.value);
   saveSettings({ captureTarget: e.target.value }, null);
@@ -1207,7 +1260,6 @@ $('reloadExtension').addEventListener('click', () => {
     $('userName').value = settings.userName;
     $('assistantName').value = settings.assistantName;
     $('alignUserRight').checked = settings.alignUserRight;
-    $('includeReasoning').checked = settings.includeReasoning;
     $('captureTarget').value = settings.captureTarget === 'current' ? 'current' : 'copy';
     updateCaptureTargetHint($('captureTarget').value);
     renderInterfaceAppearanceControls(settings);

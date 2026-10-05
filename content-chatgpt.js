@@ -24,7 +24,7 @@
   const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { running: false, jobId: null, cancel: false, paused: false };
+  const state = { running: false, jobId: null, cancel: false, paused: false, pauseCheckpoint: null, resumeFailure: '' };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
@@ -38,7 +38,66 @@
     while (state.paused && !state.cancel) {
       await sleep(250);
     }
+    if (state.resumeFailure) {
+      const message = state.resumeFailure;
+      state.resumeFailure = '';
+      throw new Error(message);
+    }
     if (state.cancel) throw new Error('Сбор отменен.');
+  }
+
+  function makePauseCheckpoint() {
+    const visible = visibleMeaningfulSignatures();
+    const tail = visible.slice(-4).map(item => item.externalSignature).filter(Boolean);
+    const last = visible[visible.length - 1] || null;
+    return {
+      tail,
+      exactSignature: last?.exactSignature || '',
+      capturedAt: Date.now()
+    };
+  }
+
+  function pauseCheckpointVisible(checkpoint) {
+    if (!checkpoint) return true;
+    const visible = visibleMeaningfulSignatures();
+    if (!visible.length) return false;
+    if (checkpoint.exactSignature && visible.some(item => item.exactSignature === checkpoint.exactSignature)) {
+      return true;
+    }
+    const target = (checkpoint.tail || []).filter(Boolean);
+    if (!target.length) return false;
+    const current = visible.map(item => item.externalSignature);
+    const minMatch = Math.min(2, target.length);
+    for (let length = target.length; length >= minMatch; length--) {
+      const suffix = target.slice(-length);
+      for (let start = 0; start <= current.length - length; start++) {
+        let same = true;
+        for (let offset = 0; offset < length; offset++) {
+          if (current[start + offset] !== suffix[offset]) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return true;
+      }
+    }
+    return false;
+  }
+
+  async function recoverPauseCheckpoint(checkpoint) {
+    if (!checkpoint || pauseCheckpointVisible(checkpoint)) return true;
+
+    for (let i = 0; i < 180; i++) {
+      await physicalScroll('up', i < 12 ? 2 : 4);
+      await sleep(120);
+      if (pauseCheckpointVisible(checkpoint)) return true;
+    }
+
+    throw new Error(
+      'После паузы не удалось надёжно найти место остановки. ' +
+      'Автоматическое продолжение прекращено, чтобы не создать пропуски или дубли. ' +
+      'Собранная часть будет сохранена как незавершённый проход.'
+    );
   }
 
   function elementPoint(el) {
@@ -156,7 +215,7 @@
 
   async function getSettings() {
     const result = await chrome.storage.local.get(SETTINGS_KEY);
-    return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+    return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}), includeReasoning: false };
   }
 
   function hashText(text) {
@@ -2498,6 +2557,8 @@
       state.jobId = null;
       state.cancel = false;
       state.paused = false;
+      state.pauseCheckpoint = null;
+      state.resumeFailure = '';
     }
   }
 
@@ -2524,14 +2585,31 @@
       return false;
     }
     if (message && message.type === 'ARCHIVER_PAUSE_CAPTURE') {
-      if (state.running && (!message.jobId || message.jobId === state.jobId)) state.paused = true;
-      sendResponse({ ok: true, paused: state.paused });
+      if (state.running && (!message.jobId || message.jobId === state.jobId)) {
+        state.pauseCheckpoint = makePauseCheckpoint();
+        state.paused = true;
+      }
+      sendResponse({ ok: true, paused: state.paused, checkpointSaved: Boolean(state.pauseCheckpoint) });
       return false;
     }
     if (message && message.type === 'ARCHIVER_RESUME_CAPTURE') {
-      if (state.running && (!message.jobId || message.jobId === state.jobId)) state.paused = false;
-      sendResponse({ ok: true, paused: state.paused });
-      return false;
+      if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
+        sendResponse({ ok: false, error: 'Активный сбор для продолжения не найден.' });
+        return false;
+      }
+      (async () => {
+        try {
+          await recoverPauseCheckpoint(state.pauseCheckpoint);
+          state.pauseCheckpoint = null;
+          state.paused = false;
+          sendResponse({ ok: true, paused: false, recovered: true });
+        } catch (error) {
+          state.resumeFailure = error?.message || String(error);
+          state.paused = false;
+          sendResponse({ ok: false, paused: false, error: state.resumeFailure });
+        }
+      })();
+      return true;
     }
     if (message && message.type === 'ARCHIVER_CANCEL_CAPTURE') {
       if (state.running && (!message.jobId || message.jobId === state.jobId)) {

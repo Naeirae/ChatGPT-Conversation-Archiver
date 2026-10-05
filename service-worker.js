@@ -4,7 +4,8 @@ import {
 
 import {
   createArchiveStore,
-  summarizeArchive
+  summarizeArchive,
+  STORAGE_KEYS
 } from './lib/archive-store.mjs';
 
 import {
@@ -42,7 +43,7 @@ const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
-  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}), includeReasoning: false };
 }
 
 const archiveStore = createArchiveStore(chrome.storage.local);
@@ -65,6 +66,28 @@ const {
 const summarize = summarizeArchive;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function listLinkedArchives() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.archiveIndex);
+  const index = result[STORAGE_KEYS.archiveIndex] || {};
+  const rows = [];
+  for (const archiveId of Object.values(index)) {
+    const archive = await getArchive(archiveId);
+    if (!archive?.sourceUrl) continue;
+    const linked = await getLinkedDoc(archive.sourceUrl);
+    if (!linked?.url) continue;
+    rows.push({
+      id: archive.id,
+      title: archive.title || 'Архив ChatGPT',
+      messageCount: archive.messages?.length || 0,
+      capturedAt: archive.capturedAt || '',
+      docUrl: linked.url,
+      updatedAt: linked.updatedAt || archive.capturedAt || ''
+    });
+  }
+  rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return rows;
+}
 
 function makeCaptureError(code, message) {
   const error = new Error(message);
@@ -262,7 +285,7 @@ async function resumeCapture() {
     status: 'running',
     pauseReason: '',
     phase: resumePhase,
-    message: 'Сбор продолжен.'
+    message: 'Место остановки найдено. Сбор продолжен.'
   }, {
     level: 'info',
     code: 'RUN_RESUMED_BY_USER',
@@ -2828,6 +2851,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key)
           })),
           linkedDoc,
+          savedArchives: await listLinkedArchives(),
           canContinue: Boolean(currentArchive?.messages?.length),
           history: await getRunHistory()
         };
