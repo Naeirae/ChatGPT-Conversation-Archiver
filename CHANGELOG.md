@@ -1,3 +1,22 @@
+# Changelog
+
+## 0.3.43
+
+- rebuild the popup around the capture task: capture location and primary actions stay visible, while appearance/update settings move under a compact gear control;
+- rename capture targets to **«В фоновой вкладке»** / **«В текущей вкладке»** and add an inline info hint explaining that the working tab is physically scrolled and saved;
+- keep user/assistant naming directly under capture as **special accessibility options** instead of burying them in global settings;
+- remove the misleading reasoning checkbox from the popup and force reasoning export off for this release;
+- compact unfinished-pass UI into a red recovery alert with **Дособрать / Просмотреть / Удалить**, keep the historical unfinished list collapsed, and remove leaked literal `\\n\\n` markup from the popup;
+- add a compact list of archived conversations that have linked Google Docs, with one-click document opening;
+- move run log and capture history into a compact technical-information section;
+- add soft gradient variants to the existing interface palettes;
+- pause now stores a visible-context checkpoint; resume first verifies the checkpoint, otherwise physically searches backward for the saved context before continuing;
+- if the paused position cannot be proven, continuation fails closed and the collected part is saved as an unfinished pass instead of guessing;
+- unfinished-pass viewer highlights the last saved message and adds **«К последнему сохранённому»**, plus recovery controls when the original working tab is still available;
+- add a proprietary source-available license: public visibility is for transparency/update delivery and does not grant general use, modification, redistribution, or commercial reuse rights;
+- repository/static verification updated for the compact popup structure;
+- manifest -> 0.3.43.
+
 ## 0.3.42
 
 - add automatic multi-document export for oversized archives with a safe 850k-character budget per Google Doc;
@@ -16,8 +35,6 @@
 - list all saved unfinished passes in the popup and add a dedicated viewer with full saved messages and comparison against the completed local archive;
 - store recovery metadata on unfinished passes, including capture phase, navigation high-water mark, and the original lower snapshot boundary;
 - add a retry path that returns the preserved working tab to the top without re-counting/re-capturing the first stage, then repeats only the chronological downward pass and merges missing messages into the saved unfinished pass.
-
-# Changelog
 
 ## 0.3.40
 
