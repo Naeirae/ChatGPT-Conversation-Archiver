@@ -6,6 +6,7 @@
 - move the walkthrough card around the current field and spotlight the exact control being explained;
 - open Settings and Help during the relevant walkthrough steps so their actual controls can be highlighted;
 - keep conceptual steps such as unfinished-pass recovery readable even when the corresponding UI is not currently visible;
+- version the walkthrough separately from the extension: ordinary updates do not reopen it, but a materially changed walkthrough can be shown once by increasing its walkthrough revision;
 - keep the version on a separate header meta line so the Help button cannot cover it;
 - recover saved archives by scanning local archive records even if the archive index is missing or stale, and repair that index automatically;
 - show only the numeric count next to **История запусков** instead of repeating **запуск / запуска / запусков**;
