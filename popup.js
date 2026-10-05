@@ -1499,16 +1499,14 @@ const TOUR_STEPS = [
     text: 'Здесь можно изменить имена пользователя и ChatGPT в сохранённом тексте и выровнять реплики пользователя справа.'
   },
   {
-    openDetails: '.settings-menu',
-    selector: '#interfacePalette',
+    selector: '.settings-menu > summary',
     title: 'Оформление и обновление',
-    text: 'В настройках можно выбрать тему и шрифт. Здесь же находится проверка обновлений.'
+    text: 'Шестерёнка открывает настройки темы, шрифта и обновлений. Во время знакомства это окно не раскрывается и не закрывает интерфейс.'
   },
   {
-    openDetails: '.help-menu',
-    selector: '#showTour',
+    selector: '.help-menu > summary',
     title: 'Справка всегда рядом',
-    text: 'В справке можно снова запустить это знакомство, открыть полную инструкцию и скопировать контакт разработчика.'
+    text: 'Знак вопроса открывает справку: здесь можно снова запустить знакомство, открыть полную инструкцию и скопировать контакт разработчика.'
   }
 ];
 let tourIndex = 0;
@@ -1530,41 +1528,22 @@ function clearTourTarget() {
 function positionTour(target) {
   const overlay = $('tourOverlay');
   const card = document.querySelector('.tour-card');
-  const spotlight = $('tourSpotlight');
   if (!overlay || !card) return;
 
-  const margin = 10;
-  const gap = 10;
+  const margin = 12;
+  const interfaceWidth = 430;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const cardWidth = Math.min(300, vw - margin * 2);
+  const availableRail = Math.max(240, vw - interfaceWidth - margin * 2);
+  const cardWidth = Math.min(280, availableRail);
 
   card.style.width = cardWidth + 'px';
-  card.style.left = margin + 'px';
-  card.style.top = margin + 'px';
+  card.style.left = Math.max(interfaceWidth + margin, vw - cardWidth - margin) + 'px';
 
-  if (!target) {
-    const rect = card.getBoundingClientRect();
-    card.style.left = Math.max(margin, Math.round((vw - rect.width) / 2)) + 'px';
-    card.style.top = Math.max(margin, Math.round((vh - rect.height) / 2)) + 'px';
-    return;
-  }
-
-  const tr = target.getBoundingClientRect();
   const cr = card.getBoundingClientRect();
-  const roomBelow = vh - tr.bottom;
-  const roomAbove = tr.top;
-  let top = roomBelow >= cr.height + gap
-    ? tr.bottom + gap
-    : roomAbove >= cr.height + gap
-      ? tr.top - cr.height - gap
-      : Math.max(margin, Math.min(vh - cr.height - margin, vh - cr.height - margin));
-
-  let left = Math.round(tr.left + tr.width / 2 - cr.width / 2);
-  left = Math.max(margin, Math.min(vw - cr.width - margin, left));
-
-  card.style.left = left + 'px';
-  card.style.top = Math.max(margin, top) + 'px';
+  const preferredTop = target ? target.getBoundingClientRect().top : Math.round((vh - cr.height) / 2);
+  const top = Math.max(margin, Math.min(vh - cr.height - margin, preferredTop));
+  card.style.top = top + 'px';
 }
 
 function renderTourStep() {
@@ -1603,9 +1582,10 @@ async function openTour() {
   document.querySelectorAll('.header-menu[open]').forEach(details => {
     details.open = false;
   });
+  document.body.classList.add('tour-open');
   $('tourOverlay').classList.remove('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'false');
-  renderTourStep();
+  requestAnimationFrame(() => renderTourStep());
 }
 
 async function closeTour(markSeen = true) {
@@ -1613,10 +1593,16 @@ async function closeTour(markSeen = true) {
   closeTourOpenedDetails();
   $('tourOverlay').classList.add('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'true');
+  document.body.classList.remove('tour-open');
   if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
 }
 
 const WHATS_NEW_COPY = {
+  '0.3.49': [
+    'Знакомство теперь открывается отдельной боковой карточкой и не перекрывает основной интерфейс.',
+    'При запуске знакомства раскрытая справка или настройки сначала сворачиваются и больше не открываются поверх шагов.',
+    'Во время знакомства нет затемняющей подложки вокруг интерфейса.'
+  ],
   '0.3.48': [
     'Незавершённый проход теперь сохраняется по ходу хронологического сбора, поэтому закрытие рабочей вкладки не должно терять точку продолжения.',
     'Знакомство автоматически сворачивает открытую справку или настройки перед первым шагом.',
