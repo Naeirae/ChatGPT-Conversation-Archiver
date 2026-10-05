@@ -4,7 +4,7 @@
 
 Chrome extension for archiving complete ChatGPT conversations — including rich text formatting and images where possible — and exporting them to Google Docs.
 
-> Work in progress. No license has been selected yet.
+> Work in progress. Source is publicly visible for transparency and update delivery, but this is not open-source software. See `LICENSE`.
 
 Project docs: [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
 
@@ -217,7 +217,7 @@ The MVP stores the captured conversation locally in the browser extension profil
 
 ## License
 
-No license selected yet.
+This repository uses a proprietary source-available license. Public visibility does not grant permission to run, copy, modify, redistribute, sell, or incorporate the code into another product. GitHub's own Terms of Service still allow the platform-level viewing and forking rights that come with a public repository. Authorized users may receive separate end-user or commercial rights. See [`LICENSE`](LICENSE).
 
 ## Быстрое обновление локальной копии
 
