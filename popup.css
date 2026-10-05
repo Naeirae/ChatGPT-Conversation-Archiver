@@ -945,7 +945,12 @@ main { padding:14px 16px 16px; }
   background:rgba(14,23,40,.48);
   backdrop-filter:blur(2px);
 }
+.tour-overlay.tour-card-top {
+  align-items:flex-start;
+}
 .tour-card {
+  position:relative;
+  z-index:210;
   width:min(360px,100%);
   padding:14px;
   border-radius:14px;
