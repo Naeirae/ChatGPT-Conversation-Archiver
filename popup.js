@@ -414,7 +414,7 @@ function applyInterfaceAppearance(settings = {}) {
   root.style.setProperty('--font-ui', customFontStack(appearance));
 
   const customVars = [
-    '--bg', '--panel', '--text', '--muted',
+    '--bg', '--bg-gradient', '--panel', '--text', '--muted',
     '--accent', '--accent-2', '--soft', '--border', '--shadow'
   ];
   for (const name of customVars) root.style.removeProperty(name);
@@ -427,6 +427,7 @@ function applyInterfaceAppearance(settings = {}) {
     const dark = isDarkHex(background);
 
     root.style.setProperty('--bg', background);
+    root.style.setProperty('--bg-gradient', 'linear-gradient(145deg,' + background + ' 0%,' + mixHex(accent, background, 0.10) + ' 52%,' + background + ' 100%)');
     root.style.setProperty('--panel', panel);
     root.style.setProperty('--text', text);
     root.style.setProperty('--accent', accent);
