@@ -42,6 +42,7 @@ const DOCS_NEW_URL = 'https://docs.new';
 const SETTINGS_KEY = 'archiverSettings';
 const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/Naeirae/ChatGPT-Conversation-Archiver/main/manifest.json';
 const UPDATE_ALARM = 'archiver-update-check';
+const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
@@ -3281,9 +3282,19 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 });
 
 
-chrome.runtime.onInstalled.addListener(() => {
+chrome.runtime.onInstalled.addListener(details => {
   chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
   checkForUpdate().catch(() => {});
+
+  if (details?.reason === 'update') {
+    chrome.storage.local.set({
+      [WHATS_NEW_PENDING_KEY]: {
+        version: chrome.runtime.getManifest().version || '',
+        previousVersion: details.previousVersion || '',
+        updatedAt: Date.now()
+      }
+    }).catch(() => {});
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => {
