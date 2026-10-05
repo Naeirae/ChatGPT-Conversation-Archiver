@@ -172,6 +172,27 @@ function renderUnfinishedPasses(items = []) {
     const actions = document.createElement('div');
     actions.className = 'actions';
 
+    const resume = document.createElement('button');
+    resume.className = 'primary';
+    resume.textContent = 'Продолжить';
+    resume.onclick = async () => {
+      resume.disabled = true;
+      setStatus('Открываю исходный чат и ищу место остановки…');
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+          passId: item.id,
+          captureTarget: $('captureTarget').value
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый проход.');
+        render({ ...state, job: result.job });
+        startPolling();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        resume.disabled = false;
+      }
+    };
+
     const view = document.createElement('button');
     view.textContent = 'Просмотреть';
     view.onclick = async () => {
@@ -210,7 +231,7 @@ function renderUnfinishedPasses(items = []) {
       setStatus('Незавершённый проход удалён.');
     };
 
-    actions.append(view, copy, remove);
+    actions.append(resume, view, copy, remove);
     row.append(head, meta, actions);
     list.appendChild(row);
   }
