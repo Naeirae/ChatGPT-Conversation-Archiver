@@ -575,14 +575,15 @@ body { background:var(--bg-gradient,var(--bg)); }
   gap:10px;
   margin:0 0 7px;
   padding:8px 10px;
-  border:1px solid color-mix(in srgb,var(--accent) 38%,var(--border));
+  border:1px solid color-mix(in srgb,#2f9e44 45%,var(--border));
   border-radius:11px;
-  background:color-mix(in srgb,var(--accent) 8%,var(--panel));
+  background:color-mix(in srgb,#2f9e44 10%,var(--panel));
+  color:#247a35;
   font-size:11px;
 }
 .update-notice a {
   flex:0 0 auto;
-  color:var(--accent);
+  color:#247a35;
   font-weight:750;
   text-decoration:none;
 }
