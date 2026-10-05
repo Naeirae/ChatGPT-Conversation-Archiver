@@ -207,7 +207,7 @@ async function checkForUpdate() {
 
     await chrome.action.setBadgeText({ text: available ? '↑' : '' });
     if (available) {
-      await chrome.action.setBadgeBackgroundColor({ color: '#d94f4f' }).catch(() => {});
+      await chrome.action.setBadgeBackgroundColor({ color: '#2f9e44' }).catch(() => {});
       await chrome.action.setTitle({ title: 'Архиватор ChatGPT — доступно обновление ' + remoteVersion });
     } else {
       await chrome.action.setTitle({ title: 'Архиватор ChatGPT' });
