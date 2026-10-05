@@ -1499,10 +1499,7 @@ function closeTourOpenedDetails() {
 function clearTourTarget() {
   document.querySelectorAll('.tour-target').forEach(node => node.classList.remove('tour-target'));
   const spotlight = $('tourSpotlight');
-  if (spotlight) {
-    spotlight.classList.add('hidden');
-    spotlight.removeAttribute('style');
-  }
+  if (spotlight) spotlight.classList.add('hidden');
 }
 
 function positionTour(target) {
@@ -1529,15 +1526,6 @@ function positionTour(target) {
   }
 
   const tr = target.getBoundingClientRect();
-  if (spotlight) {
-    const pad = 5;
-    spotlight.classList.remove('hidden');
-    spotlight.style.left = Math.max(4, tr.left - pad) + 'px';
-    spotlight.style.top = Math.max(4, tr.top - pad) + 'px';
-    spotlight.style.width = Math.min(vw - 8, tr.width + pad * 2) + 'px';
-    spotlight.style.height = Math.min(vh - 8, tr.height + pad * 2) + 'px';
-  }
-
   const cr = card.getBoundingClientRect();
   const roomBelow = vh - tr.bottom;
   const roomAbove = tr.top;
