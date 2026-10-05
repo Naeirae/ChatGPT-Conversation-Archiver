@@ -2899,6 +2899,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc = await getLinkedDoc(tab.url);
         }
         const archive = currentArchive || await getLastArchive();
+        if (!linkedDoc && archive?.sourceUrl) {
+          linkedDoc = await getLinkedDoc(archive.sourceUrl);
+        }
         const draft = job?.draftId ? await getDraft(job.draftId) : null;
         const drafts = await listDrafts();
         return {
