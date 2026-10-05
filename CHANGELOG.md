@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.50
+
+- remove an implementation-note artifact from the walkthrough copy; keep the settings step focused on what the control does;
+- manifest -> 0.3.50.
+
 ## 0.3.49
 
 - move the walkthrough card into a dedicated side rail so the main 430 px interface remains visible;
