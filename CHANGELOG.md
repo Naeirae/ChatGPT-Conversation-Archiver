@@ -10,6 +10,11 @@
 - keep the version on a separate header meta line so the Help button cannot cover it;
 - recover saved archives by scanning local archive records even if the archive index is missing or stale, and repair that index automatically;
 - show only the numeric count next to **История запусков** instead of repeating **запуск / запуска / запусков**;
+- move “saved outside the extension” state into **Сохранённые чаты** instead of duplicating the latest archive card;
+- let the user mark a chat as saved elsewhere and attach any http/https link, not only Google Docs;
+- automatically mark successful Google Docs exports as saved outside the extension;
+- add a compact **Новое в версии** card that appears only after a real extension update; first-use onboarding remains separate;
+- rewrite the main popup labels and error states in plainer Russian;
 - manifest -> 0.3.46.
 
 ## 0.3.45
