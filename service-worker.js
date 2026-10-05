@@ -4,7 +4,8 @@ import {
 
 import {
   createArchiveStore,
-  summarizeArchive
+  summarizeArchive,
+  STORAGE_KEYS
 } from './lib/archive-store.mjs';
 
 import {
@@ -65,6 +66,28 @@ const {
 const summarize = summarizeArchive;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function listLinkedArchives() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.archiveIndex);
+  const index = result[STORAGE_KEYS.archiveIndex] || {};
+  const rows = [];
+  for (const archiveId of Object.values(index)) {
+    const archive = await getArchive(archiveId);
+    if (!archive?.sourceUrl) continue;
+    const linked = await getLinkedDoc(archive.sourceUrl);
+    if (!linked?.url) continue;
+    rows.push({
+      id: archive.id,
+      title: archive.title || 'Архив ChatGPT',
+      messageCount: archive.messages?.length || 0,
+      capturedAt: archive.capturedAt || '',
+      docUrl: linked.url,
+      updatedAt: linked.updatedAt || archive.capturedAt || ''
+    });
+  }
+  rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return rows;
+}
 
 function makeCaptureError(code, message) {
   const error = new Error(message);
@@ -2828,6 +2851,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key)
           })),
           linkedDoc,
+          savedArchives: await listLinkedArchives(),
           canContinue: Boolean(currentArchive?.messages?.length),
           history: await getRunHistory()
         };
