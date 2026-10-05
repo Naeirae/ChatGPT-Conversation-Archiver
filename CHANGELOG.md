@@ -2,10 +2,13 @@
 
 ## 0.3.46
 
-- fix the first-run walkthrough so the highlighted control no longer renders above and covers the help card;
-- position the walkthrough card on the opposite side of the current target when possible;
-- highlight compact controls instead of the whole capture card;
+- fix the first-run walkthrough so the help card no longer sits under the highlighted interface;
+- move the walkthrough card around the current field and spotlight the exact control being explained;
+- open Settings and Help during the relevant walkthrough steps so their actual controls can be highlighted;
 - keep conceptual steps such as unfinished-pass recovery readable even when the corresponding UI is not currently visible;
+- keep the version on a separate header meta line so the Help button cannot cover it;
+- recover saved archives by scanning local archive records even if the archive index is missing or stale, and repair that index automatically;
+- show only the numeric count next to **История запусков** instead of repeating **запуск / запуска / запусков**;
 - manifest -> 0.3.46.
 
 ## 0.3.45
