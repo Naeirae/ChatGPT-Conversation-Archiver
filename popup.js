@@ -1328,12 +1328,12 @@ const TOUR_STEPS = [
   {
     selector: '',
     title: 'Оборванный проход не пропадает',
-    text: 'Если сбор прервётся после сохранения части сообщений, появится незавершённый проход. Его можно продолжить, просмотреть, скопировать или удалить.'
+    text: 'Если сбор прервётся после сохранения части сообщений, появится отдельный незавершённый проход. Его можно продолжить, просмотреть, скопировать или удалить.'
   },
   {
-    selector: '#savedArchivesPanel',
+    selector: '#savedArchivesPanel > summary',
     title: 'Готовые чаты остаются в библиотеке',
-    text: 'Сохранённый архив можно продолжить, скопировать, перенести в Google Docs или разметить по вкладкам и темам.'
+    text: 'Из сохранённого архива можно продолжить исходный чат, скопировать переписку, сохранить её в Google Docs или разметить по темам.'
   },
   {
     selector: '.accessibility-options > summary',
@@ -1341,20 +1341,84 @@ const TOUR_STEPS = [
     text: 'В специальных возможностях можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
   },
   {
-    selector: '.settings-menu',
+    openDetails: '.settings-menu',
+    selector: '#interfacePalette',
     title: 'Оформление и обновление',
-    text: 'В настройках находятся темы, шрифт и обновление расширения.'
+    text: 'В настройках можно выбрать тему и шрифт. Здесь же находится проверка обновлений.'
   },
   {
-    selector: '.help-menu',
+    openDetails: '.help-menu',
+    selector: '#showTour',
     title: 'Справка всегда рядом',
-    text: 'Здесь можно снова открыть знакомство, прочитать полную справку и скопировать контакт разработчика.'
+    text: 'В справке можно снова запустить это знакомство, открыть полную инструкцию и скопировать контакт разработчика.'
   }
 ];
 let tourIndex = 0;
+let tourOpenedDetails = null;
+
+function closeTourOpenedDetails() {
+  if (tourOpenedDetails) {
+    tourOpenedDetails.open = false;
+    tourOpenedDetails = null;
+  }
+}
 
 function clearTourTarget() {
   document.querySelectorAll('.tour-target').forEach(node => node.classList.remove('tour-target'));
+  const spotlight = $('tourSpotlight');
+  if (spotlight) {
+    spotlight.classList.add('hidden');
+    spotlight.removeAttribute('style');
+  }
+}
+
+function positionTour(target) {
+  const overlay = $('tourOverlay');
+  const card = document.querySelector('.tour-card');
+  const spotlight = $('tourSpotlight');
+  if (!overlay || !card) return;
+
+  const margin = 10;
+  const gap = 10;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const cardWidth = Math.min(300, vw - margin * 2);
+
+  card.style.width = cardWidth + 'px';
+  card.style.left = margin + 'px';
+  card.style.top = margin + 'px';
+
+  if (!target) {
+    const rect = card.getBoundingClientRect();
+    card.style.left = Math.max(margin, Math.round((vw - rect.width) / 2)) + 'px';
+    card.style.top = Math.max(margin, Math.round((vh - rect.height) / 2)) + 'px';
+    return;
+  }
+
+  const tr = target.getBoundingClientRect();
+  if (spotlight) {
+    const pad = 5;
+    spotlight.classList.remove('hidden');
+    spotlight.style.left = Math.max(4, tr.left - pad) + 'px';
+    spotlight.style.top = Math.max(4, tr.top - pad) + 'px';
+    spotlight.style.width = Math.min(vw - 8, tr.width + pad * 2) + 'px';
+    spotlight.style.height = Math.min(vh - 8, tr.height + pad * 2) + 'px';
+  }
+
+  const cr = card.getBoundingClientRect();
+  const roomBelow = vh - tr.bottom;
+  const roomAbove = tr.top;
+  let top = roomBelow >= cr.height + gap
+    ? tr.bottom + gap
+    : roomAbove >= cr.height + gap
+      ? tr.top - cr.height - gap
+      : Math.max(margin, Math.min(vh - cr.height - margin, vh - cr.height - margin));
+
+  let left = Math.round(tr.left + tr.width / 2 - cr.width / 2);
+  left = Math.max(margin, Math.min(vw - cr.width - margin, left));
+
+  card.style.left = left + 'px';
+  card.style.top = Math.max(margin, top) + 'px';
 }
 
 function renderTourStep() {
@@ -1363,14 +1427,20 @@ function renderTourStep() {
   if (!overlay || !step) return;
 
   clearTourTarget();
-  overlay.classList.remove('tour-card-top');
+  closeTourOpenedDetails();
+
+  if (step.openDetails) {
+    const details = document.querySelector(step.openDetails);
+    if (details) {
+      details.open = true;
+      tourOpenedDetails = details;
+    }
+  }
+
   const target = step.selector ? document.querySelector(step.selector) : null;
   if (target && !target.classList.contains('hidden')) {
     target.scrollIntoView({ block: 'nearest', behavior: 'auto' });
     target.classList.add('tour-target');
-    const rect = target.getBoundingClientRect();
-    const targetCenter = rect.top + rect.height / 2;
-    if (targetCenter > window.innerHeight / 2) overlay.classList.add('tour-card-top');
   }
 
   $('tourStep').textContent = (tourIndex + 1) + ' из ' + TOUR_STEPS.length;
@@ -1378,6 +1448,8 @@ function renderTourStep() {
   $('tourText').textContent = step.text;
   $('tourPrev').disabled = tourIndex === 0;
   $('tourNext').textContent = tourIndex === TOUR_STEPS.length - 1 ? 'Готово' : 'Далее';
+
+  requestAnimationFrame(() => positionTour(target && !target.classList.contains('hidden') ? target : null));
 }
 
 async function openTour() {
@@ -1389,6 +1461,7 @@ async function openTour() {
 
 async function closeTour(markSeen = true) {
   clearTourTarget();
+  closeTourOpenedDetails();
   $('tourOverlay').classList.add('hidden');
   $('tourOverlay').setAttribute('aria-hidden', 'true');
   if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
