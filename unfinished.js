@@ -34,6 +34,14 @@ function renderMessage(message, index) {
 
   card.append(head, body);
   if (parts.length) card.append(extra);
+  if (index === window.__unfinishedLastIndex) {
+    card.classList.add('last-saved');
+    card.id = 'lastSavedMessage';
+    const marker = document.createElement('div');
+    marker.className = 'last-marker';
+    marker.textContent = 'Последнее сохранённое сообщение';
+    card.append(marker);
+  }
   return card;
 }
 
@@ -65,9 +73,19 @@ async function load() {
   $('error').textContent = pass.error || '';
 
   $('messageCount').textContent = (pass.messages || []).length + ' сообщений';
+  window.__unfinishedLastIndex = Math.max(0, (pass.messages || []).length - 1);
   const list = $('messages');
   list.textContent = '';
   (pass.messages || []).forEach((message, index) => list.appendChild(renderMessage(message, index)));
+
+  const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
+  const isActiveRecovery = Boolean(
+    state?.unfinishedPass?.id === passId &&
+    state?.job?.status === 'error' &&
+    state?.job?.recoveryAvailable
+  );
+  $('resume').classList.toggle('hidden', !isActiveRecovery);
+  $('openCapture').classList.toggle('hidden', !isActiveRecovery);
 
   const compared = await chrome.runtime.sendMessage({
     type: 'ARCHIVER_COMPARE_UNFINISHED_PASS',
@@ -120,3 +138,24 @@ load().catch(error => {
   $('meta').textContent = error.message || String(error);
   $('compare').textContent = '';
 });
+
+
+$('jumpLast').onclick = () => {
+  const target = document.getElementById('lastSavedMessage');
+  if (!target) return;
+  target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+};
+
+$('openCapture').onclick = async () => {
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB' });
+  if (!result?.ok) alert(result?.error || 'Не удалось открыть вкладку сбора.');
+};
+
+$('resume').onclick = async () => {
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
+  if (!result?.ok) {
+    alert(result?.error || 'Не удалось продолжить незавершённый проход.');
+    return;
+  }
+  alert('Архиватор ищет сохранённый стык и продолжает сбор.');
+};
