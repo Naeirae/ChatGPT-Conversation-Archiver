@@ -1069,3 +1069,38 @@ main { padding:14px 16px 16px; }
   width:auto;
   margin:0;
 }
+
+.whats-new {
+  margin:0 0 9px;
+  padding:10px 11px;
+  border:1px solid color-mix(in srgb,var(--accent) 28%,var(--border));
+  border-radius:11px;
+  background:color-mix(in srgb,var(--accent) 7%,var(--panel));
+}
+.whats-new-head {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.whats-new-head strong {
+  font-size:12px;
+}
+.whats-new .text-button {
+  width:auto;
+  margin:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--accent);
+  font-size:11px;
+  cursor:pointer;
+}
+.whats-new ul {
+  margin:7px 0 0;
+  padding-left:18px;
+  color:var(--muted);
+  font-size:11px;
+  line-height:1.4;
+}
+.whats-new li + li { margin-top:4px; }
