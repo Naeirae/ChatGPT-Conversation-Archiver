@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Архиватор ChatGPT",
-  "version": "0.3.42",
-  "description": "Архиватор ChatGPT: без автоматического повторного прохода, с версионной защитой content script, восстановлением оборванного сбора и вкладками Google Docs.",
+  "version": "0.3.43",
+  "description": "Архиватор ChatGPT: компактный UX, восстановление позиции после паузы, незавершённые проходы и Google Docs.",
   "permissions": [
     "activeTab",
     "tabs",
