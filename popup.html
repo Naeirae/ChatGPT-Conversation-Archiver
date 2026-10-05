@@ -11,80 +11,99 @@
     <header class="hero">
       <img class="brand-mark" src="icons/icon-32.png" alt="" aria-hidden="true">
       <div class="hero-copy">
-        <h1>Архиватор ChatGPT</h1>
-        <p class="subtitle">Собирает весь чат и сохраняет его в редактируемом виде</p>
+        <div class="product-line">
+          <h1>Архиватор ChatGPT</h1>
+          <span class="version-badge">v<span id="localVersion">—</span></span>
+        </div>
+        <p class="byline">@naeirae</p>
+        <p class="subtitle">Собирает чат целиком и сохраняет его в редактируемом виде</p>
       </div>
 
-      <details class="settings-menu">
-        <summary class="icon-summary" title="Настройки" aria-label="Настройки">⚙</summary>
-        <div class="settings-popover">
-          <details id="interfaceSettings" class="settings interface-settings" open>
-            <summary><span>Оформление</span><small>тема · шрифт</small></summary>
-
-            <label class="field">
-              <span>Тема</span>
-              <select id="interfacePalette">
-                <optgroup label="Однотонные">
-                  <option value="ocean">Океан</option>
-                  <option value="cobalt">Кобальт</option>
-                  <option value="sky">Небо</option>
-                  <option value="violet">Фиолетовая</option>
-                  <option value="rose">Розовая</option>
-                  <option value="amber">Янтарная</option>
-                  <option value="forest">Лесная</option>
-                  <option value="graphite">Графит</option>
-                  <option value="midnight">Полночь</option>
-                </optgroup>
-                <optgroup label="Градиентные">
-                  <option value="gradient-ocean">Градиент · Океан</option>
-                  <option value="gradient-sunset">Градиент · Закат</option>
-                  <option value="gradient-mint">Градиент · Мята</option>
-                  <option value="gradient-violet">Градиент · Сирень</option>
-                </optgroup>
-                <option value="custom">Свои цвета…</option>
-              </select>
-            </label>
-
-            <div id="interfaceCustomColors" class="color-grid hidden">
-              <label class="color-field"><span>Акцент</span><input id="interfaceAccent" type="color" value="#1769e0"></label>
-              <label class="color-field"><span>Фон</span><input id="interfaceBackground" type="color" value="#f4f8ff"></label>
-              <label class="color-field"><span>Карточки</span><input id="interfacePanel" type="color" value="#ffffff"></label>
-              <label class="color-field"><span>Текст</span><input id="interfaceText" type="color" value="#12233f"></label>
+      <div class="hero-tools">
+        <details class="header-menu help-menu">
+          <summary class="icon-summary text-icon" title="Справка" aria-label="Справка">?</summary>
+          <div class="header-popover help-popover">
+            <strong>Справка</strong>
+            <p>Как собрать чат, восстановить незавершённый проход, продолжить архив и сохранить его в Google Docs.</p>
+            <button id="showTour" class="compact-button" type="button">Показать знакомство</button>
+            <a class="menu-link" href="HELP.md" target="_blank" rel="noopener">Открыть полную справку</a>
+            <div class="contact-block">
+              <span>Связаться с разработчиком</span>
+              <button id="copyContact" class="copy-contact" type="button" title="Скопировать почту">nekurismarieykjuri@gmail.com</button>
+              <span id="contactCopied" class="saved" aria-live="polite"></span>
             </div>
+            <a class="menu-link" href="https://github.com/Naeirae/ChatGPT-Conversation-Archiver" target="_blank" rel="noreferrer">GitHub</a>
+          </div>
+        </details>
 
-            <label class="field">
-              <span>Шрифт</span>
-              <select id="interfaceFontPreset">
-                <option value="system">Системный</option>
-                <option value="segoe">Segoe UI</option>
-                <option value="arial">Arial</option>
-                <option value="verdana">Verdana</option>
-                <option value="tahoma">Tahoma</option>
-                <option value="georgia">Georgia</option>
-                <option value="consolas">Consolas</option>
-                <option value="custom">Другой установленный шрифт…</option>
-              </select>
-            </label>
+        <details class="header-menu settings-menu">
+          <summary class="icon-summary" title="Настройки" aria-label="Настройки">
+            <img src="icons/settings-heroicons.svg" alt="" aria-hidden="true">
+          </summary>
+          <div class="header-popover settings-popover">
+            <section id="interfaceSettings" class="settings-section">
+              <div class="settings-title">Оформление</div>
 
-            <label id="interfaceFontCustomWrap" class="field hidden">
-              <span>Название шрифта</span>
-              <input id="interfaceFontCustom" type="text" maxlength="100" placeholder="Например, PT Sans" autocomplete="off">
-            </label>
+              <label class="field">
+                <span>Тема</span>
+                <select id="interfacePalette">
+                  <optgroup label="Однотонные">
+                    <option value="ocean">Океан</option>
+                    <option value="cobalt">Кобальт</option>
+                    <option value="sky">Небо</option>
+                    <option value="violet">Фиолетовая</option>
+                    <option value="rose">Розовая</option>
+                    <option value="amber">Янтарная</option>
+                    <option value="forest">Лесная</option>
+                    <option value="graphite">Графит</option>
+                    <option value="midnight">Полночь</option>
+                  </optgroup>
+                  <optgroup label="Градиентные">
+                    <option value="gradient-ocean">Океан — градиент</option>
+                    <option value="gradient-sunset">Закат — градиент</option>
+                    <option value="gradient-mint">Мята — градиент</option>
+                    <option value="gradient-violet">Сирень — градиент</option>
+                  </optgroup>
+                  <option value="custom">Свои цвета…</option>
+                </select>
+              </label>
 
-            <button id="resetInterfaceAppearance" class="compact-button" type="button">Сбросить оформление</button>
-            <div id="interfaceSettingsSaved" class="saved" aria-live="polite"></div>
-          </details>
+              <div id="interfaceCustomColors" class="color-grid hidden">
+                <label class="color-field"><span>Акцент</span><input id="interfaceAccent" type="color" value="#1769e0"></label>
+                <label class="color-field"><span>Фон</span><input id="interfaceBackground" type="color" value="#f4f8ff"></label>
+                <label class="color-field"><span>Карточки</span><input id="interfacePanel" type="color" value="#ffffff"></label>
+                <label class="color-field"><span>Текст</span><input id="interfaceText" type="color" value="#12233f"></label>
+              </div>
 
-          <details class="settings update">
-            <summary><span>Версия и обновление</span><small><span id="localVersion">—</span></small></summary>
-            <div class="update-actions">
-              <a id="updateExtension" class="update-action" href="updater.html" target="_blank" rel="noopener">Обновить</a>
-              <button id="reloadExtension" type="button">Перезагрузить</button>
-              <a class="update-github" href="https://github.com/Naeirae/ChatGPT-Conversation-Archiver" target="_blank" rel="noreferrer">GitHub</a>
-            </div>
-          </details>
-        </div>
-      </details>
+              <label class="field">
+                <span>Шрифт</span>
+                <select id="interfaceFontPreset">
+                  <option value="segoe">Segoe UI</option>
+                  <option value="arial">Arial</option>
+                  <option value="verdana">Verdana</option>
+                  <option value="tahoma">Tahoma</option>
+                  <option value="georgia">Georgia</option>
+                  <option value="consolas">Consolas</option>
+                </select>
+              </label>
+
+              <input id="interfaceFontCustom" class="hidden" type="hidden" value="">
+              <div id="interfaceFontCustomWrap" class="hidden"></div>
+
+              <button id="resetInterfaceAppearance" class="compact-button" type="button">Сбросить оформление</button>
+              <div id="interfaceSettingsSaved" class="saved" aria-live="polite"></div>
+            </section>
+
+            <section class="settings-section update-section">
+              <div class="settings-title">Обновление</div>
+              <div class="update-actions">
+                <a id="updateExtension" class="update-action" href="updater.html" target="_blank" rel="noopener">Проверить и обновить</a>
+                <button id="reloadExtension" type="button">Перезагрузить расширение</button>
+              </div>
+            </section>
+          </div>
+        </details>
+      </div>
     </header>
 
     <div id="updateNotice" class="update-notice hidden" role="status">
@@ -97,7 +116,7 @@
       <button id="retryCurrent" class="hidden compact-button">Повторить в текущей вкладке</button>
     </div>
 
-    <section class="workspace-card capture-card">
+    <section class="workspace-card capture-card" data-tour="capture">
       <div class="section-heading">
         <div>
           <div class="archive-label">Текущий чат</div>
@@ -129,10 +148,7 @@
         <div id="captureTargetHint" class="muted"></div>
       </div>
 
-      <div class="button-grid primary-actions">
-        <button id="capture" class="primary">Собрать заново</button>
-        <button id="compareArchive">Сверить с сохранённым</button>
-      </div>
+      <button id="capture" class="primary capture-primary">Собрать чат</button>
 
       <div id="captureControls" class="capture-controls">
         <button id="pauseCapture" class="hidden">Пауза</button>
@@ -140,9 +156,9 @@
         <button id="cancel" class="cancel hidden">Остановить</button>
       </div>
 
-      <div id="compareResult" class="muted compare-result" aria-live="polite"></div>
+      <div id="compareResult" class="hidden" aria-live="polite"></div>
 
-      <details class="accessibility-options">
+      <details class="accessibility-options" data-tour="accessibility">
         <summary>Специальные возможности</summary>
         <label class="field">
           <span>Как именовать пользователя</span>
@@ -161,12 +177,22 @@
 
       <div id="archive" class="saved-run-row hidden">
         <details class="saved-run-details">
-          <summary>Сохранён последний запуск</summary>
+          <summary>
+            <span id="archiveStateLabel">Сохранён последний запуск</span>
+            <small id="archiveStateHint"></small>
+          </summary>
           <div class="saved-run-body">
             <strong id="archiveTitle"></strong>
             <div id="archiveMeta" class="muted"></div>
+            <div class="archive-doc-status">
+              <span id="archiveDocStatus"></span>
+              <a id="archiveDocLink" class="hidden" href="#" target="_blank" rel="noopener">Открыть Google Doc ↗</a>
+            </div>
             <div class="compact-actions">
               <button id="copyArchive">Скопировать</button>
+              <button id="newDoc">Сохранить в новый Google Doc</button>
+              <button id="activeDoc">Добавить в открытый Google Doc</button>
+              <button id="openPlanner">Разбить по вкладкам и темам</button>
               <button id="recoverImages">Добрать изображения</button>
               <button id="patchRecoveredImages">Добавить найденные изображения в Google Doc</button>
             </div>
@@ -176,7 +202,7 @@
       </div>
     </section>
 
-    <section id="draft" class="draft-alert hidden" aria-live="polite">
+    <section id="draft" class="draft-alert hidden" aria-live="polite" data-tour="unfinished">
       <div class="draft-alert-main">
         <span class="draft-dot" aria-hidden="true"></span>
         <div class="draft-copy">
@@ -191,29 +217,15 @@
         <button id="openFailedCapture" class="compact-button hidden">Открыть вкладку сбора</button>
         <button id="deleteDraft" class="danger-outline compact-button">Удалить</button>
       </div>
-      <div id="draftRecoveryHint" class="muted hidden">Если архиватор не найдёт место остановки, сохранённую часть можно открыть и проверить вручную.</div>
+      <div id="draftRecoveryHint" class="muted hidden">Если Архиватор не найдёт место остановки, сохранённую часть можно открыть и проверить вручную.</div>
     </section>
 
-    <details id="unfinishedPassesPanel" class="compact-panel unfinished-panel">
+    <details id="unfinishedPassesPanel" class="compact-panel unfinished-panel hidden">
       <summary><span>Незавершённые сборы</span><small id="unfinishedPassesCount">0</small></summary>
       <div id="unfinishedPassesList" class="history-list compact-list"></div>
     </details>
 
-    <details class="compact-panel action-panel export-card">
-      <summary><span>Сохранить в Google Docs</span><small>документ · вкладки</small></summary>
-      <div class="panel-body">
-        <div class="compact-actions">
-          <button id="newDoc" disabled>В новый документ</button>
-          <button id="activeDoc" disabled>В открытый документ</button>
-        </div>
-        <details class="tab-export-inner">
-          <summary>Разбить по вкладкам и темам</summary>
-          <button id="openPlanner" disabled>Разметить архив</button>
-        </details>
-      </div>
-    </details>
-
-    <details id="savedArchivesPanel" class="compact-panel archives-panel">
+    <details id="savedArchivesPanel" class="compact-panel archives-panel" data-tour="library">
       <summary><span>Сохранённые архивы</span><small id="savedArchivesCount">0</small></summary>
       <div id="savedArchivesList" class="archive-links-list"></div>
     </details>
@@ -248,6 +260,21 @@
         </details>
       </div>
     </details>
+
+    <div id="tourOverlay" class="tour-overlay hidden" aria-hidden="true">
+      <div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+        <div id="tourStep" class="tour-step"></div>
+        <h2 id="tourTitle"></h2>
+        <p id="tourText"></p>
+        <div class="tour-actions">
+          <button id="tourSkip" class="compact-button">Пропустить</button>
+          <div class="tour-nav">
+            <button id="tourPrev" class="compact-button">Назад</button>
+            <button id="tourNext" class="primary">Далее</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </main>
   <script src="popup.js"></script>
 </body>
