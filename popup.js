@@ -1280,6 +1280,114 @@ $('resetInterfaceAppearance').onclick = async () => {
   );
 };
 
+const TOUR_STORAGE_KEY = 'archiverIntroSeen';
+const TOUR_STEPS = [
+  {
+    selector: '[data-tour="capture"]',
+    title: 'Соберите чат',
+    text: 'Выберите фоновую или текущую вкладку и нажмите «Собрать чат». Фоновый режим оставляет исходный чат свободным.'
+  },
+  {
+    selector: '#captureControls',
+    title: 'Пауза не теряет место',
+    text: 'Во время сбора можно поставить проход на паузу. При продолжении Архиватор сначала проверит сохранённый контекст и не пойдёт дальше наугад.'
+  },
+  {
+    selector: '[data-tour="unfinished"]',
+    title: 'Незавершённый сбор можно продолжить',
+    text: 'Если проход оборвётся после сохранения части сообщений, здесь появятся действия «Продолжить», «Просмотреть» и «Удалить».'
+  },
+  {
+    selector: '[data-tour="library"]',
+    title: 'Готовые чаты лежат в библиотеке',
+    text: 'Из сохранённого архива можно продолжить исходный чат, открыть связанный Google Doc или сохранить архив в Google Docs.'
+  },
+  {
+    selector: '[data-tour="accessibility"]',
+    title: 'Подписи можно настроить',
+    text: 'Здесь можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
+  },
+  {
+    selector: '.settings-menu',
+    title: 'Оформление и обновление',
+    text: 'В настройках находятся темы, шрифт и обновление расширения.'
+  },
+  {
+    selector: '.help-menu',
+    title: 'Справка всегда рядом',
+    text: 'Здесь можно снова открыть знакомство, прочитать полную справку и скопировать контакт разработчика.'
+  }
+];
+let tourIndex = 0;
+
+function clearTourTarget() {
+  document.querySelectorAll('.tour-target').forEach(node => node.classList.remove('tour-target'));
+}
+
+function renderTourStep() {
+  const overlay = $('tourOverlay');
+  const step = TOUR_STEPS[tourIndex];
+  if (!overlay || !step) return;
+
+  clearTourTarget();
+  const target = document.querySelector(step.selector);
+  if (target) {
+    if (target.classList.contains('hidden')) target.classList.remove('tour-target');
+    else {
+      target.classList.add('tour-target');
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+
+  $('tourStep').textContent = (tourIndex + 1) + ' из ' + TOUR_STEPS.length;
+  $('tourTitle').textContent = step.title;
+  $('tourText').textContent = step.text;
+  $('tourPrev').disabled = tourIndex === 0;
+  $('tourNext').textContent = tourIndex === TOUR_STEPS.length - 1 ? 'Готово' : 'Далее';
+}
+
+async function openTour() {
+  tourIndex = 0;
+  $('tourOverlay').classList.remove('hidden');
+  $('tourOverlay').setAttribute('aria-hidden', 'false');
+  renderTourStep();
+}
+
+async function closeTour(markSeen = true) {
+  clearTourTarget();
+  $('tourOverlay').classList.add('hidden');
+  $('tourOverlay').setAttribute('aria-hidden', 'true');
+  if (markSeen) await chrome.storage.local.set({ [TOUR_STORAGE_KEY]: true });
+}
+
+$('showTour').onclick = () => openTour();
+$('tourSkip').onclick = () => closeTour(true);
+$('tourPrev').onclick = () => {
+  if (tourIndex > 0) {
+    tourIndex--;
+    renderTourStep();
+  }
+};
+$('tourNext').onclick = () => {
+  if (tourIndex >= TOUR_STEPS.length - 1) {
+    closeTour(true);
+    return;
+  }
+  tourIndex++;
+  renderTourStep();
+};
+
+$('copyContact').onclick = async () => {
+  const email = 'nekurismarieykjuri@gmail.com';
+  try {
+    await navigator.clipboard.writeText(email);
+    $('contactCopied').textContent = 'Почта скопирована';
+    setTimeout(() => { $('contactCopied').textContent = ''; }, 1200);
+  } catch (_) {
+    setStatus('Не удалось скопировать почту. Адрес: ' + email, true);
+  }
+};
+
 async function refreshUpdateNotice() {
   const notice = $('updateNotice');
   if (!notice) return;
@@ -1312,6 +1420,11 @@ $('reloadExtension').addEventListener('click', () => {
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
+
+    const introState = await chrome.storage.local.get(TOUR_STORAGE_KEY);
+    if (!introState[TOUR_STORAGE_KEY]) {
+      setTimeout(() => openTour(), 180);
+    }
   } catch (error) {
     setStatus(error.message || String(error), true);
   }
