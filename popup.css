@@ -508,3 +508,168 @@ main { padding:12px; }
 .technical-panel .run-log { padding:8px 0; border:0; background:transparent; }
 .technical-panel .history-panel { border:0; border-radius:0; background:transparent; }
 .note { margin:10px 2px 0; font-size:10px; line-height:1.4; color:var(--muted); }
+
+
+/* 0.3.44 popup hierarchy and explicit gradient themes */
+:root,
+:root[data-palette="cobalt"],
+:root[data-palette="sky"],
+:root[data-palette="violet"],
+:root[data-palette="rose"],
+:root[data-palette="amber"],
+:root[data-palette="forest"],
+:root[data-palette="graphite"],
+:root[data-palette="midnight"] {
+  --bg-gradient:var(--bg);
+}
+:root[data-palette="gradient-ocean"] {
+  --bg:#eef7ff;
+  --panel:#ffffff;
+  --text:#13283f;
+  --muted:#60758c;
+  --accent:#2476d8;
+  --accent-2:#5756d8;
+  --soft:#e7f1ff;
+  --border:#c7d9ee;
+  --bg-gradient:linear-gradient(145deg,#e8f8ff 0%,#edf0ff 48%,#f5eaff 100%);
+}
+:root[data-palette="gradient-sunset"] {
+  --bg:#fff2ed;
+  --panel:#fffdfc;
+  --text:#4a2930;
+  --muted:#8a6670;
+  --accent:#d65d72;
+  --accent-2:#d58a45;
+  --soft:#ffe9e5;
+  --border:#edcbd0;
+  --bg-gradient:linear-gradient(145deg,#fff1df 0%,#ffe8ed 48%,#f1e8ff 100%);
+}
+:root[data-palette="gradient-mint"] {
+  --bg:#eefbf6;
+  --panel:#fcfffd;
+  --text:#173b35;
+  --muted:#628079;
+  --accent:#258a73;
+  --accent-2:#3a78a8;
+  --soft:#e2f6ef;
+  --border:#c4e1d8;
+  --bg-gradient:linear-gradient(145deg,#e9fff4 0%,#e7f8f5 50%,#e9f3ff 100%);
+}
+:root[data-palette="gradient-violet"] {
+  --bg:#f7f1ff;
+  --panel:#fffefe;
+  --text:#37254d;
+  --muted:#786b8d;
+  --accent:#7b58d4;
+  --accent-2:#c45d9d;
+  --soft:#f0e7ff;
+  --border:#d9cbed;
+  --bg-gradient:linear-gradient(145deg,#f1e8ff 0%,#f8eaff 46%,#ffeaf2 100%);
+}
+body { background:var(--bg-gradient,var(--bg)); }
+
+.update-notice {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin:0 0 7px;
+  padding:8px 10px;
+  border:1px solid color-mix(in srgb,var(--accent) 38%,var(--border));
+  border-radius:11px;
+  background:color-mix(in srgb,var(--accent) 8%,var(--panel));
+  font-size:11px;
+}
+.update-notice a {
+  flex:0 0 auto;
+  color:var(--accent);
+  font-weight:750;
+  text-decoration:none;
+}
+.field-label-with-info { display:flex !important; align-items:center; gap:5px; }
+.info-dot {
+  appearance:none;
+  width:17px;
+  height:17px;
+  margin:0;
+  padding:0;
+  border:1px solid var(--border);
+  border-radius:50%;
+  background:var(--panel);
+  color:var(--accent);
+  font-size:10px;
+  font-weight:800;
+  line-height:1;
+}
+.info-popover {
+  position:relative;
+  margin-top:6px;
+  padding:8px 9px;
+  border:1px solid var(--border);
+  border-radius:9px;
+  background:var(--panel);
+  color:var(--text);
+  font-size:10.5px;
+  line-height:1.4;
+  box-shadow:0 6px 18px rgba(0,0,0,.05);
+}
+.saved-run-row {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:8px;
+  margin-top:9px;
+  padding-top:8px;
+  border-top:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+}
+.saved-run-details { min-width:0; flex:1; }
+.saved-run-details > summary {
+  cursor:pointer;
+  list-style:none;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:650;
+}
+.saved-run-details > summary::-webkit-details-marker { display:none; }
+.saved-run-body { padding-top:7px; }
+.saved-run-body strong {
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:11px;
+}
+.text-danger {
+  width:auto;
+  margin:0;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--danger);
+  font-size:11px;
+  font-weight:700;
+}
+.text-danger:hover:not(:disabled) {
+  border:0;
+  background:transparent;
+  text-decoration:underline;
+}
+.panel-body { padding:0 10px 10px; }
+.action-panel > summary { font-weight:700; }
+.archive-link-actions {
+  display:flex;
+  align-items:center;
+  gap:5px;
+  flex:0 0 auto;
+}
+.archive-link-actions .archive-link-open {
+  width:auto;
+  margin:0;
+}
+.manual-recovery { margin-bottom:9px; }
+.manual-recovery > summary {
+  cursor:pointer;
+  color:var(--muted);
+  font-size:10.5px;
+}
+.technical-reset { margin-top:8px; }
