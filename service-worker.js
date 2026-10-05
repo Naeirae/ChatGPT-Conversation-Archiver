@@ -107,7 +107,15 @@ async function listLinkedArchives() {
     }
 
     const linked = await getLinkedDoc(archive.sourceUrl);
-    const destination = await getArchiveDestination(archive.id);
+    let destination = await getArchiveDestination(archive.id);
+    if (!destination && linked?.url) {
+      destination = await setArchiveDestination(archive.id, {
+        saved: true,
+        url: linked.url,
+        kind: 'google-doc',
+        label: 'Google Docs'
+      });
+    }
     rows.push({
       id: archive.id,
       title: archive.title || 'Архив ChatGPT',
