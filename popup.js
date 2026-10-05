@@ -1316,29 +1316,29 @@ $('resetInterfaceAppearance').onclick = async () => {
 const TOUR_STORAGE_KEY = 'archiverIntroSeen';
 const TOUR_STEPS = [
   {
-    selector: '[data-tour="capture"]',
-    title: 'Соберите чат',
-    text: 'Выберите фоновую или текущую вкладку и нажмите «Собрать чат». Фоновый режим оставляет исходный чат свободным.'
+    selector: '#captureTarget',
+    title: 'Выберите, где собирать',
+    text: 'Фоновый режим собирает чат в отдельной рабочей вкладке и оставляет исходный диалог свободным. Текущая вкладка — резервный вариант.'
   },
   {
-    selector: '#captureControls',
-    title: 'Пауза не теряет место',
-    text: 'Во время сбора можно поставить проход на паузу. При продолжении Архиватор сначала проверит сохранённый контекст и не пойдёт дальше наугад.'
+    selector: '#capture',
+    title: 'Запустите сбор',
+    text: 'Нажмите «Собрать чат». Архиватор зафиксирует конец переписки, дойдёт до начала и соберёт сообщения в хронологическом порядке.'
   },
   {
-    selector: '[data-tour="unfinished"]',
-    title: 'Незавершённый сбор можно продолжить',
-    text: 'Если проход оборвётся после сохранения части сообщений, здесь появятся действия «Продолжить», «Просмотреть» и «Удалить».'
+    selector: '',
+    title: 'Оборванный проход не пропадает',
+    text: 'Если сбор прервётся после сохранения части сообщений, появится незавершённый проход. Его можно продолжить, просмотреть, скопировать или удалить.'
   },
   {
-    selector: '[data-tour="library"]',
-    title: 'Готовые чаты лежат в библиотеке',
-    text: 'Из сохранённого архива можно продолжить исходный чат, открыть связанный Google Doc или сохранить архив в Google Docs.'
+    selector: '#savedArchivesPanel',
+    title: 'Готовые чаты остаются в библиотеке',
+    text: 'Сохранённый архив можно продолжить, скопировать, перенести в Google Docs или разметить по вкладкам и темам.'
   },
   {
-    selector: '[data-tour="accessibility"]',
+    selector: '.accessibility-options > summary',
     title: 'Подписи можно настроить',
-    text: 'Здесь можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
+    text: 'В специальных возможностях можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
   },
   {
     selector: '.settings-menu',
@@ -1363,13 +1363,14 @@ function renderTourStep() {
   if (!overlay || !step) return;
 
   clearTourTarget();
-  const target = document.querySelector(step.selector);
-  if (target) {
-    if (target.classList.contains('hidden')) target.classList.remove('tour-target');
-    else {
-      target.classList.add('tour-target');
-      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
+  overlay.classList.remove('tour-card-top');
+  const target = step.selector ? document.querySelector(step.selector) : null;
+  if (target && !target.classList.contains('hidden')) {
+    target.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    target.classList.add('tour-target');
+    const rect = target.getBoundingClientRect();
+    const targetCenter = rect.top + rect.height / 2;
+    if (targetCenter > window.innerHeight / 2) overlay.classList.add('tour-card-top');
   }
 
   $('tourStep').textContent = (tourIndex + 1) + ' из ' + TOUR_STEPS.length;
