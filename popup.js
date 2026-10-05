@@ -285,6 +285,28 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(resume);
 
+    const copyButton = document.createElement('button');
+    copyButton.className = 'archive-link-open';
+    copyButton.type = 'button';
+    copyButton.textContent = 'Скопировать';
+    copyButton.disabled = busy;
+    copyButton.onclick = async () => {
+      copyButton.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_COPY_ARCHIVE',
+          archiveId: item.id
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать архив.');
+        setStatus('Архив скопирован: ' + (result.count || 0) + ' сообщений.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        copyButton.disabled = false;
+      }
+    };
+    actions.appendChild(copyButton);
+
     if (item.docUrl) {
       const open = document.createElement('a');
       open.className = 'archive-link-open';
