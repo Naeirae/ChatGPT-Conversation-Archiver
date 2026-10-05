@@ -84,7 +84,9 @@ async function load() {
     state?.job?.status === 'error' &&
     state?.job?.recoveryAvailable
   );
-  $('resume').classList.toggle('hidden', !isActiveRecovery);
+  const canResume = Boolean(pass.captureBoundary?.kind && pass.captureBoundary?.key && pass.sourceUrl);
+  $('resume').classList.toggle('hidden', !canResume);
+  $('resume').textContent = isActiveRecovery ? 'Продолжить в сохранённой вкладке' : 'Продолжить';
   $('openCapture').classList.toggle('hidden', !isActiveRecovery);
 
   const compared = await chrome.runtime.sendMessage({
@@ -152,7 +154,18 @@ $('openCapture').onclick = async () => {
 };
 
 $('resume').onclick = async () => {
-  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
+  const passId = passIdFromUrl();
+  const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
+  const isActiveRecovery = Boolean(
+    state?.unfinishedPass?.id === passId &&
+    state?.job?.status === 'error' &&
+    state?.job?.recoveryAvailable
+  );
+  const result = await chrome.runtime.sendMessage(
+    isActiveRecovery
+      ? { type: 'ARCHIVER_RESUME_FAILED_CAPTURE' }
+      : { type: 'ARCHIVER_RESUME_UNFINISHED_PASS', passId, captureTarget: 'copy' }
+  );
   if (!result?.ok) {
     alert(result?.error || 'Не удалось продолжить незавершённый проход.');
     return;
