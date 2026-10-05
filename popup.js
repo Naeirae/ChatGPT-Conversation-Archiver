@@ -1095,6 +1095,13 @@ $('deleteArchive').onclick = async () => {
   }
 };
 
+$('viewDraft').onclick = async () => {
+  const passId = (state?.unfinishedPass || state?.draft)?.id;
+  if (!passId) return;
+  const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(passId));
+  await chrome.tabs.create({ url });
+};
+
 $('copyDraft').onclick = async () => {
   $('copyDraft').disabled = true;
   try {
