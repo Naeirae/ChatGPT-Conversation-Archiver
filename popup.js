@@ -1187,7 +1187,7 @@ $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
   setStatus('Открываю Google Docs и вставляю переписку…');
   try {
-    const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC');
+    const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
     const imagePart = (result.imageInsertedCount || result.imageFailedCount)
       ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
       : '';
@@ -1203,7 +1203,7 @@ $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
   setStatus('Проверяю, что уже вставлено в этот Google Doc…');
   try {
-    const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC');
+    const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC', { archiveId: state?.archive?.id || '' });
     if (result.noChanges) {
       setStatus('В этом Google Doc уже есть все сообщения из локального архива.');
     } else if (result.exportMode === 'delta') {
