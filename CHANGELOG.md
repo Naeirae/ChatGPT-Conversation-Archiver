@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.49
+
+- move the walkthrough card into a dedicated side rail so the main 430 px interface remains visible;
+- remove the walkthrough dimming layer and keep only the highlighted control outline;
+- collapse Help/Settings before the walkthrough starts and stop reopening their popovers during walkthrough steps;
+- highlight the Help and Settings buttons themselves instead of controls inside covering popovers;
+- manifest -> 0.3.49.
+
 ## 0.3.48
 
 - persist an unfinished-pass checkpoint while the chronological walk is running, including the source chat URL and fixed snapshot boundary;
