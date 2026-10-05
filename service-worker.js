@@ -75,18 +75,40 @@ async function listLinkedArchives() {
     const archive = await getArchive(archiveId);
     if (!archive?.sourceUrl) continue;
     const linked = await getLinkedDoc(archive.sourceUrl);
-    if (!linked?.url) continue;
     rows.push({
       id: archive.id,
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       capturedAt: archive.capturedAt || '',
-      docUrl: linked.url,
-      updatedAt: linked.updatedAt || archive.capturedAt || ''
+      sourceUrl: archive.sourceUrl,
+      docUrl: linked?.url || '',
+      updatedAt: linked?.updatedAt || archive.capturedAt || ''
     });
   }
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
+}
+
+async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
+  const archive = await getArchive(archiveId);
+  if (!archive?.messages?.length || !archive?.sourceUrl) {
+    throw new Error('Сохранённый архив не найден.');
+  }
+  if (!isConversationUrl(archive.sourceUrl)) {
+    throw new Error('У архива нет рабочей ссылки на исходный чат.');
+  }
+
+  const sourceTab = await chrome.tabs.create({ url: archive.sourceUrl, active: true });
+  if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
+
+  await waitForChatTabComplete(sourceTab.id);
+  await waitForChatDomReady(sourceTab.id, 45000);
+
+  return await startCapture({
+    mode: 'continue',
+    existingArchive: archive,
+    captureTarget
+  });
 }
 
 function makeCaptureError(code, message) {
@@ -2813,6 +2835,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           docUrl: message.docUrl || '',
           captureTarget: message.captureTarget || 'copy'
         });
+      case 'ARCHIVER_CONTINUE_SAVED_ARCHIVE':
+        return await continueSavedArchive(
+          message.archiveId || '',
+          message.captureTarget || 'copy'
+        );
       case 'ARCHIVER_COMPARE_CURRENT':
         return await startCapture({
           mode: 'compare',
