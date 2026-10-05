@@ -6,7 +6,7 @@ Chrome extension for archiving complete ChatGPT conversations — including rich
 
 > Work in progress. Source is publicly visible for transparency and update delivery, but this is not open-source software. See `LICENSE`.
 
-Project docs: [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
+Project docs: [User help](HELP.md) · [Architecture](ARCHITECTURE.md) · [Development and verification](DEVELOPMENT.md) · [Security](SECURITY.md) · [Privacy](PRIVACY.md)
 
 ## Goal
 
@@ -217,7 +217,7 @@ The MVP stores the captured conversation locally in the browser extension profil
 
 ## License
 
-This repository uses a proprietary source-available license. Public visibility does not grant permission to run, copy, modify, redistribute, sell, or incorporate the code into another product. GitHub's own Terms of Service still allow the platform-level viewing and forking rights that come with a public repository. Authorized users may receive separate end-user or commercial rights. See [`LICENSE`](LICENSE).
+ChatGPT Conversation Archiver uses one product-wide proprietary source-available license across its repositories, builds and update channels. Public visibility does not grant a general right to install, run, copy, modify, redistribute, sell, or reuse the code. Use is allowed only for a valid license holder or someone expressly authorized by the copyright holder. GitHub's own platform rights for public repositories still apply. See [`LICENSE`](LICENSE).
 
 ## Быстрое обновление локальной копии
 
