@@ -179,12 +179,16 @@ try {
       popupHtml.includes('\\n\\n    <section')) {
     fail('popup.html: compact settings/archive/draft structure regression');
   }
-  if (!popupHtml.includes('id="compareArchive"') ||
-      !popupHtml.includes('id="continue"') ||
+  if (!popupHtml.includes('id="continue"') ||
       !popupHtml.includes('id="savedArchivesList"') ||
       !popupHtml.includes('id="captureInfoToggle"') ||
-      !popupHtml.includes('id="updateNotice"')) {
-    fail('popup.html: compact capture/archive/update controls are incomplete');
+      !popupHtml.includes('id="updateNotice"') ||
+      !popupHtml.includes('id="showTour"') ||
+      !popupHtml.includes('id="copyContact"') ||
+      !popupHtml.includes('id="archiveDocStatus"') ||
+      !popupHtml.includes('id="localVersion"') ||
+      !popupHtml.includes('href="help.html"')) {
+    fail('popup.html: compact capture/archive/help/update controls are incomplete');
   }
   if (!popupJs.includes('function applyInterfaceAppearance') ||
       !popupJs.includes('function normalizeInterfaceAppearance')) {
@@ -244,7 +248,7 @@ try {
 
 try {
   const packageSource = await readFile('scripts/package.mjs', 'utf8');
-  for (const requiredFile of ['updater.html', 'updater.css', 'updater.js']) {
+  for (const requiredFile of ['updater.html', 'updater.css', 'updater.js', 'help.html', 'help.css']) {
     if (!packageSource.includes("'" + requiredFile + "'")) {
       fail('scripts/package.mjs: missing packaged updater file ' + requiredFile);
     }
