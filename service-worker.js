@@ -43,7 +43,7 @@ const SETTINGS_KEY = 'archiverSettings';
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
   const result = await chrome.storage.local.get(SETTINGS_KEY);
-  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}) };
+  return { ...DEFAULT_SETTINGS, ...(result[SETTINGS_KEY] || {}), includeReasoning: false };
 }
 
 const archiveStore = createArchiveStore(chrome.storage.local);
@@ -285,7 +285,7 @@ async function resumeCapture() {
     status: 'running',
     pauseReason: '',
     phase: resumePhase,
-    message: 'Сбор продолжен.'
+    message: 'Место остановки найдено. Сбор продолжен.'
   }, {
     level: 'info',
     code: 'RUN_RESUMED_BY_USER',
