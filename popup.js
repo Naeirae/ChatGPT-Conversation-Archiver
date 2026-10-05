@@ -67,8 +67,8 @@ function renderCaptureProgress(job, running) {
   $('capturePhase').textContent = PHASE_LABELS[job?.phase] || 'Сбор переписки';
   const parts = [];
   if (job?.navigationHighWater && job?.phase === 'walk') {
-    parts.push('минимум найдено: ' + Number(job.navigationHighWater || 0));
-    parts.push('хронологически: ' + Number(job.chronologicalCount ?? job.count ?? 0));
+    parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
+    parts.push('собрано по порядку: ' + Number(job.chronologicalCount ?? job.count ?? 0));
   } else {
     parts.push((job?.count || 0) + ' сообщений');
   }
@@ -405,7 +405,7 @@ function renderSavedArchives(items = []) {
     const plan = document.createElement('button');
     plan.className = 'archive-link-more';
     plan.type = 'button';
-    plan.textContent = 'Разметить';
+    plan.textContent = 'Разбить по темам';
     plan.disabled = busy;
     plan.onclick = async () => {
       const url = chrome.runtime.getURL('planner.html?archiveId=' + encodeURIComponent(item.id));
@@ -1465,13 +1465,13 @@ const TOUR_STEPS = [
   },
   {
     selector: '#savedArchivesPanel > summary',
-    title: 'Готовые чаты остаются в библиотеке',
-    text: 'Из сохранённого архива можно продолжить исходный чат, скопировать переписку, сохранить её в Google Docs или разметить по темам.'
+    title: 'Готовые чаты — в одном списке',
+    text: 'Здесь можно продолжить чат, скопировать его, сохранить в Google Docs или разбить по темам.'
   },
   {
     selector: '.accessibility-options > summary',
-    title: 'Подписи можно настроить',
-    text: 'В специальных возможностях можно изменить подписи пользователя и ChatGPT и выровнять пользовательские реплики справа.'
+    title: 'Настройте подписи',
+    text: 'Здесь можно изменить имена пользователя и ChatGPT в сохранённом тексте и выровнять реплики пользователя справа.'
   },
   {
     openDetails: '.settings-menu',
