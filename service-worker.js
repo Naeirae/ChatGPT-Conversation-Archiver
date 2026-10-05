@@ -63,6 +63,8 @@ const {
   indexArchive,
   getLinkedDoc,
   setLinkedDoc,
+  getArchiveDestination,
+  setArchiveDestination,
   getDocExport,
   recordDocExport
 } = archiveStore;
@@ -105,14 +107,17 @@ async function listLinkedArchives() {
     }
 
     const linked = await getLinkedDoc(archive.sourceUrl);
+    const destination = await getArchiveDestination(archive.id);
     rows.push({
       id: archive.id,
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
+      imageCount: archive.imageCount || 0,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
       docUrl: linked?.url || '',
-      updatedAt: linked?.updatedAt || archive.capturedAt || ''
+      destination,
+      updatedAt: destination?.updatedAt || linked?.updatedAt || archive.capturedAt || ''
     });
   }
 
@@ -122,6 +127,31 @@ async function listLinkedArchives() {
 
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
+}
+
+async function setArchiveSavedDestination(archiveId = '', { saved = true, url = '', label = '' } = {}) {
+  const archive = await getArchive(archiveId);
+  if (!archive?.id) throw new Error('Сохранённый чат не найден.');
+
+  const normalizedUrl = String(url || '').trim();
+  if (normalizedUrl) {
+    let parsed;
+    try { parsed = new URL(normalizedUrl); } catch (_) {
+      throw new Error('Проверьте ссылку: она должна начинаться с http:// или https://.');
+    }
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      throw new Error('Проверьте ссылку: она должна начинаться с http:// или https://.');
+    }
+  }
+
+  const destination = await setArchiveDestination(archive.id, saved ? {
+    saved: true,
+    url: normalizedUrl,
+    kind: 'manual',
+    label: String(label || '').trim()
+  } : null);
+
+  return { ok: true, archiveId: archive.id, destination };
 }
 
 async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
@@ -3047,6 +3077,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
+      case 'ARCHIVER_SET_ARCHIVE_DESTINATION':
+        return await setArchiveSavedDestination(
+          message.archiveId || '',
+          {
+            saved: message.saved !== false,
+            url: message.url || '',
+            label: message.label || ''
+          }
+        );
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
