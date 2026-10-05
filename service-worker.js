@@ -682,6 +682,8 @@ async function startCapture({
   mode = 'full',
   docUrl = '',
   existingArchive: providedArchive = null,
+  existingDraft: providedDraft = null,
+  fixedCaptureBoundary = null,
   resumeTailSignatures = [],
   captureTarget = 'copy'
 } = {}) {
@@ -702,6 +704,7 @@ async function startCapture({
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
   let existingArchive = providedArchive;
+  const existingDraft = providedDraft;
 
   if ((mode === 'continue' || mode === 'sync' || mode === 'compare' || mode === 'images') && !existingArchive) {
     existingArchive = await getArchiveForUrl(inspection.href);
@@ -709,6 +712,12 @@ async function startCapture({
 
   if ((mode === 'continue' || mode === 'compare' || mode === 'images') && !existingArchive?.messages?.length) {
     throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по Google Doc.');
+  }
+  if (mode === 'resume-draft' && !existingDraft?.messages?.length) {
+    throw new Error('Сохранённый незавершённый проход не найден.');
+  }
+  if (mode === 'resume-draft' && (!fixedCaptureBoundary?.kind || !fixedCaptureBoundary?.key)) {
+    throw new Error('У незавершённого прохода нет сохранённой нижней метки. Без неё продолжить проход безопасно нельзя.');
   }
 
   const requestedDocUrl = normalizeGoogleDocUrl(docUrl);
@@ -758,7 +767,9 @@ async function startCapture({
           ? 'продолжение'
           : mode === 'images'
             ? 'добор изображений'
-            : 'полный сбор';
+            : mode === 'resume-draft'
+              ? 'продолжение незавершённого прохода'
+              : 'полный сбор';
     const targetLabel = captureTarget === 'current' ? 'текущая вкладка' : 'рабочая копия';
 
     await setJob({
@@ -772,6 +783,10 @@ async function startCapture({
       captureMode: mode,
       captureTarget,
       baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
+      recoveryDraftId: mode === 'resume-draft' ? (existingDraft?.id || '') : '',
+      draftId: mode === 'resume-draft' ? (existingDraft?.id || '') : '',
+      draftCount: mode === 'resume-draft' ? (existingDraft?.messages?.length || 0) : 0,
+      captureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null,
       pendingDocUrl,
       pendingDocMode,
       message: mode === 'full'
@@ -782,9 +797,13 @@ async function startCapture({
           ? (captureTarget === 'current'
               ? 'Текущая вкладка готова; добираю изображения по всей переписке…'
               : 'Рабочая копия загружена; добираю изображения по всей переписке…')
-          : (captureTarget === 'current'
-              ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
-              : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
+          : mode === 'resume-draft'
+            ? (captureTarget === 'current'
+                ? 'Текущая вкладка готова; ищу место остановки незавершённого прохода…'
+                : 'Рабочая копия загружена; ищу место остановки незавершённого прохода…')
+            : (captureTarget === 'current'
+                ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
+                : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
       count: 0,
       addedCount: 0,
       imageCount: 0,
@@ -809,17 +828,26 @@ async function startCapture({
     });
 
     const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
-    const resumeAnchorId = (mode === 'sync' || mode === 'images') ? '' : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
-    const resumeAnchorSignature = mode === 'sync'
-      ? (resumeTailSignatures[resumeTailSignatures.length - 1] || '')
-      : (lastExistingMessage ? messageSignature(lastExistingMessage.role, lastExistingMessage.text) : '');
+    const lastDraftMessage = existingDraft?.messages?.[existingDraft.messages.length - 1] || null;
+    const resumeAnchorId = mode === 'resume-draft'
+      ? (lastDraftMessage?.id || '')
+      : (mode === 'sync' || mode === 'images')
+        ? ''
+        : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
+    const resumeAnchorSignature = mode === 'resume-draft'
+      ? (lastDraftMessage ? messageSignature(lastDraftMessage.role, lastDraftMessage.text) : '')
+      : mode === 'sync'
+        ? (resumeTailSignatures[resumeTailSignatures.length - 1] || '')
+        : (lastExistingMessage ? messageSignature(lastExistingMessage.role, lastExistingMessage.text) : '');
 
     await ensureChatGptContentScript(captureTab.id, jobId, {
       mode,
       resumeAnchorId,
       resumeAnchorSignature,
       resumeTailSignatures,
-      existingArchiveId: existingArchive?.id || ''
+      existingArchiveId: existingArchive?.id || '',
+      existingDraftId: existingDraft?.id || '',
+      fixedCaptureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null
     });
 
     if (captureTarget === 'copy') {
@@ -1107,6 +1135,35 @@ async function resumeFailedCaptureFromWorkingTab() {
   });
 
   return { ok: true, job: next };
+}
+
+async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
+  const draft = await getDraft(passId);
+  if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  if (!isConversationUrl(draft.sourceUrl || '')) {
+    throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
+  }
+  const boundary = draft.captureBoundary || null;
+  if (!boundary?.kind || !boundary?.key) {
+    throw new Error('У этого незавершённого прохода нет нижней метки. Без неё безопасно продолжить сбор нельзя.');
+  }
+
+  const active = await getActiveTab();
+  const activeMatches = Boolean(active?.id && conversationKey(active.url || '') === conversationKey(draft.sourceUrl || ''));
+
+  if (!activeMatches) {
+    const sourceTab = await chrome.tabs.create({ url: draft.sourceUrl, active: true });
+    if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
+    await waitForChatTabComplete(sourceTab.id, 45000);
+    await waitForChatDomReady(sourceTab.id, 45000);
+  }
+
+  return startCapture({
+    mode: 'resume-draft',
+    existingDraft: draft,
+    fixedCaptureBoundary: boundary,
+    captureTarget
+  });
 }
 
 async function deleteDraftAndRecoveryTab(draftId = '') {
@@ -2980,6 +3037,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await focusRecoverableCaptureTab();
       case 'ARCHIVER_RESUME_FAILED_CAPTURE':
         return await resumeFailedCaptureFromWorkingTab();
+      case 'ARCHIVER_RESUME_UNFINISHED_PASS':
+        return await resumeSavedUnfinishedPass(
+          message.passId || message.draftId || '',
+          message.captureTarget || 'copy'
+        );
       case 'ARCHIVER_DELETE_DRAFT':
       case 'ARCHIVER_DELETE_UNFINISHED_PASS':
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
