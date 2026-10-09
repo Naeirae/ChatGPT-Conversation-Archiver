@@ -2485,7 +2485,7 @@
 
       const allImages = messages.flatMap(item => item.images || []);
       const conversation = {
-        title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
+        title: (mode === 'fragment' ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
         sourceUrl: location.href,
         capturedAt: new Date().toISOString(),
         messages,
