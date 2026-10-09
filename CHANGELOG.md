@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.58
+
+- Label active fragment jobs as fragment capture in the main card, phase progress, and technical run log instead of displaying full-chat wording.
+- Validate that at least one marker is set before opening a capture tab; reject empty fragment selection immediately.
+- Disable competing fragment actions while any capture is underway.
+- The bounded-navigation change from 0.3.57 remains in place; live browser validation of long virtualized chats is still required.
+
 ## 0.3.57
 
 - Fragment capture now stops upward navigation at the marked start rather than automatically going to the conversation beginning;
