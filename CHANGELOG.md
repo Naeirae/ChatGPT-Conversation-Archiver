@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.52
+
+- add inline start/end markers beside messages in the ChatGPT conversation; markers persist per conversation and do not require manual message counting;
+- allow start-only, end-only and bounded fragments, with both selected messages included;
+- capture a fragment into a separate local archive; leave the last full archive and its continuation index unchanged;
+- show fragment archives in the archive list, support rich clipboard copy and export into a fresh Google Doc without linking it as the full-chat continuation document;
+- for now, collection still traverses the conversation before selecting the verified segment; direct bounded scrolling and live Chrome verification remain outstanding.
+
+
 ## 0.3.51
 
 - add a fragment selection panel for existing local chat archives; choose inclusive start/end message numbers or leave either boundary open;
