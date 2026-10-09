@@ -2097,6 +2097,8 @@
   async function captureConversation(jobId, options = {}) {
     if (state.running) return;
     state.running = true;
+    // Remove our marker controls before any message signatures or text are read.
+    document.querySelectorAll('.archiver-fragment-buttons').forEach(node => node.remove());
     state.jobId = jobId;
     state.cancel = false;
     state.paused = false;
