@@ -200,9 +200,23 @@ function compareVersions(left = '', right = '') {
 async function checkForUpdate() {
   const localVersion = chrome.runtime.getManifest().version || '0.0.0';
   try {
-    const response = await fetch(REMOTE_MANIFEST_URL, { cache: 'no-store' });
-    if (!response.ok) throw new Error('GitHub ответил ' + response.status + '.');
-    const remote = await response.json();
+    let remote;
+    let firstError = '';
+    try {
+      const response = await fetch(REMOTE_MANIFEST_URL + '?check=' + Date.now(), { cache: 'no-store' });
+      if (!response.ok) throw new Error('Raw GitHub: HTTP ' + response.status);
+      remote = await response.json();
+    } catch (error) {
+      firstError = error?.message || String(error);
+      // raw.githubusercontent.com is occasionally unavailable even while the
+      // GitHub API is reachable. Use its independently hosted contents endpoint.
+      const fallbackUrl = 'https://api.github.com/repos/Naeirae/ChatGPT-Conversation-Archiver/contents/manifest.json?ref=main';
+      const response = await fetch(fallbackUrl, { cache: 'no-store', headers: { Accept: 'application/vnd.github+json' } });
+      if (!response.ok) throw new Error(firstError + '; GitHub API: HTTP ' + response.status);
+      const payload = await response.json();
+      if (!payload.content || payload.encoding !== 'base64') throw new Error('GitHub API вернул manifest.json без содержимого.');
+      remote = JSON.parse(atob(payload.content.replace(/\\s/g, '')));
+    }
     const remoteVersion = String(remote?.version || '');
     const available = Boolean(remoteVersion && compareVersions(remoteVersion, localVersion) > 0);
 
