@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.57
+
+- Fragment capture now stops upward navigation at the marked start rather than automatically going to the conversation beginning;
+- when an end marker is set, the chronological walk stops at that message; omitted boundaries still mean beginning/end of chat;
+- full-chat capture is unchanged; testing on live long virtualized conversations is still necessary.
+
 ## 0.3.56
 
 - show inline fragment boundary controls only after clicking “Отметить фрагмент” in the popup;
