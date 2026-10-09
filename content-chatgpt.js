@@ -2322,8 +2322,11 @@
       }
 
       if (mode === 'fragment') {
-        const startAt = selectedFragment.start ? capturedMessages.findIndex(item => anchorMatches(item, selectedFragment.start)) : 0;
-        const endAt = selectedFragment.end ? capturedMessages.findIndex(item => anchorMatches(item, selectedFragment.end)) : capturedMessages.length - 1;
+        const startMatches = selectedFragment.start ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.start) ? [i] : []) : [0];
+        const endMatches = selectedFragment.end ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.end) ? [i] : []) : [capturedMessages.length - 1];
+        if (startMatches.length !== 1 || endMatches.length !== 1) throw new Error('Невозможно однозначно определить отмеченные реплики.');
+        const startAt = startMatches[0];
+        const endAt = endMatches[0];
         if (startAt < 0 || endAt < 0 || startAt > endAt) throw new Error('Границы фрагмента не найдены или идут в обратном порядке.');
         capturedMessages = capturedMessages.slice(startAt, endAt + 1);
       }
@@ -2636,9 +2639,11 @@
     return role && (id || signature) ? { id, signature, role } : null;
   }
   function anchorMatches(message, anchor) {
-    return Boolean(anchor && message &&
-      (anchor.id && message.id === anchor.id ||
-       anchor.signature && messageTextSignature(message) === anchor.signature));
+    if (!anchor || !message) return false;
+    if (anchor.id && message.id === anchor.id) return true;
+    // A changed stable ID must not silently degrade into an ambiguous text match.
+    if (anchor.id) return false;
+    return Boolean(anchor.signature && messageTextSignature(message) === anchor.signature);
   }
   async function loadFragmentMarkers() {
     const record = await chrome.storage.local.get(fragmentStorageKey());
