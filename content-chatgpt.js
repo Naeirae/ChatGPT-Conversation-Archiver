@@ -2609,6 +2609,74 @@
     }
   }
 
+
+  // Personal fragment markers are anchored to the actual message, never its viewport index.
+  const FRAGMENT_KEY_PREFIX = 'archiverFragmentMarkers:';
+  const fragmentStorageKey = () => FRAGMENT_KEY_PREFIX + location.origin + location.pathname;
+  let fragmentMarkers = {};
+  function fragmentAnchor(turn) {
+    if (!turn) return null;
+    const role = roleOf(turn);
+    const signature = turnTextSignature(turn);
+    const id = turnStableKey(turn);
+    return role && (id || signature) ? { id, signature, role } : null;
+  }
+  function anchorMatches(message, anchor) {
+    return Boolean(anchor && message &&
+      (anchor.id && message.id === anchor.id ||
+       anchor.signature && messageTextSignature(message) === anchor.signature));
+  }
+  async function loadFragmentMarkers() {
+    const record = await chrome.storage.local.get(fragmentStorageKey());
+    fragmentMarkers = record[fragmentStorageKey()] || {};
+    renderFragmentMarkers();
+  }
+  function renderFragmentMarkers() {
+    if (state.running) return;
+    for (const turn of orderedTurns()) {
+      if (turn.querySelector(':scope > .archiver-fragment-buttons')) continue;
+      const marker = fragmentAnchor(turn);
+      if (!marker) continue;
+      const host = document.createElement('div');
+      host.className = 'archiver-fragment-buttons';
+      host.setAttribute('data-archiver-ui', 'true');
+      host.style.cssText = 'display:flex;gap:4px;justify-content:flex-end;margin:3px 0;opacity:.85;position:relative;z-index:10';
+      for (const [kind, caption] of [['start','Начать фрагмент здесь'], ['end','Закончить фрагмент здесь']]) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = kind === 'start' ? '⟦ Начало' : 'Конец ⟧';
+        btn.title = caption;
+        btn.setAttribute('aria-label', caption);
+        btn.style.cssText = 'font:12px system-ui;padding:3px 7px;border:1px solid #888;border-radius:6px;background:#f5f5f5;color:#222;cursor:pointer';
+        const chosen = fragmentMarkers[kind];
+        if (chosen && (chosen.id && chosen.id === marker.id || chosen.signature === marker.signature)) {
+          btn.style.background = '#bce9d0';
+          btn.setAttribute('aria-pressed','true');
+        }
+        btn.addEventListener('click', async event => {
+          event.preventDefault();event.stopPropagation();
+          const same = fragmentMarkers[kind] &&
+            (fragmentMarkers[kind].id && fragmentMarkers[kind].id === marker.id ||
+             fragmentMarkers[kind].signature === marker.signature);
+          if (same) delete fragmentMarkers[kind];
+          else fragmentMarkers[kind] = marker;
+          await chrome.storage.local.set({ [fragmentStorageKey()]: fragmentMarkers });
+          document.querySelectorAll('.archiver-fragment-buttons').forEach(node => node.remove());
+          renderFragmentMarkers();
+        });
+        host.appendChild(btn);
+      }
+      turn.appendChild(host);
+    }
+  }
+  let fragmentRenderPending = false;
+  new MutationObserver(() => {
+    if (fragmentRenderPending || state.running) return;
+    fragmentRenderPending = true;
+    setTimeout(() => { fragmentRenderPending = false; renderFragmentMarkers(); }, 350);
+  }).observe(document.documentElement, {subtree:true,childList:true});
+  loadFragmentMarkers().catch(() => {});
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message && message.type === 'ARCHIVER_PING') {
       sendResponse({ ok: true, version: EXTENSION_VERSION });
