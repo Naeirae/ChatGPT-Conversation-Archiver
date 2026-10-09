@@ -64,7 +64,16 @@ function renderCaptureProgress(job, running) {
   box.classList.toggle('hidden', !running);
   if (!running) return;
 
-  $('capturePhase').textContent = PHASE_LABELS[job?.phase] || 'Сбор переписки';
+  const isFragment = job?.captureMode === 'fragment';
+  const fragmentPhaseLabels = {
+    top: 'Фрагмент · Ищу отмеченное начало',
+    walk: 'Фрагмент · Собираю до отмеченного конца',
+    finalizing: 'Фрагмент · Сохраняю выбранные сообщения',
+    paused: 'Сбор фрагмента приостановлен'
+  };
+  $('capturePhase').textContent = isFragment
+    ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
+    : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
   if (job?.navigationHighWater && job?.phase === 'walk') {
     parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
@@ -96,7 +105,9 @@ function renderRunLog(job) {
 
   const meta = [];
   meta.push(
-    job.captureMode === 'compare'
+    job.captureMode === 'fragment'
+      ? 'сбор выбранного фрагмента'
+      : job.captureMode === 'compare'
       ? 'сверка с локальным архивом'
       : job.captureMode === 'sync'
         ? 'восстановление по Google Doc'
@@ -799,9 +810,14 @@ function render(data) {
   $('unfinishedPassesPanel')?.classList.toggle('hidden', !hasUnfinished);
   $('unfinishedPassesPanel')?.classList.toggle('has-items', hasUnfinished);
 
+  const isFragmentRun = job?.captureMode === 'fragment' && running;
+  const captureHeading = document.querySelector('.capture-card .section-heading strong');
+  if (captureHeading) captureHeading.textContent = isFragmentRun ? 'Собирается фрагмент' : 'Собрать чат целиком';
+  $('captureFragment').disabled = Boolean(running);
+  $('markFragment').disabled = Boolean(running);
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
-    ? (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…')
+    ? (isFragmentRun ? 'Собирается выбранный фрагмент…' : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
     : 'Собрать чат';
   $('continue').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
