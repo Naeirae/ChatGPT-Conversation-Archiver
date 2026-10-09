@@ -102,12 +102,12 @@ async function listLinkedArchives() {
     seen.add(archive.id);
 
     const key = conversationKey(archive.sourceUrl || '');
-    if (key && repairedIndex[key] !== archive.id) {
+    if (!archive.isFragment && key && repairedIndex[key] !== archive.id) {
       repairedIndex[key] = archive.id;
       indexChanged = true;
     }
 
-    const linked = await getLinkedDoc(archive.sourceUrl);
+    const linked = archive.isFragment ? null : await getLinkedDoc(archive.sourceUrl);
     let destination = await getArchiveDestination(archive.id);
     if (!destination && linked?.url) {
       destination = await setArchiveDestination(archive.id, {
@@ -119,6 +119,7 @@ async function listLinkedArchives() {
     }
     rows.push({
       id: archive.id,
+      isFragment: Boolean(archive.isFragment),
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       imageCount: archive.imageCount || 0,
@@ -2596,9 +2597,11 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
   const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
+  if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый Google Doc.');
   if (!activeDoc) {
     const autoParts = planGoogleDocParts(conversation.messages || [], []);
     if (autoParts.length > 1) {
+      if (conversation.isFragment) throw new Error('Этот фрагмент превышает лимит одного Google Doc. Скопируйте его или разбейте на части.');
       return exportTabbedConversation('', conversation.id);
     }
   }
@@ -2667,7 +2670,9 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     { includeHeader, appendToEnd }
   );
   const finalTab = pasted.tab;
-  const linkedDoc = await recordDocExport(conversation, finalTab.url);
+  const linkedDoc = conversation.isFragment
+    ? await setArchiveDestination(conversation.id, { saved: true, url: finalTab.url, kind: 'google-doc', label: 'Google Docs' })
+    : await recordDocExport(conversation, finalTab.url);
 
   return {
     docUrl: finalTab.url,
