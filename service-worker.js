@@ -798,7 +798,7 @@ async function startCapture({
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
-    const modeLabel = mode === 'compare'
+    const modeLabel = mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'compare'
       ? 'сверка с локальным архивом'
       : mode === 'sync'
         ? 'восстановление по Google Doc'
@@ -1308,7 +1308,7 @@ async function handleCaptureComplete(message) {
     return finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, 'Архив не найден после завершения сбора.');
   }
 
-  if (message.mode !== 'compare') {
+  if (message.mode !== 'compare' && message.mode !== 'fragment') {
     await indexArchive(archive);
   }
   const completedDraftIds = new Set([
@@ -2990,6 +2990,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case 'ARCHIVER_CHECK_UPDATE':
         return await checkForUpdate();
+      case 'ARCHIVER_CAPTURE_FRAGMENT':
+        return await startCapture({ mode: 'fragment', captureTarget: message.captureTarget || 'copy' });
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
@@ -3168,6 +3170,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
         return { ok: true };
       }
+      case 'ARCHIVER_GET_FRAGMENT': {
+        const record = await chrome.storage.local.get('fragmentLatestId');
+        const fragment = await getArchive(record.fragmentLatestId || '');
+        return { ok: true, fragment: fragment ? summarize(fragment) : null };
+      }
       case 'ARCHIVER_COPY_FRAGMENT': {
         const archive = message.archiveId
           ? await getArchive(message.archiveId)
@@ -3189,6 +3196,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const settings = await getSettings();
         await writeClipboard(buildRichHtml(fragment, settings), buildPlainText(fragment, settings));
         return { ok: true, count: fragment.messages.length, start, end, total };
+      }
+      case 'ARCHIVER_COPY_SELECTED_FRAGMENT': {
+        const record = await chrome.storage.local.get('fragmentLatestId');
+        const fragment = await getArchive(record.fragmentLatestId || '');
+        if (!fragment?.isFragment) throw new Error('Сначала соберите фрагмент.');
+        const settings = await getSettings();
+        await writeClipboard(buildRichHtml(fragment, settings), buildPlainText(fragment, settings));
+        return { ok: true, count: fragment.messages.length };
       }
       case 'ARCHIVER_COPY_ARCHIVE': {
         const archive = await getArchive(message.archiveId) || await getLastArchive();
