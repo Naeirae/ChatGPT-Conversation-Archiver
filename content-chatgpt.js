@@ -1686,7 +1686,7 @@
     return null;
   }
 
-  async function reachTop(map, order, settings, navigationWindows = null) {
+  async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null) {
     let confirmedIdle = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -1706,6 +1706,8 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
+      if (startAnchor && orderedTurns().some(turn =>
+        anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
       const turnsBefore = orderedTurns();
       const signature = visibleTurnSignature();
@@ -1727,6 +1729,8 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
+      if (startAnchor && orderedTurns().some(turn =>
+        anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
       let nextSignature = visibleTurnSignature();
       let turnsAfter = orderedTurns();
@@ -1787,6 +1791,7 @@
       // Five separately confirmed idle probes means roughly tens of seconds
       // with repeated upward wheel input and no newly loaded older turns.
       if (confirmedIdle >= 5) {
+        if (startAnchor) throw new Error('Не удалось найти отмеченное начало фрагмента: достигнуто начало переписки.');
         await progress('Этап 1/3: начало подтверждено повторными проверками · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
@@ -1797,7 +1802,7 @@
       }
     }
 
-    throw new Error('Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
+    throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
   async function reachTopWithoutCapture(existingCount = 0) {
@@ -2152,7 +2157,10 @@
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
       }
 
-      const boundary = fixedCaptureBoundary || makeCaptureBoundary(turns);
+      const markerEnd = mode === 'fragment' && selectedFragment.end
+        ? { kind: selectedFragment.end.id ? 'stable' : 'signature', key: selectedFragment.end.id || selectedFragment.end.signature, role: selectedFragment.end.role || '' }
+        : null;
+      const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
 
       await progress(
@@ -2176,7 +2184,7 @@
 
       if (mode === 'full' || mode === 'images' || mode === 'fragment') {
         const navigationWindows = [];
-        await reachTop(map, order, settings, navigationWindows);
+        await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null);
         navigationMessages = [...map.values()];
         navigationSequence = buildNavigationSequence(navigationWindows);
       } else if (mode === 'retry-walk') {
