@@ -288,7 +288,9 @@ function renderSavedArchives(items = []) {
 
     const title = document.createElement('div');
     title.className = 'archive-link-title';
-    title.textContent = item.title || 'Чат ChatGPT';
+    title.textContent = item.isFragment && !/^Фрагмент\b/i.test(item.title || '')
+      ? 'Фрагмент — ' + (item.title || 'Чат ChatGPT')
+      : (item.title || 'Чат ChatGPT');
 
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
