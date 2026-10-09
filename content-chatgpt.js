@@ -2629,6 +2629,14 @@
 
   // Personal fragment markers are anchored to the actual message, never its viewport index.
   const FRAGMENT_KEY_PREFIX = 'archiverFragmentMarkers:';
+  const fragmentStyle = document.createElement('style');
+  fragmentStyle.textContent = `
+    .archiver-fragment-buttons { opacity: 0 !important; pointer-events: none; transition: opacity .15s; }
+    :hover > .archiver-fragment-buttons,
+    .archiver-fragment-buttons[data-selected="true"],
+    .archiver-fragment-buttons:focus-within { opacity: 1 !important; pointer-events: auto; }
+  `;
+  document.documentElement.appendChild(fragmentStyle);
   const fragmentStorageKey = () => FRAGMENT_KEY_PREFIX + location.origin + location.pathname;
   let fragmentMarkers = {};
   function fragmentAnchor(turn) {
@@ -2658,8 +2666,9 @@
       if (!marker) continue;
       const host = document.createElement('div');
       host.className = 'archiver-fragment-buttons';
+      if (['start', 'end'].some(kind => fragmentMarkers[kind] && (fragmentMarkers[kind].id === marker.id || fragmentMarkers[kind].signature === marker.signature))) host.dataset.selected = 'true';
       host.setAttribute('data-archiver-ui', 'true');
-      host.style.cssText = 'display:flex;gap:4px;justify-content:flex-end;margin:3px 0;opacity:.85;position:relative;z-index:10';
+      host.style.cssText = 'display:flex;gap:4px;justify-content:flex-end;margin:3px 0;position:relative;z-index:10';
       for (const [kind, caption] of [['start','Начать фрагмент здесь'], ['end','Закончить фрагмент здесь']]) {
         const btn = document.createElement('button');
         btn.type = 'button';
