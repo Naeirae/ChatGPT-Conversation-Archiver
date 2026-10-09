@@ -962,6 +962,36 @@ $('capture').onclick = async () => {
   }
 };
 
+$('markFragment').onclick = async () => {
+  const button = $('markFragment');
+  button.disabled = true;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(tab.url || '')) {
+      throw new Error('Откройте переписку ChatGPT в активной вкладке.');
+    }
+    let current;
+    try {
+      current = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_GET_FRAGMENT_SELECTION' });
+    } catch (_) {
+      throw new Error('Обновите страницу ChatGPT после обновления Архиватора.');
+    }
+    const next = await chrome.tabs.sendMessage(tab.id, {
+      type: 'ARCHIVER_SET_FRAGMENT_SELECTION',
+      enabled: !current?.enabled
+    });
+    if (!next?.ok) throw new Error('Не удалось переключить режим разметки.');
+    button.textContent = next.enabled ? 'Закончить разметку' : 'Отметить фрагмент';
+    $('fragmentHint').textContent = next.enabled
+      ? 'Режим разметки включён. Наведите курсор на нужную реплику.'
+      : 'Режим разметки выключен. Выбранные границы сохранены.';
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    button.disabled = false;
+  }
+};
+
 $('captureFragment').onclick = async () => {
   $('captureFragment').disabled = true;
   try {
