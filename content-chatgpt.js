@@ -2710,6 +2710,7 @@
 
   // A fixed overlay lives outside React-controlled turn DOM. This works even when
   // ChatGPT virtualizes or replaces individual message nodes.
+  let fragmentSelectionActive = false;
   const fragmentOverlay = document.createElement('div');
   fragmentOverlay.id = 'archiver-fragment-overlay';
   fragmentOverlay.setAttribute('data-archiver-ui', 'true');
@@ -2717,7 +2718,7 @@
   const overlayButtons = {};
   let hoveredFragmentTurn = null;
   function updateFragmentOverlay() {
-    if (state.running || !hoveredFragmentTurn?.isConnected) {
+    if (!fragmentSelectionActive || state.running || !hoveredFragmentTurn?.isConnected) {
       fragmentOverlay.style.display = 'none';
       return;
     }
@@ -2765,13 +2766,25 @@
   selectionStatus.textContent = 'Архиватор';
   selectionStatus.style.cssText = 'font-size:10px;opacity:.75';
   fragmentOverlay.appendChild(selectionStatus);
+  const closeSelection = document.createElement('button');
+  closeSelection.type = 'button';
+  closeSelection.textContent = '×';
+  closeSelection.title = 'Закончить разметку';
+  closeSelection.setAttribute('aria-label', 'Закончить разметку');
+  closeSelection.style.cssText = 'border:0;border-radius:5px;background:#435766;color:white;padding:5px 9px;cursor:pointer';
+  closeSelection.addEventListener('click', () => {
+    fragmentSelectionActive = false;
+    hoveredFragmentTurn = null;
+    fragmentOverlay.style.display = 'none';
+  });
+  fragmentOverlay.appendChild(closeSelection);
   function attachFragmentOverlay() {
     if (!document.body) return;
     if (!fragmentOverlay.isConnected) document.body.appendChild(fragmentOverlay);
   }
   attachFragmentOverlay();
   document.addEventListener('pointermove', event => {
-    if (state.running || fragmentOverlay.contains(event.target)) return;
+    if (!fragmentSelectionActive || state.running || fragmentOverlay.contains(event.target)) return;
     const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
     const shell = target?.closest?.(TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR);
     if (shell && roleOf(shell)) hoveredFragmentTurn = shell;
@@ -2783,6 +2796,17 @@
 
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message && message.type === 'ARCHIVER_SET_FRAGMENT_SELECTION') {
+      fragmentSelectionActive = Boolean(message.enabled);
+      hoveredFragmentTurn = null;
+      fragmentOverlay.style.display = 'none';
+      sendResponse({ ok: true, enabled: fragmentSelectionActive });
+      return false;
+    }
+    if (message && message.type === 'ARCHIVER_GET_FRAGMENT_SELECTION') {
+      sendResponse({ ok: true, enabled: fragmentSelectionActive });
+      return false;
+    }
     if (message && message.type === 'ARCHIVER_PING') {
       sendResponse({ ok: true, version: EXTENSION_VERSION });
       return false;
