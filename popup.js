@@ -960,18 +960,31 @@ $('capture').onclick = async () => {
   }
 };
 
-$('copyFragment').onclick = async () => {
-  const start = $('fragmentStart').value.trim();
-  const end = $('fragmentEnd').value.trim();
-  $('copyFragment').disabled = true;
+$('captureFragment').onclick = async () => {
+  $('captureFragment').disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_COPY_FRAGMENT', start, end
+      type: 'ARCHIVER_CAPTURE_FRAGMENT',
+      captureTarget: $('captureTarget').value
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать фрагмент.');
-    $('fragmentHint').textContent = 'Скопировано реплик: ' + result.count +
-      ' (№ ' + result.start + '–' + result.end + ' из ' + result.total + ').';
-    setStatus('Фрагмент скопирован. Можно вставить в документ.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор фрагмента.');
+    $('fragmentHint').textContent = 'Сбор отмеченного фрагмента запущен.';
+    startPolling();
+  } catch (error) {
+    $('fragmentHint').textContent = error.message || String(error);
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('captureFragment').disabled = false;
+  }
+};
+
+$('copyFragment').onclick = async () => {
+  $('copyFragment').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_COPY_SELECTED_FRAGMENT' });
+    if (!result?.ok) throw new Error(result?.error || 'Фрагмент пока не собран.');
+    $('fragmentHint').textContent = 'Скопировано реплик: ' + result.count + '.';
+    setStatus('Фрагмент скопирован с форматированием.');
   } catch (error) {
     $('fragmentHint').textContent = error.message || String(error);
     setStatus(error.message || String(error), true);
