@@ -960,6 +960,26 @@ $('capture').onclick = async () => {
   }
 };
 
+$('copyFragment').onclick = async () => {
+  const start = $('fragmentStart').value.trim();
+  const end = $('fragmentEnd').value.trim();
+  $('copyFragment').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_COPY_FRAGMENT', start, end
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать фрагмент.');
+    $('fragmentHint').textContent = 'Скопировано реплик: ' + result.count +
+      ' (№ ' + result.start + '–' + result.end + ' из ' + result.total + ').';
+    setStatus('Фрагмент скопирован. Можно вставить в документ.');
+  } catch (error) {
+    $('fragmentHint').textContent = error.message || String(error);
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('copyFragment').disabled = false;
+  }
+};
+
 $('continue').onclick = async () => {
   $('continue').disabled = true;
   setStatus(
