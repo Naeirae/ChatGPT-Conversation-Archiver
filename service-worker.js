@@ -215,7 +215,7 @@ async function checkForUpdate() {
       if (!response.ok) throw new Error(firstError + '; GitHub API: HTTP ' + response.status);
       const payload = await response.json();
       if (!payload.content || payload.encoding !== 'base64') throw new Error('GitHub API вернул manifest.json без содержимого.');
-      remote = JSON.parse(atob(payload.content.replace(/\\s/g, '')));
+      remote = JSON.parse(atob(payload.content.replace(/\s/g, '')));
     }
     const remoteVersion = String(remote?.version || '');
     const available = Boolean(remoteVersion && compareVersions(remoteVersion, localVersion) > 0);
