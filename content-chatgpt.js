@@ -2102,7 +2102,7 @@
     state.paused = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -2124,6 +2124,8 @@
 
     try {
       const settings = await getSettings();
+      const selectedFragment = mode === 'fragment' ? (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] || {} : null;
+      if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
       await progress(
         mode === 'full'
           ? 'Этап 1/3: фиксирую конец снимка…'
@@ -2167,7 +2169,7 @@
 
       collect(map, order, settings, boundary);
 
-      if (mode === 'full' || mode === 'images') {
+      if (mode === 'full' || mode === 'images' || mode === 'fragment') {
         const navigationWindows = [];
         await reachTop(map, order, settings, navigationWindows);
         navigationMessages = [...map.values()];
@@ -2194,7 +2196,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images') {
+      if (mode === 'full' || mode === 'images' || mode === 'fragment') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -2239,7 +2241,7 @@
       }
       capturedMessages = bounded.messages;
 
-      if (mode === 'full' || mode === 'images') {
+      if (mode === 'full' || mode === 'images' || mode === 'fragment') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -2317,7 +2319,13 @@
         capturedMessages = capturedMessages.slice(anchorIndex + 1);
       }
 
-      if ((mode === 'full' || mode === 'images') && !capturedMessages.length) {
+      if (mode === 'fragment') {
+        const startAt = selectedFragment.start ? capturedMessages.findIndex(item => anchorMatches(item, selectedFragment.start)) : 0;
+        const endAt = selectedFragment.end ? capturedMessages.findIndex(item => anchorMatches(item, selectedFragment.end)) : capturedMessages.length - 1;
+        if (startAt < 0 || endAt < 0 || startAt > endAt) throw new Error('Границы фрагмента не найдены или идут в обратном порядке.');
+        capturedMessages = capturedMessages.slice(startAt, endAt + 1);
+      }
+      if ((mode === 'full' || mode === 'images' || mode === 'fragment') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -2449,7 +2457,7 @@
         return;
       }
 
-      const binaryTargetMessages = mode === 'full'
+      const binaryTargetMessages = (mode === 'full' || mode === 'fragment')
         ? messages
         : mode === 'images'
           ? messages.filter(message => recoveredImageRefs.some(ref =>
@@ -2471,6 +2479,8 @@
         lastImageBinaryReady: binaryStats.embedded,
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
+        isFragment: mode === 'fragment',
+        fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
         lastCaptureAddedCount: addedCount,
         lastImageRecoveredCount: recoveredImageRefs.length,
         lastRecoveredImageRefs: recoveredImageRefs,
@@ -2487,7 +2497,7 @@
       const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
       await chrome.storage.local.set({
         ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        lastArchiveId: archiveId,
+        ...(mode === 'fragment' ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId }),
         activeCaptureJob: Object.assign({}, currentJob, {
           jobId,
           status: 'done',
