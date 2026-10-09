@@ -2275,7 +2275,7 @@
           }
         );
 
-        if (mode === 'full') {
+        if (mode === 'full' || mode === 'fragment') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -2303,7 +2303,7 @@
         }
       }
 
-      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk') {
+      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment') {
         const anchorIndex = capturedMessages.findIndex(item =>
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
@@ -2388,7 +2388,7 @@
         messages = merged.messages;
         recoveredImageRefs = merged.recovered;
         addedCount = 0;
-      } else if (mode !== 'full' && existingArchiveId) {
+      } else if (mode !== 'full' && mode !== 'fragment' && existingArchiveId) {
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
         const existing = stored['archive:' + existingArchiveId];
         if (!existing?.messages) throw new Error('Локальный архив для продолжения недоступен.');
@@ -2501,7 +2501,9 @@
         activeCaptureJob: Object.assign({}, currentJob, {
           jobId,
           status: 'done',
-          message: mode === 'full'
+          message: mode === 'fragment'
+            ? 'Выбранный фрагмент собран.'
+            : mode === 'full'
             ? 'Переписка собрана.'
             : mode === 'images'
               ? ('Добор изображений завершён: +' + recoveredImageRefs.length + '.')
