@@ -282,6 +282,7 @@ function renderSavedArchives(items = []) {
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
     const parts = [];
+    if (item.isFragment) parts.push('Фрагмент переписки');
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
     if (item.capturedAt) {
       try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
@@ -325,6 +326,7 @@ function renderSavedArchives(items = []) {
     resume.type = 'button';
     resume.textContent = 'Продолжить';
     resume.disabled = busy;
+    resume.classList.toggle('hidden', Boolean(item.isFragment));
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus('Открываю чат и ищу место продолжения…');
@@ -366,10 +368,10 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(copyButton);
 
-    if (item.docUrl) {
+    if (item.docUrl || (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc')) {
       const open = document.createElement('a');
       open.className = 'archive-link-open';
-      open.href = item.docUrl;
+      open.href = item.docUrl || item.destination.url;
       open.target = '_blank';
       open.rel = 'noopener noreferrer';
       open.textContent = 'Google Doc ↗';
