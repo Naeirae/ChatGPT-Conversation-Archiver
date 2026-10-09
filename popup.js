@@ -1709,9 +1709,14 @@ async function refreshUpdateNotice() {
   if (!notice) return;
   const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_CHECK_UPDATE' }).catch(() => null);
   const available = Boolean(result?.ok && result.available);
-  notice.classList.toggle('hidden', !available);
+  const failed = !result?.ok;
+  notice.classList.toggle('hidden', !available && !failed);
   if (available) {
     $('updateNoticeText').textContent = 'Доступно обновление ' + result.remoteVersion;
+    $('updateNoticeAction').textContent = 'Обновить';
+  } else if (failed) {
+    $('updateNoticeText').textContent = 'Не удалось проверить обновление: ' + (result?.error || 'нет ответа от фонового процесса');
+    $('updateNoticeAction').textContent = 'Проверить вручную';
   }
 }
 
