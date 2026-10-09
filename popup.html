@@ -157,13 +157,10 @@
 
       <button id="capture" class="primary capture-primary">Собрать чат</button>
       <details id="fragmentPanel" class="accessibility-options">
-        <summary>Сохранить фрагмент чата</summary>
-        <p class="muted">После сбора выберите номера реплик. Пустое начало — от первой, пустой конец — до последней.</p>
-        <div class="capture-location">
-          <label class="field compact-field"><span>От реплики</span><input id="fragmentStart" type="number" min="1" step="1" placeholder="С начала"></label>
-          <label class="field compact-field"><span>До реплики</span><input id="fragmentEnd" type="number" min="1" step="1" placeholder="До конца"></label>
-        </div>
-        <button id="copyFragment" class="compact-button" type="button">Скопировать фрагмент</button>
+        <summary>Собрать фрагмент</summary>
+        <p class="muted">В открытом чате нажмите «⟦ Начало» и/или «Конец ⟧» возле нужных реплик. Можно отметить только одну границу.</p>
+        <button id="captureFragment" class="compact-button" type="button">Собрать отмеченный фрагмент</button>
+        <button id="copyFragment" class="compact-button" type="button">Скопировать последний фрагмент</button>
         <div id="fragmentHint" class="muted"></div>
       </details>
 
