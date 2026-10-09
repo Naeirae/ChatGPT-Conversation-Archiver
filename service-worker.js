@@ -757,6 +757,14 @@ async function startCapture({
   }
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
+  if (mode === 'fragment') {
+    const source = new URL(inspection.href);
+    const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
+    const markers = (await chrome.storage.local.get(markersKey))[markersKey] || {};
+    if (!markers.start && !markers.end) {
+      throw new Error('Сначала отметьте начало и/или конец фрагмента в переписке.');
+    }
+  }
   let existingArchive = providedArchive;
   const existingDraft = providedDraft;
 
@@ -843,7 +851,9 @@ async function startCapture({
       captureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null,
       pendingDocUrl,
       pendingDocMode,
-      message: mode === 'full'
+      message: mode === 'fragment'
+        ? 'Рабочая вкладка готова; ищу выбранную границу начала фрагмента…'
+        : mode === 'full'
         ? (captureTarget === 'current'
             ? 'Текущая вкладка готова; иду к началу…'
             : 'Рабочая копия загружена; иду к началу…')
