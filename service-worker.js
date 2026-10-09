@@ -3168,6 +3168,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
         return { ok: true };
       }
+      case 'ARCHIVER_COPY_FRAGMENT': {
+        const archive = message.archiveId
+          ? await getArchive(message.archiveId)
+          : await getArchiveForUrl((await getActiveTab())?.url || '') || await getLastArchive();
+        if (!archive?.messages?.length) throw new Error('Сначала нужно собрать и сохранить чат.');
+        const total = archive.messages.length;
+        const start = message.start === '' || message.start == null ? 1 : Number(message.start);
+        const end = message.end === '' || message.end == null ? total : Number(message.end);
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+            start < 1 || end > total || start > end) {
+          throw new Error('Укажите корректный диапазон от 1 до ' + total + '.');
+        }
+        const fragment = {
+          ...archive,
+          messages: archive.messages.slice(start - 1, end),
+          title: archive.title + ' — реплики ' + start + '–' + end,
+          captureMode: 'fragment'
+        };
+        const settings = await getSettings();
+        await writeClipboard(buildRichHtml(fragment, settings), buildPlainText(fragment, settings));
+        return { ok: true, count: fragment.messages.length, start, end, total };
+      }
       case 'ARCHIVER_COPY_ARCHIVE': {
         const archive = await getArchive(message.archiveId) || await getLastArchive();
         if (!archive) throw new Error('Нет завершенного архива для копирования.');
