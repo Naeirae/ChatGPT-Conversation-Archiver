@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.51
+
+- add a fragment selection panel for existing local chat archives; choose inclusive start/end message numbers or leave either boundary open;
+- copy only the selected messages with existing rich-text clipboard export, without altering the saved full archive or its continuation anchor;
+- this is the first stage of fragment support: direct partial collection and separately saved fragment archives are not yet implemented.
+
 ## 0.3.50
 
 - remove an implementation-note artifact from the walkthrough copy; keep the settings step focused on what the control does;
