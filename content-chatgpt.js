@@ -2658,9 +2658,10 @@
   async function loadFragmentMarkers() {
     const record = await chrome.storage.local.get(fragmentStorageKey());
     fragmentMarkers = record[fragmentStorageKey()] || {};
-    renderFragmentMarkers();
+    updateFragmentOverlay();
   }
   function renderFragmentMarkers() {
+    return; // Selector UI is owned by the fixed overlay below.
     if (state.running) return;
     for (const turn of orderedTurns()) {
       if (turn.querySelector(':scope > .archiver-fragment-buttons')) continue;
@@ -2706,6 +2707,80 @@
     setTimeout(() => { fragmentRenderPending = false; renderFragmentMarkers(); }, 350);
   }).observe(document.documentElement, {subtree:true,childList:true});
   loadFragmentMarkers().catch(() => {});
+
+  // A fixed overlay lives outside React-controlled turn DOM. This works even when
+  // ChatGPT virtualizes or replaces individual message nodes.
+  const fragmentOverlay = document.createElement('div');
+  fragmentOverlay.id = 'archiver-fragment-overlay';
+  fragmentOverlay.setAttribute('data-archiver-ui', 'true');
+  fragmentOverlay.style.cssText = 'position:fixed;z-index:2147483646;display:none;align-items:center;gap:5px;padding:5px;background:#182a36;color:white;border-radius:9px;box-shadow:0 3px 14px #0005;font:12px system-ui;pointer-events:auto';
+  const overlayButtons = {};
+  let hoveredFragmentTurn = null;
+  function updateFragmentOverlay() {
+    if (state.running || !hoveredFragmentTurn?.isConnected) {
+      fragmentOverlay.style.display = 'none';
+      return;
+    }
+    const rect = hoveredFragmentTurn.getBoundingClientRect();
+    if (rect.bottom < 0 || rect.top > window.innerHeight || rect.width < 10) {
+      fragmentOverlay.style.display = 'none';
+      return;
+    }
+    const anchor = fragmentAnchor(hoveredFragmentTurn);
+    if (!anchor) return;
+    for (const kind of ['start', 'end']) {
+      const selected = fragmentMarkers[kind];
+      overlayButtons[kind].style.background = selected &&
+        (selected.id && selected.id === anchor.id || !selected.id && selected.signature === anchor.signature)
+        ? '#a2e4bd' : '#fff';
+    }
+    fragmentOverlay.style.display = 'flex';
+    fragmentOverlay.style.top = Math.max(8, Math.min(window.innerHeight - 45, rect.top + 6)) + 'px';
+    fragmentOverlay.style.left = Math.max(8, Math.min(window.innerWidth - 240, rect.right - 228)) + 'px';
+  }
+  for (const [kind, label] of [['start', '⟦ Начало'], ['end', 'Конец ⟧']]) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = label;
+    button.title = kind === 'start' ? 'Начать фрагмент с этой реплики' : 'Закончить фрагмент на этой реплике';
+    button.style.cssText = 'font:12px system-ui;background:#fff;color:#222;border:0;border-radius:5px;padding:7px 9px;cursor:pointer';
+    button.addEventListener('click', async event => {
+      event.preventDefault();
+      event.stopPropagation();
+      const anchor = fragmentAnchor(hoveredFragmentTurn);
+      if (!anchor) return;
+      const old = fragmentMarkers[kind];
+      if (old && (old.id && old.id === anchor.id || !old.id && old.signature === anchor.signature)) {
+        delete fragmentMarkers[kind];
+      } else {
+        fragmentMarkers[kind] = anchor;
+      }
+      await chrome.storage.local.set({ [fragmentStorageKey()]: fragmentMarkers });
+      updateFragmentOverlay();
+    });
+    overlayButtons[kind] = button;
+    fragmentOverlay.appendChild(button);
+  }
+  const selectionStatus = document.createElement('span');
+  selectionStatus.textContent = 'Архиватор';
+  selectionStatus.style.cssText = 'font-size:10px;opacity:.75';
+  fragmentOverlay.appendChild(selectionStatus);
+  function attachFragmentOverlay() {
+    if (!document.body) return;
+    if (!fragmentOverlay.isConnected) document.body.appendChild(fragmentOverlay);
+  }
+  attachFragmentOverlay();
+  document.addEventListener('pointermove', event => {
+    if (state.running || fragmentOverlay.contains(event.target)) return;
+    const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
+    const shell = target?.closest?.(TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR);
+    if (shell && roleOf(shell)) hoveredFragmentTurn = shell;
+    else if (event.clientX < window.innerWidth - 250) hoveredFragmentTurn = null;
+    updateFragmentOverlay();
+  }, {passive:true});
+  document.addEventListener('scroll', updateFragmentOverlay, {passive:true,capture:true});
+  window.addEventListener('resize', updateFragmentOverlay, {passive:true});
+
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message && message.type === 'ARCHIVER_PING') {
