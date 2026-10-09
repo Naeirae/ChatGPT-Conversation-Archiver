@@ -395,7 +395,10 @@
   function turnMessageText(turn) {
     const role = roleOf(turn) || 'unknown';
     const root = contentRoot(turn, role);
-    return cleanMessageText(String(root?.innerText || root?.textContent || ''), role);
+    if (!root) return '';
+    const copy = root.cloneNode(true);
+    copy.querySelectorAll('.archiver-fragment-buttons,[data-archiver-ui="true"]').forEach(node => node.remove());
+    return cleanMessageText(String(copy.innerText || copy.textContent || ''), role);
   }
 
   function turnTextSignature(turn) {
@@ -2631,10 +2634,9 @@
   const FRAGMENT_KEY_PREFIX = 'archiverFragmentMarkers:';
   const fragmentStyle = document.createElement('style');
   fragmentStyle.textContent = `
-    .archiver-fragment-buttons { opacity: 0 !important; pointer-events: none; transition: opacity .15s; }
-    :hover > .archiver-fragment-buttons,
-    .archiver-fragment-buttons[data-selected="true"],
-    .archiver-fragment-buttons:focus-within { opacity: 1 !important; pointer-events: auto; }
+    .archiver-fragment-buttons { opacity: .92 !important; pointer-events: auto !important; transition: opacity .15s; }
+    .archiver-fragment-buttons:hover, .archiver-fragment-buttons:focus-within { opacity: 1 !important; }
+    .archiver-fragment-buttons button { pointer-events: auto !important; }
   `;
   document.documentElement.appendChild(fragmentStyle);
   const fragmentStorageKey = () => FRAGMENT_KEY_PREFIX + location.origin + location.pathname;
