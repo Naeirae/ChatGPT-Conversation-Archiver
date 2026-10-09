@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.56
+
+- show inline fragment boundary controls only after clicking “Отметить фрагмент” in the popup;
+- allow exiting marking mode without clearing the saved start/end anchors;
+- default to no fragment toolbar during ordinary conversation browsing.
+
 ## 0.3.52
 
 - add inline start/end markers beside messages in the ChatGPT conversation; markers persist per conversation and do not require manual message counting;
