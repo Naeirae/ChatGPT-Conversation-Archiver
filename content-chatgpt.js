@@ -2254,7 +2254,7 @@
       }
       capturedMessages = bounded.messages;
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
