@@ -58,6 +58,12 @@ try {
     fail('service-worker.js: missing compare-current route');
   }
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
+  if (/activeCaptureJob\s*:/.test(contentSource)) {
+    fail('content-chatgpt.js: capture page must never overwrite worker-owned activeCaptureJob');
+  }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_CHECKPOINT_SAVED'")) {
+    fail('service-worker.js: missing worker-owned checkpoint metadata handler');
+  }
   if (!contentSource.includes("'compare'") ||
       !contentSource.includes('Сверка завершена')) {
     fail('content-chatgpt.js: missing non-mutating compare mode');
