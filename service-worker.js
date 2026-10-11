@@ -3298,6 +3298,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+async function logTabListenerError(source, error) {
+  const message = String(error?.stack || error?.message || error);
+  console.error(source, error);
+  try {
+    const key = 'archiverWorkerErrors';
+    const rows = (await chrome.storage.local.get(key))[key] || [];
+    const next = Array.isArray(rows) ? rows.slice(-29) : [];
+    next.push({ at: Date.now(), source, message: message.slice(0, 3000) });
+    await chrome.storage.local.set({ [key]: next });
+  } catch (loggingError) {
+    console.error('Failed to save worker error', loggingError);
+  }
+}
+
 chrome.tabs.onRemoved.addListener(tabId => {
   (async () => {
   const job = await getJob();
@@ -3329,7 +3343,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
       Number(job.draftCount || 0)
     );
   }
-  })().catch(error => console.error('ARCHIVER_TAB_REMOVED_ERROR', error));
+  })().catch(error => logTabListenerError('tabs.onRemoved', error));
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -3367,7 +3381,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
         : 'Рабочая копия ушла со страницы ChatGPT. Можно повторить в обычном режиме.'
     );
   }
-  })().catch(error => console.error('ARCHIVER_TAB_UPDATED_ERROR', error));
+  })().catch(error => logTabListenerError('tabs.onUpdated', error));
 });
 
 
