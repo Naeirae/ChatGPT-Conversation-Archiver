@@ -1041,9 +1041,22 @@ async function getState() {
   return result;
 }
 
+let stateRefreshPending = false;
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => getState().catch(() => {}), 650);
+  // State includes full saved drafts/archives in the background worker.
+  // Never pile up overlapping heavyweight requests every 650 ms.
+  pollTimer = setInterval(async () => {
+    if (stateRefreshPending) return;
+    stateRefreshPending = true;
+    try {
+      await getState();
+    } catch (_) {
+      // A transient MV3 worker restart should not multiply polling requests.
+    } finally {
+      stateRefreshPending = false;
+    }
+  }, 5000);
 }
 
 async function exportToDoc(type, payload = {}) {
