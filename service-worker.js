@@ -3294,6 +3294,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическая прокрутка разрешена только вкладке текущего сбора.' };
         }
+        const liveTab = await chrome.tabs.get(job.captureTabId).catch(() => null);
+        const expected = conversationKey(job.sourceUrl || '');
+        const actual = conversationKey(liveTab?.url || '');
+        if (expected && actual !== expected) {
+          return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
+        }
         return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
@@ -3475,6 +3481,20 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     });
   }
 
+  // ChatGPT changes conversations using client-side routing without leaving
+  // chatgpt.com. Detect a changed conversation identity, not just the host.
+  const expectedConversation = conversationKey(job.sourceUrl || '');
+  const actualConversation = conversationKey(tab.url || changeInfo.url || '');
+  if (expectedConversation && actualConversation && actualConversation !== expectedConversation) {
+    await finishJobWithError(
+      job.jobId,
+      job.sourceTabId ?? job.tabId,
+      'Сбор остановлен: вкладка переключилась на другую переписку. Сохранённые контрольные точки не удалены.',
+      job.draftId || '',
+      Number(job.draftCount || 0)
+    );
+    return;
+  }
   if (changeInfo.status === 'loading' && !isChatGptUrl(tab.url || '')) {
     await finishJobWithError(
       job.jobId,
