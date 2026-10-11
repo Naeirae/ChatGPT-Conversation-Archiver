@@ -3298,7 +3298,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-chrome.tabs.onRemoved.addListener(async tabId => {
+chrome.tabs.onRemoved.addListener(tabId => {
+  (async () => {
   const job = await getJob();
   if (!job) return;
 
@@ -3328,9 +3329,11 @@ chrome.tabs.onRemoved.addListener(async tabId => {
       Number(job.draftCount || 0)
     );
   }
+  })().catch(error => console.error('ARCHIVER_TAB_REMOVED_ERROR', error));
 });
 
-chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  (async () => {
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
@@ -3364,6 +3367,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         : 'Рабочая копия ушла со страницы ChatGPT. Можно повторить в обычном режиме.'
     );
   }
+  })().catch(error => console.error('ARCHIVER_TAB_UPDATED_ERROR', error));
 });
 
 
