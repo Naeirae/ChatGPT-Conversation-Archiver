@@ -1379,6 +1379,39 @@ async function compareUnfinishedPass(passId = '') {
   };
 }
 
+function partialMessageKey(item) {
+  return item?.id ? 'id:' + item.id
+    : 'sig:' + messageSignature(item?.role || '', item?.text || '');
+}
+
+async function reconcilePartialArchive(draftId, completed) {
+  if (!draftId || !completed?.messages?.length) return { applied: false, reason: 'no-draft' };
+  const partialId = 'partial-' + draftId;
+  const partial = await getArchive(partialId);
+  if (!partial?.partial || !partial.messages?.length) return { applied: false, reason: 'no-partial' };
+
+  const finalIds = new Set(completed.messages.map(partialMessageKey));
+  const missing = partial.messages.filter(item => !finalIds.has(partialMessageKey(item)));
+  if (missing.length) {
+    return { applied: false, reason: 'unmatched', missingCount: missing.length, archiveId: partialId };
+  }
+
+  // Use the independently verified chronological capture as canonical content.
+  // Never infer completeness by concatenating unordered navigation windows.
+  const merged = {
+    ...completed,
+    id: partialId,
+    title: completed.title,
+    partial: false,
+    complete: true,
+    isFragment: Boolean(completed.isFragment),
+    partialSourceDraftId: draftId,
+    completedFromPartialAt: new Date().toISOString()
+  };
+  await putArchive(merged);
+  return { applied: true, archiveId: partialId, messageCount: merged.messages.length };
+}
+
 async function handleCaptureComplete(message) {
   const job = await getJob();
   if (!job || job.jobId !== message.jobId) return;
@@ -1388,7 +1421,16 @@ async function handleCaptureComplete(message) {
     return finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, 'Архив не найден после завершения сбора.');
   }
 
-  if (message.mode !== 'compare' && message.mode !== 'fragment') {
+  const partialSourceId = job.recoveryDraftId || job.draftId || '';
+  const partialMerge = message.mode === 'compare' || message.mode === 'images'
+    ? { applied: false, reason: 'noncapture' }
+    : await reconcilePartialArchive(partialSourceId, archive);
+  if (partialMerge.applied) {
+    if (!archive.isFragment) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: partialMerge.archiveId });
+      await indexArchive(await getArchive(partialMerge.archiveId));
+    }
+  } else if (message.mode !== 'compare' && message.mode !== 'fragment') {
     await indexArchive(archive);
   }
   const completedDraftIds = new Set([
@@ -1396,6 +1438,7 @@ async function handleCaptureComplete(message) {
     job.recoveryDraftId || ''
   ].filter(Boolean));
   for (const draftId of completedDraftIds) {
+    if (partialMerge.reason === 'unmatched' && draftId === partialSourceId) continue;
     await removeDraft(draftId).catch(() => {});
   }
 
