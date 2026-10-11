@@ -2846,7 +2846,8 @@
         existingDraftId: message.existingDraftId,
         fixedCaptureBoundary: message.fixedCaptureBoundary,
         resumeAnchorSignature: message.resumeAnchorSignature,
-        resumeTailSignatures: message.resumeTailSignatures
+        resumeTailSignatures: message.resumeTailSignatures,
+        resumeNavigation: Boolean(message.resumeNavigation)
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
