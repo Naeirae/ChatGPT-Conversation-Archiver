@@ -1212,6 +1212,32 @@ async function resumeFailedCaptureFromWorkingTab() {
   return { ok: true, job: next };
 }
 
+async function saveUnfinishedAsPartial(passId = '') {
+  const draft = await getDraft(passId);
+  if (!draft?.messages?.length) throw new Error('Незавершённый проход не найден.');
+  const id = 'partial-' + draft.id;
+  const existing = await getArchive(id);
+  if (existing?.id) return { ok: true, archiveId: id, messageCount: existing.messages.length, alreadySaved: true };
+  const messages = draft.messages;
+  const archive = {
+    ...draft,
+    id,
+    title: 'Частичный архив — ' + (draft.title || 'ChatGPT'),
+    capturedAt: new Date().toISOString(),
+    messages: messages.slice(),
+    messageCount: messages.length,
+    imageCount: messages.reduce((n, item) => n + (item.images?.length || 0), 0),
+    partial: true,
+    complete: false,
+    isFragment: true,
+    partialSourceDraftId: draft.id,
+    capturePhase: draft.capturePhase || 'top',
+    lastCaptureMode: 'partial-draft'
+  };
+  await putArchive(archive);
+  return { ok: true, archiveId: id, messageCount: messages.length };
+}
+
 async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
   const draft = await getDraft(passId);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
@@ -3159,6 +3185,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.passId || message.draftId || '',
           message.captureTarget || 'copy'
         );
+      case 'ARCHIVER_SAVE_UNFINISHED_PARTIAL':
+        return await saveUnfinishedAsPartial(message.passId || message.draftId || '');
       case 'ARCHIVER_DELETE_DRAFT':
       case 'ARCHIVER_DELETE_UNFINISHED_PASS':
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
