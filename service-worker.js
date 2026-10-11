@@ -3256,11 +3256,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             (job.captureTabId != null && sender?.tab?.id !== job.captureTabId)) {
           return { ok: false, error: 'Контрольная точка от устаревшего запуска.' };
         }
-        const draft = await getDraft(message.draftId || '');
-        if (!draft?.messages?.length) return { ok: false, error: 'Контрольная точка недоступна.' };
+        const draftId = String(message.draftId || '');
+        if (!draftId || (draftId !== job.draftId && draftId !== job.recoveryDraftId &&
+            draftId !== 'draft-' + job.jobId)) {
+          return { ok: false, error: 'Контрольная точка не принадлежит текущему запуску.' };
+        }
+        // The collector has already awaited the write. getBytesInUse checks
+        // existence without deserializing a multi-thousand-message draft.
+        const bytes = await chrome.storage.local.getBytesInUse('draft:' + draftId);
+        if (!bytes) return { ok: false, error: 'Контрольная точка недоступна.' };
         await setJob({
-          draftId: message.draftId,
-          draftCount: draft.messages.length
+          draftId,
+          draftCount: Math.max(Number(job.draftCount || 0), Number(message.draftCount || 0))
         });
         return { ok: true };
       }
