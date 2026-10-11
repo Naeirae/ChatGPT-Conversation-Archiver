@@ -2251,6 +2251,11 @@
         );
       }
 
+      // Persist the final upward snapshot before clearing navigation data.
+      // Regular checkpoints are throttled to avoid expensive full rewrites.
+      if (mode === 'full' || mode === 'fragment') {
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+      }
       map.clear();
       order.length = 0;
       chronologicalStarted = true;
