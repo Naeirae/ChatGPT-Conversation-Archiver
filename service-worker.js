@@ -1262,6 +1262,13 @@ async function saveUnfinishedAsPartial(passId = '') {
 }
 
 async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
+  // A resumable live tab is preferable to starting a new full capture.
+  const activeJob = await getJob();
+  if (activeJob?.status === 'error' && activeJob.recoveryAvailable &&
+      activeJob.captureTabId != null &&
+      (activeJob.draftId === passId || activeJob.recoveryDraftId === passId)) {
+    return resumeFailedCaptureFromWorkingTab();
+  }
   const draft = await getDraft(passId);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
   if (!isConversationUrl(draft.sourceUrl || '')) {
