@@ -3323,6 +3323,13 @@ async function logTabListenerError(source, error) {
   }
 }
 
+self.addEventListener('unhandledrejection', event => {
+  void logTabListenerError('worker.unhandledrejection', event.reason);
+});
+self.addEventListener('error', event => {
+  void logTabListenerError('worker.error', event.error || event.message || 'Unknown worker error');
+});
+
 chrome.tabs.onRemoved.addListener(tabId => {
   (async () => {
   const job = await getJob();
