@@ -1029,9 +1029,6 @@ async function cancelCapture() {
   ) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
-  if (job.sourceTabId != null) {
-    await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
-  }
   await cleanupTemporaryBaseline(job);
 
   const next = await appendRunLog({
@@ -1080,13 +1077,6 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     preservedCaptureTabId == null
   ) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
-  }
-  if (job.sourceTabId != null) {
-    const source = await chrome.tabs.get(job.sourceTabId).catch(() => null);
-    // Never steal focus back to a tab that the user navigated to a different chat.
-    if (source?.url && conversationKey(source.url) === conversationKey(job.sourceUrl || '')) {
-      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
-    }
   }
   await cleanupTemporaryBaseline(job);
 
@@ -1199,9 +1189,7 @@ async function resumeFailedCaptureFromWorkingTab() {
     throw error;
   }
 
-  if (failedJob.sourceTabId != null) {
-    await chrome.tabs.update(failedJob.sourceTabId, { active: true }).catch(() => {});
-  }
+
 
   const next = await appendRunLog({
     status: 'running',
@@ -1450,9 +1438,7 @@ async function handleCaptureComplete(message) {
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
-    if (job.sourceTabId != null) {
-      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
-    }
+
   }
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
