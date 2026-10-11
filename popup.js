@@ -305,6 +305,19 @@ function renderSavedArchives(items = []) {
   }
 
   const busy = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+  const normalizedTitle = value => String(value || '').replace(/^Фрагмент\s*[—–-]\s*/i, '').trim().toLocaleLowerCase('ru-RU');
+  const chatKey = url => {
+    try {
+      const parsed = new URL(url);
+      const match = parsed.pathname.match(/\/c\/([^/]+)/);
+      return match ? parsed.hostname + ':' + match[1] : '';
+    } catch (_) { return ''; }
+  };
+  const titleCounts = new Map();
+  for (const record of rows) {
+    const key = normalizedTitle(record.title);
+    titleCounts.set(key, (titleCounts.get(key) || 0) + 1);
+  }
 
   for (const item of rows) {
     const row = document.createElement('div');
@@ -326,6 +339,11 @@ function renderSavedArchives(items = []) {
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
     if (item.capturedAt) {
       try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
+    }
+    if ((titleCounts.get(normalizedTitle(item.title)) || 0) > 1) {
+      const sourceKey = chatKey(item.sourceUrl);
+      parts.push(sourceKey ? 'Чат ' + sourceKey.split(':').pop().slice(0, 8) : 'Отдельная запись ' + String(item.id || '').slice(-8));
+      parts.push('одноимённые записи: ' + titleCounts.get(normalizedTitle(item.title)));
     }
     meta.textContent = parts.join(' · ');
 
@@ -426,6 +444,21 @@ function renderSavedArchives(items = []) {
         exportButton.disabled = true;
         setStatus('Создаю Google Doc…');
         try {
+          const sameTitle = rows.filter(record => record.id !== item.id &&
+            normalizedTitle(record.title) === normalizedTitle(item.title));
+          if (sameTitle.length) {
+            const sameChat = sameTitle.filter(record => chatKey(record.sourceUrl) &&
+              chatKey(record.sourceUrl) === chatKey(item.sourceUrl));
+            const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
+              record.docUrl);
+            const explanation = existingDoc
+              ? 'Для этой переписки уже найден сохранённый Google Doc.'
+              : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
+            if (!confirm(explanation + '\n\nСоздать ещё один Google Doc? Нажмите «Отмена», чтобы избежать дубля.')) {
+              setStatus('Создание документа отменено. Сохранённые данные не изменены.');
+              return;
+            }
+          }
           const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
           setStatus('Сохранено в Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
           await getState();
