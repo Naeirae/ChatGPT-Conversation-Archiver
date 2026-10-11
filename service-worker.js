@@ -492,6 +492,14 @@ function formatRunLog(job) {
   return lines.join('\n');
 }
 
+async function formatDiagnosticLog() {
+  const job = await getJob();
+  const rows = (await chrome.storage.local.get('archiverWorkerErrors')).archiverWorkerErrors || [];
+  return formatRunLog(job) + '\n\n=== WORKER ERRORS ===\n' + (rows.length
+    ? rows.map(item => '[' + new Date(item.at).toISOString() + '] ' + item.source + '\n' + item.message).join('\n\n')
+    : 'Нет записанных ошибок фонового процесса.');
+}
+
 async function cleanupTemporaryBaseline(job) {
   if (!job?.baselineArchiveId) return;
   await removeArchive(job.baselineArchiveId).catch(() => {});
@@ -3267,7 +3275,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_COPY_RUN_LOG': {
         const job = await getJob();
-        const text = formatRunLog(job);
+        const text = await formatDiagnosticLog();
         await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
         return { ok: true };
       }
@@ -3294,7 +3302,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       default:
         return null;
     }
-  })().then(result => sendResponse(result)).catch(error => sendResponse({ ok: false, error: error?.message || String(error) }));
+  })().then(result => sendResponse(result)).catch(error => {
+    void logTabListenerError('runtime.onMessage:' + String(message?.type || 'unknown'), error);
+    sendResponse({ ok: false, error: error?.message || String(error) });
+  });
   return true;
 });
 
