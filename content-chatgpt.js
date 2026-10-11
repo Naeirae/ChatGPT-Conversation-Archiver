@@ -2002,6 +2002,17 @@
     if (!messages.length) return;
 
     const draftId = current.draftId || ('draft-' + jobId);
+    // A resumed navigation can start from a newly hydrated slice. Avoid
+    // replacing an older, richer checkpoint until the previous oldest
+    // anchor is again visible and captured.
+    if (current.recoveryDraftId && current.phase === 'top') {
+      const preserved = (await chrome.storage.local.get('draft:' + current.recoveryDraftId))['draft:' + current.recoveryDraftId];
+      if (preserved?.capturePhase === 'top' && preserved.messages?.length) {
+        const oldest = preserved.messages[preserved.messages.length - 1];
+        const overlap = messages.some(item => item.id && oldest?.id && item.id === oldest.id);
+        if (!overlap) return;
+      }
+    }
     const draft = {
       id: draftId,
       kind: 'capture-draft',
@@ -2191,7 +2202,12 @@
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
           const first = checkpoint?.messages?.[checkpoint.messages.length - 1];
           if (!first || checkpoint.capturePhase !== 'top') throw new Error('Контрольная точка прокрутки вверх отсутствует.');
+          // Searching for the persisted anchor must not overwrite the existing
+          // checkpoint. Keep the original saved draft untouched until the anchor
+          // has been reached and the resumed upward traversal can progress.
           await reachResumeAnchor(first.id || '', first.text ? messageTextSignature(first) : '', [], map, order, settings);
+          map.clear();
+          order.length = 0;
           // The second, chronological pass re-reads the whole selected range;
           // this search only restores the position of the uppermost saved turn.
         }
