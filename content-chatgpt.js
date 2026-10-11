@@ -1998,19 +1998,17 @@
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
 
-    const messages = order.map(id => map.get(id)).filter(Boolean);
+    let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
 
     const draftId = current.draftId || ('draft-' + jobId);
-    // A resumed navigation can start from a newly hydrated slice. Avoid
-    // replacing an older, richer checkpoint until the previous oldest
-    // anchor is again visible and captured.
+    // In the upward phase the next checkpoint is cumulative. The older saved
+    // slice is retained even when Chrome virtualizes it out of the DOM.
     if (current.recoveryDraftId && current.phase === 'top') {
       const preserved = (await chrome.storage.local.get('draft:' + current.recoveryDraftId))['draft:' + current.recoveryDraftId];
       if (preserved?.capturePhase === 'top' && preserved.messages?.length) {
-        const oldest = preserved.messages[preserved.messages.length - 1];
-        const overlap = messages.some(item => item.id && oldest?.id && item.id === oldest.id);
-        if (!overlap) return;
+        const known = new Set(preserved.messages.map(item => item.id).filter(Boolean));
+        messages = preserved.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
       }
     }
     const draft = {
