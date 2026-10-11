@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.60
+
+- Persist resumable drafts while navigating upward to find the top of a full chat or a selected fragment.
+- Resume an interrupted navigation phase by locating the oldest saved message and continuing upward before the chronological pass.
+- Preserve original capture mode and lower snapshot boundary when resuming upward navigation.
+- Detect runs whose worker progress has been stale for five minutes and expose their retained drafts instead of leaving indefinite running status.
+- Runtime testing of interruptions, virtualized turns, and failure handling remains necessary.
+
 ## 0.3.58
 
 - Label active fragment jobs as fragment capture in the main card, phase progress, and technical run log instead of displaying full-chat wording.
