@@ -2464,28 +2464,7 @@
 
       if (mode === 'compare') {
         const comparisonCount = previousCount + addedCount;
-        const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
-        const comparisonMessage = addedCount
-          ? ('Сверка завершена: +' + addedCount + ' новых сообщений относительно локального архива.')
-          : 'Сверка завершена: новых сообщений относительно локального архива нет.';
-
-        await chrome.storage.local.set({
-          activeCaptureJob: Object.assign({}, currentJob, {
-            jobId,
-            status: 'done',
-            phase: 'done',
-            captureMode: 'compare',
-            message: comparisonMessage,
-            count: comparisonCount,
-            addedCount,
-            reasoningMessageCount,
-            reasoningBlockCount,
-            archiveId: existingArchiveId,
-            finishedAt: Date.now(),
-            updatedAt: Date.now()
-          })
-        });
-
+        // Completion is confirmed by the background job controller.
         try {
           await chrome.runtime.sendMessage({
             type: 'ARCHIVER_CAPTURE_COMPLETE',
@@ -2536,32 +2515,10 @@
         captureBoundaryTrimmedNewerCount: bounded.trimmed || 0
       };
 
-      const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
+      // Store the finished archive independently of the job record.
       await chrome.storage.local.set({
         ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        ...(mode === 'fragment' ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId }),
-        activeCaptureJob: Object.assign({}, currentJob, {
-          jobId,
-          status: 'done',
-          message: mode === 'fragment'
-            ? 'Выбранный фрагмент собран.'
-            : mode === 'full'
-            ? 'Переписка собрана.'
-            : mode === 'images'
-              ? ('Добор изображений завершён: +' + recoveredImageRefs.length + '.')
-              : (mode === 'resume-draft' || mode === 'retry-walk')
-                ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений.')
-                : ('Архив продолжен: +' + addedCount + ' сообщений.'),
-          count: messages.length,
-          addedCount,
-          imageRecoveredCount: recoveredImageRefs.length,
-          imageCount: conversation.imageCount,
-          reasoningMessageCount,
-          reasoningBlockCount,
-          archiveId,
-          finishedAt: Date.now(),
-          updatedAt: Date.now()
-        })
+        ...(mode === 'fragment' ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId })
       });
 
       try {
@@ -2635,18 +2592,8 @@
         const saved = (await chrome.storage.local.get('draft:' + current.draftId))['draft:' + current.draftId];
         if (saved?.messages?.length) { draftId = current.draftId; draftCount = saved.messages.length; }
       }
-      await chrome.storage.local.set({
-        activeCaptureJob: Object.assign({}, current, {
-          jobId,
-          status,
-          message,
-          draftId,
-          draftCount,
-          finishedAt: Date.now(),
-          updatedAt: Date.now()
-        })
-      });
-
+      // Failure reporting is routed to the worker; a lost connection does
+      // not overwrite other jobs, and saved drafts remain on disk.
       try {
         await chrome.runtime.sendMessage({
           type: 'ARCHIVER_CAPTURE_FAILED',
