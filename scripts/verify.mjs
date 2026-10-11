@@ -65,7 +65,7 @@ try {
     fail('service-worker.js: missing worker-owned checkpoint metadata handler');
   }
   if (!contentSource.includes("'compare'") ||
-      !contentSource.includes('Сверка завершена')) {
+      !contentSource.includes("type: 'ARCHIVER_CAPTURE_COMPLETE'")) {
     fail('content-chatgpt.js: missing non-mutating compare mode');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
