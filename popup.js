@@ -185,7 +185,7 @@ function renderUnfinishedPasses(items = []) {
 
     const resume = document.createElement('button');
     resume.className = 'primary';
-    resume.textContent = 'Продолжить';
+    resume.textContent = 'Дособрать по сверке';
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus('Открываю исходный чат и ищу место остановки…');
@@ -201,6 +201,25 @@ function renderUnfinishedPasses(items = []) {
       } catch (error) {
         setStatus(error.message || String(error), true);
         resume.disabled = false;
+      }
+    };
+
+    const savePartial = document.createElement('button');
+    savePartial.textContent = 'Сохранить частичный архив';
+    savePartial.onclick = async () => {
+      savePartial.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_SAVE_UNFINISHED_PARTIAL',
+          passId: item.id
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить частичный архив.');
+        await getState();
+        setStatus('Частичный архив сохранён: ' + result.messageCount + ' сообщений. Исходный черновик сохранён.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        savePartial.disabled = false;
       }
     };
 
@@ -242,7 +261,7 @@ function renderUnfinishedPasses(items = []) {
       setStatus('Незавершённый проход удалён.');
     };
 
-    actions.append(resume, view, copy, remove);
+    actions.append(resume, savePartial, view, copy, remove);
     row.append(head, meta, actions);
     list.appendChild(row);
   }
