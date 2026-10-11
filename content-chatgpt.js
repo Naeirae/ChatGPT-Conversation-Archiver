@@ -1572,11 +1572,10 @@
   }
 
   async function updateJob(patch) {
-    const data = await chrome.storage.local.get('activeCaptureJob');
-    const current = data.activeCaptureJob || {};
-    const next = Object.assign({}, current, patch, { updatedAt: Date.now() });
-    await chrome.storage.local.set({ activeCaptureJob: next });
-    return next;
+    // Deliberately do not write activeCaptureJob from a page. The service
+    // worker owns the job lifecycle; a late page write can resurrect a
+    // completed/paused/failed job or overwrite a newer job's metadata.
+    return { ok: false, error: 'Фоновый процесс недоступен; контрольные точки сохраняются отдельно.' };
   }
 
   async function progress(message, count, extra) {
