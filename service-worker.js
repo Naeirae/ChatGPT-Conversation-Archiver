@@ -1215,6 +1215,22 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
     throw new Error('У этого незавершённого прохода нет нижней метки. Без неё безопасно продолжить сбор нельзя.');
   }
 
+  const existingJob = await getJob();
+  if (existingJob && ['starting', 'running', 'paused'].includes(existingJob.status)) {
+    const existingTab = existingJob.captureTabId != null
+      ? await chrome.tabs.get(existingJob.captureTabId).catch(() => null) : null;
+    if (existingTab?.id && isConversationUrl(existingTab.url || '') &&
+        Date.now() - Number(existingJob.updatedAt || existingJob.startedAt || Date.now()) < 300000) {
+      throw new Error('Предыдущий сбор ещё активен. Остановите его перед восстановлением.');
+    }
+    await setJob({
+      status: 'error',
+      message: 'Прежний запуск прерван; продолжаю сохранённый проход.',
+      finishedAt: Date.now(),
+      recoveryAvailable: false
+    });
+  }
+
   const active = await getActiveTab();
   const activeMatches = Boolean(active?.id && conversationKey(active.url || '') === conversationKey(draft.sourceUrl || ''));
 
