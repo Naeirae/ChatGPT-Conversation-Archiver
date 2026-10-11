@@ -917,7 +917,7 @@ function render(data) {
   }
   renderCaptureProgress(job, running);
   renderRunLog(job);
-  renderDraft(draft);
+  renderDraft(running ? null : draft);
 
   const recoverableDraft = Boolean(
     draft &&
