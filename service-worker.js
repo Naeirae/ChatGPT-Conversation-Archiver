@@ -3120,6 +3120,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target === 'offscreen') return;
   (async () => {
+    await captureRuntimeReady;
     switch (message?.type) {
       case 'ARCHIVER_CHECK_UPDATE':
         return await checkForUpdate();
@@ -3482,18 +3483,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       message: 'Вкладка сбора временно заморожена. Сбор продолжится после разморозки.',
       phase: 'paused'
     });
-  } else if (
-    changeInfo.frozen === false &&
-    job.status === 'paused' &&
-    job.pauseReason === 'frozen'
-  ) {
-    await setJob({
-      status: 'running',
-      pauseReason: '',
-      message: 'Вкладка сбора снова доступна. Продолжаю сбор…',
-      phase: job.resumePhase || 'top'
-    });
   }
+  // A thaw is not user consent to resume a capture. Keep paused state
+  // until an explicit resume command verifies the live content script.
 
   // ChatGPT changes conversations using client-side routing without leaving
   // chatgpt.com. Detect a changed conversation identity, not just the host.
@@ -3521,6 +3513,29 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   })().catch(error => logTabListenerError('tabs.onUpdated', error));
 });
 
+
+// Extension code reload invalidates content-script execution, but storage
+// survives. Invalidate the old running job on first worker start per version.
+const CAPTURE_RUNTIME_VERSION_KEY = 'archiverCaptureRuntimeVersion';
+async function retireCaptureAfterVersionChange() {
+  const version = chrome.runtime.getManifest().version || '';
+  const stored = await chrome.storage.local.get(CAPTURE_RUNTIME_VERSION_KEY);
+  if (stored[CAPTURE_RUNTIME_VERSION_KEY] === version) return;
+  const job = await getJob();
+  if (job && ['starting', 'running', 'paused'].includes(job.status)) {
+    await setJob({
+      status: 'error',
+      recoveryAvailable: false,
+      finishedAt: Date.now(),
+      message: 'Расширение обновлено: прежний сбор остановлен. Сохранённый черновик доступен для ручного продолжения.'
+    });
+  }
+  await chrome.storage.local.set({ [CAPTURE_RUNTIME_VERSION_KEY]: version });
+}
+const captureRuntimeReady = retireCaptureAfterVersionChange().catch(error => {
+  console.error('Capture version migration failed', error);
+  throw error;
+});
 
 chrome.runtime.onInstalled.addListener(details => {
   chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
