@@ -196,14 +196,27 @@
   }
 
   async function recoverVisibleLoadError(phase = 'top', count = 0) {
-    // Never click an arbitrary global "Retry" button: ChatGPT uses the same
-    // text in unrelated UI and a CDP click can navigate to a different chat.
-    const retry = visibleRetryButton();
-    if (!retry) return false;
-    throw new Error(
-      'ChatGPT показал кнопку «Повторить». Автоматический клик отключён для защиты от перехода в чужой чат. ' +
-      'Текущий сбор остановлен; сохранённые контрольные точки остаются доступными.'
-    );
+    // Retry the scroll, not ChatGPT's generic "Retry" button. The latter can
+    // belong to a different UI element and navigate away from this chat.
+    if (!visibleRetryButton()) return false;
+    const direction = phase === 'walk' ? 'down' : 'up';
+    const originalUrl = location.href;
+    const before = visibleTurnSignature();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await waitIfPaused();
+      await progress('ChatGPT временно не догрузил участок · повторяю прокрутку (' +
+        attempt + '/3)…', count, { phase, retryVisible: true, force: true });
+      await physicalScroll(direction, 2);
+      if (location.href !== originalUrl) {
+        throw new Error('Переписка сменилась во время повторной прокрутки. Сбор остановлен.');
+      }
+      await sleep(900);
+      const after = visibleTurnSignature();
+      if (after && after !== before) return true;
+    }
+    // Keep the collector's existing idle/stall handling rather than
+    // aborting immediately on an unrelated "Retry" control.
+    return false;
   }
 
   async function getSettings() {
