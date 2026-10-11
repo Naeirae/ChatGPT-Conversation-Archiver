@@ -1075,14 +1075,15 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   if (
     status === 'error' &&
     draftId &&
-    ['full', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
-    job.captureTarget === 'copy' &&
-    job.captureTabId != null &&
-    job.captureTabId !== job.sourceTabId
+    ['full', 'fragment', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
+    job.captureTabId != null
   ) {
     try {
       const tab = await chrome.tabs.get(job.captureTabId);
-      if (tab?.id && isConversationUrl(tab.url || '')) preservedCaptureTabId = tab.id;
+      if (tab?.id && conversationKey(tab.url || '') &&
+          conversationKey(tab.url || '') === conversationKey(job.sourceUrl || '')) {
+        preservedCaptureTabId = tab.id;
+      }
     } catch (_) {}
   }
 
@@ -1154,7 +1155,8 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
-  if (!captureTab?.id || !isConversationUrl(captureTab.url || '')) {
+  if (!captureTab?.id ||
+      conversationKey(captureTab.url || '') !== conversationKey(draft.sourceUrl || '')) {
     throw new Error('Рабочая вкладка незавершённого прохода уже недоступна.');
   }
 
@@ -1170,25 +1172,30 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (!lastMessage) throw new Error('В сохранённом незавершённом проходе нет точки, от которой можно продолжить.');
 
   const jobId = makeJobId();
+  const resumeMode = draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
+    ? 'resume-draft' : 'retry-walk';
+  const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
     jobId,
     status: 'starting',
     phase: 'top',
-    captureMode: 'retry-walk',
-    captureTarget: 'copy',
+    captureMode: resumeMode,
+    captureTarget: target,
     recoveryDraftId: draft.id,
     draftId: draft.id,
     draftCount: draft.messages.length,
     recoveryAvailable: false,
     captureTabId: captureTab.id,
-    message: 'Возвращаю сохранённую рабочую вкладку к началу без пересчёта сообщений…',
+    message: resumeMode === 'resume-draft'
+      ? 'Ищу последнюю сохранённую реплику и продолжаю с неё без полного прохода…'
+      : 'Возвращаю рабочую вкладку к началу для восстановления…',
     startedAt: Date.now(),
     finishedAt: null
   });
 
   try {
     await ensureChatGptContentScript(captureTab.id, jobId, {
-      mode: 'retry-walk',
+      mode: resumeMode,
       resumeAnchorId: lastMessage.id || '',
       resumeAnchorSignature: messageSignature(lastMessage.role, lastMessage.text),
       existingDraftId: draft.id,
@@ -1210,11 +1217,15 @@ async function resumeFailedCaptureFromWorkingTab() {
   const next = await appendRunLog({
     status: 'running',
     phase: 'top',
-    message: 'Повторяю только хронологический проход вниз в той же рабочей вкладке…'
+    message: resumeMode === 'resume-draft'
+      ? 'Продолжаю после последней сохранённой реплики…'
+      : 'Восстанавливаю хронологический проход…'
   }, {
     level: 'info',
     code: 'UNFINISHED_PASS_RETRY_STARTED',
-    message: 'Сохранённый незавершённый проход найден; первый этап не повторяется, рабочая вкладка возвращается к началу и повторяется только проход вниз до исходной нижней метки.',
+    message: resumeMode === 'resume-draft'
+      ? 'Черновик сохранён; поиск последнего сохранённого сообщения и добор до исходной конечной метки.'
+      : 'Сохранённый незавершённый проход найден; повторяется хронологический проход.',
     phase: 'top',
     count: draft.messages.length
   });
