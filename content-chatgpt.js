@@ -2028,14 +2028,16 @@
       error: ''
     };
 
-    await chrome.storage.local.set({
-      ['draft:' + draftId]: draft,
-      activeCaptureJob: Object.assign({}, current, {
-        draftId,
-        draftCount: messages.length,
-        updatedAt: now
-      })
-    });
+    // Persist the large checkpoint independently. The background worker is
+    // the sole writer of the active job: do not overwrite a newer state with
+    // the copy read before storage I/O.
+    await chrome.storage.local.set({ ['draft:' + draftId]: draft });
+    await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CHECKPOINT_SAVED',
+      jobId,
+      draftId,
+      draftCount: messages.length
+    }).catch(() => {});
     state.recoveryCheckpoint = { at: now, count: messages.length };
   }
 
