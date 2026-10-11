@@ -826,7 +826,7 @@ async function startCapture({
       // open a dedicated ChatGPT tab in the foreground long enough to hydrate
       // the virtualized conversation DOM, then return focus to the source chat
       // after the collector has started.
-      captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
+      captureTab = await chrome.tabs.create({ url: inspection.href, active: false });
       if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для фонового сбора.');
 
       await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
@@ -929,7 +929,7 @@ async function startCapture({
     });
 
     if (captureTarget === 'copy') {
-      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+      // The capture tab was created inactive; do not steal the user's focus.
       await appendRunLog({
         status: 'running',
         message: mode === 'full'
@@ -971,7 +971,6 @@ async function startCapture({
   } catch (error) {
     if (captureTarget === 'copy' && captureTab?.id && captureTab.id !== sourceTab.id) {
       await chrome.tabs.remove(captureTab.id).catch(() => {});
-      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
     }
 
     if (mode === 'sync' && existingArchive?.id) {
