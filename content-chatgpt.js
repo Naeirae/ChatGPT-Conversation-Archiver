@@ -2189,7 +2189,7 @@
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
-          const first = checkpoint?.messages?.[0];
+          const first = checkpoint?.messages?.[checkpoint.messages.length - 1];
           if (!first || checkpoint.capturePhase !== 'top') throw new Error('Контрольная точка прокрутки вверх отсутствует.');
           await reachResumeAnchor(first.id || '', first.text ? messageTextSignature(first) : '', [], map, order, settings);
           // The second, chronological pass re-reads the whole selected range;
