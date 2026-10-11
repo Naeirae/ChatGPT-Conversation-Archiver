@@ -1711,7 +1711,7 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
-      if (checkpointBoundary) await saveRecoveryCheckpoint(map, order, checkpointBoundary);
+      // Upward navigation counts in memory; disk writes begin on the downward pass.
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
@@ -1721,7 +1721,7 @@
         ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
         : '';
 
-      await progress('Этап 1/3: физически иду к началу · собрано ' + map.size + ' сообщений', map.size, {
+      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1,
         topIdleConfirmations: confirmedIdle
@@ -1735,7 +1735,7 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
-      if (checkpointBoundary) await saveRecoveryCheckpoint(map, order, checkpointBoundary);
+      // Upward navigation counts in memory; disk writes begin on the downward pass.
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
@@ -2257,11 +2257,6 @@
         );
       }
 
-      // Persist the final upward snapshot before clearing navigation data.
-      // Regular checkpoints are throttled to avoid expensive full rewrites.
-      if (mode === 'full' || mode === 'fragment') {
-        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-      }
       map.clear();
       order.length = 0;
       chronologicalStarted = true;
