@@ -765,14 +765,24 @@ async function startCapture({
 
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
-    // A tab ID is not a conversation ID. Never silently reuse an old job
-    // merely because Chrome reused the same tab for a different chat.
-    if (current.tabId === sourceTab.id &&
-        conversationKey(current.sourceUrl || '') &&
-        conversationKey(current.sourceUrl || '') === conversationKey(sourceTab.url || '')) {
-      return { ok: true, job: current, alreadyRunning: true };
+    const stale = Date.now() - Number(current.updatedAt || current.startedAt || 0) > 300000;
+    if (!stale) {
+      // A tab ID is not a conversation ID; never redirect a new capture to
+      // a saved run merely because its former Chrome tab ID is the same.
+      if (current.tabId === sourceTab.id &&
+          conversationKey(current.sourceUrl || '') &&
+          conversationKey(current.sourceUrl || '') === conversationKey(sourceTab.url || '')) {
+        return { ok: true, job: current, alreadyRunning: true };
+      }
+      throw new Error('Другой сбор переписки ещё активен. Остановите его перед новым запуском.');
     }
-    throw new Error('Другой сбор переписки уже выполняется.');
+    // Retire the stale job metadata, preserving its checkpoint and draft.
+    await setJob({
+      status: 'error',
+      recoveryAvailable: false,
+      finishedAt: Date.now(),
+      message: 'Старое задание больше не отвечает. Черновик сохранён; новый сбор запускается отдельно.'
+    });
   }
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
