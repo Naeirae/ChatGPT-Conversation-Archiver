@@ -3438,6 +3438,7 @@ self.addEventListener('error', event => {
 
 chrome.tabs.onRemoved.addListener(tabId => {
   (async () => {
+  await captureRuntimeReady;
   const job = await getJob();
   if (!job) return;
 
@@ -3472,6 +3473,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   (async () => {
+  await captureRuntimeReady;
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
