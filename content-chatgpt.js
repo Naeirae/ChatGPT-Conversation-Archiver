@@ -196,21 +196,14 @@
   }
 
   async function recoverVisibleLoadError(phase = 'top', count = 0) {
+    // Never click an arbitrary global "Retry" button: ChatGPT uses the same
+    // text in unrelated UI and a CDP click can navigate to a different chat.
     const retry = visibleRetryButton();
     if (!retry) return false;
-
-    await progress('ChatGPT не догрузил участок переписки · физически нажимаю «Попробовать снова»…', count, {
-      phase,
-      retryVisible: true,
-      force: true
-    });
-
-    const clicked = await physicalClickElement(retry);
-    if (!clicked) return false;
-
-    await sleep(1800);
-    await waitForTurnSettle(9000, 1800);
-    return true;
+    throw new Error(
+      'ChatGPT показал кнопку «Повторить». Автоматический клик отключён для защиты от перехода в чужой чат. ' +
+      'Текущий сбор остановлен; сохранённые контрольные точки остаются доступными.'
+    );
   }
 
   async function getSettings() {
