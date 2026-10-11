@@ -2464,104 +2464,10 @@
 
       if (mode === 'compare') {
         const comparisonCount = previousCount + addedCount;
-        const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
-        const comparisonMessage = addedCount
-          ? ('Сверка завершена: +' + addedCount + ' новых сообщений относительно локального архива.')
-          : 'Сверка завершена: новых сообщений относительно локального архива нет.';
-
-        await chrome.storage.local.set({
-          activeCaptureJob: Object.assign({}, currentJob, {
-            jobId,
-            status: 'done',
-            phase: 'done',
-            captureMode: 'compare',
-            message: comparisonMessage,
-            count: comparisonCount,
-            addedCount,
-            reasoningMessageCount,
-            reasoningBlockCount,
-            archiveId: existingArchiveId,
-            finishedAt: Date.now(),
-            updatedAt: Date.now()
-          })
-        });
-
-        try {
-          await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_CAPTURE_COMPLETE',
-            jobId,
-            archiveId: existingArchiveId,
-            count: comparisonCount,
-            addedCount,
-            mode
-          });
-        } catch (_) {}
-        return;
-      }
-
-      const binaryTargetMessages = (mode === 'full' || mode === 'fragment')
-        ? messages
-        : mode === 'images'
-          ? messages.filter(message => recoveredImageRefs.some(ref =>
-              (ref.messageId && ref.messageId === message.id) ||
-              (ref.messageSignature && ref.messageSignature === messageTextSignature(message))
-            ))
-          : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
-      const binaryStats = await hydrateMessageImages(binaryTargetMessages, { onlyMissing: mode === 'images' });
-
-      const allImages = messages.flatMap(item => item.images || []);
-      const conversation = {
-        title: (mode === 'fragment' ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
-        sourceUrl: location.href,
-        capturedAt: new Date().toISOString(),
-        messages,
-        imageCount: allImages.length,
-        imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
-        imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length,
-        lastImageBinaryReady: binaryStats.embedded,
-        lastImageBinaryFailed: binaryStats.failed,
-        lastCaptureMode: mode,
-        isFragment: mode === 'fragment',
-        fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
-        lastCaptureAddedCount: addedCount,
-        lastImageRecoveredCount: recoveredImageRefs.length,
-        lastRecoveredImageRefs: recoveredImageRefs,
-        previousMessageCount: previousCount,
-        reasoningMessageCount,
-        reasoningBlockCount,
-        lastMessageId: messages[messages.length - 1]?.id || '',
-        captureBoundaryKind: boundary.kind || '',
-        captureBoundaryKey: boundary.key || '',
-        captureBoundaryRole: boundary.role || '',
-        captureBoundaryTrimmedNewerCount: bounded.trimmed || 0
-      };
-
-      const currentJob = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
+        // Persist the archive without touching worker-owned job status.
       await chrome.storage.local.set({
         ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        ...(mode === 'fragment' ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId }),
-        activeCaptureJob: Object.assign({}, currentJob, {
-          jobId,
-          status: 'done',
-          message: mode === 'fragment'
-            ? 'Выбранный фрагмент собран.'
-            : mode === 'full'
-            ? 'Переписка собрана.'
-            : mode === 'images'
-              ? ('Добор изображений завершён: +' + recoveredImageRefs.length + '.')
-              : (mode === 'resume-draft' || mode === 'retry-walk')
-                ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений.')
-                : ('Архив продолжен: +' + addedCount + ' сообщений.'),
-          count: messages.length,
-          addedCount,
-          imageRecoveredCount: recoveredImageRefs.length,
-          imageCount: conversation.imageCount,
-          reasoningMessageCount,
-          reasoningBlockCount,
-          archiveId,
-          finishedAt: Date.now(),
-          updatedAt: Date.now()
-        })
+        ...(mode === 'fragment' ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId })
       });
 
       try {
@@ -2635,18 +2541,8 @@
         const saved = (await chrome.storage.local.get('draft:' + current.draftId))['draft:' + current.draftId];
         if (saved?.messages?.length) { draftId = current.draftId; draftCount = saved.messages.length; }
       }
-      await chrome.storage.local.set({
-        activeCaptureJob: Object.assign({}, current, {
-          jobId,
-          status,
-          message,
-          draftId,
-          draftCount,
-          finishedAt: Date.now(),
-          updatedAt: Date.now()
-        })
-      });
-
+      // Failure state is owned by the worker; drafts above remain on disk
+      // even when the worker is unavailable.
       try {
         await chrome.runtime.sendMessage({
           type: 'ARCHIVER_CAPTURE_FAILED',
