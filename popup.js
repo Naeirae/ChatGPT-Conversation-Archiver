@@ -893,7 +893,14 @@ function render(data) {
   $('linkedDocHint').textContent = state.linkedDoc?.url
     ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
     : 'Связанного Google Doc для этого чата сейчас нет.';
-  const latestUnfinished = (state.unfinishedPasses || [])[0] || null;
+  const latestUnfinished = (state.unfinishedPasses || []).find(item => {
+    try {
+      const expected = state.job?.sourceUrl;
+      return expected && item.sourceUrl &&
+        new URL(item.sourceUrl).origin === new URL(expected).origin &&
+        new URL(item.sourceUrl).pathname === new URL(expected).pathname;
+    } catch (_) { return false; }
+  }) || null;
   const canResumeUnfinished = Boolean(!running && latestUnfinished?.id);
   const canRetryCurrent = Boolean(
     !running &&
@@ -1164,7 +1171,16 @@ $('syncDoc').onclick = async () => {
 };
 
 $('retryCurrent').onclick = async () => {
-  const latestUnfinished = (state?.unfinishedPasses || [])[0] || null;
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const sameConversation = (a, b) => {
+    try {
+      return Boolean(a && b && new URL(a).origin === new URL(b).origin &&
+        new URL(a).pathname === new URL(b).pathname);
+    } catch (_) { return false; }
+  };
+  const latestUnfinished = (state?.unfinishedPasses || []).find(item =>
+    sameConversation(item.sourceUrl, activeTab?.url)
+  ) || null;
   $('retryCurrent').disabled = true;
 
   if (latestUnfinished?.id) {
