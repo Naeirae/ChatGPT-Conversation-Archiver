@@ -74,7 +74,12 @@ const summarize = summarizeArchive;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function listLinkedArchives() {
-  const result = await chrome.storage.local.get(null);
+  const keys = typeof chrome.storage.local.getKeys === 'function'
+    ? await chrome.storage.local.getKeys() : null;
+  const archiveKeys = keys?.filter(key => key.startsWith(STORAGE_KEYS.archivePrefix)) || null;
+  const result = archiveKeys
+    ? await chrome.storage.local.get([STORAGE_KEYS.archiveIndex, ...archiveKeys])
+    : await chrome.storage.local.get(null);
   const index = result[STORAGE_KEYS.archiveIndex] || {};
   const indexedIds = new Set(Object.values(index).filter(Boolean));
   const archives = [];
