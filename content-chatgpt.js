@@ -1992,7 +1992,7 @@
 
     const now = Date.now();
     const last = state.recoveryCheckpoint || { at: 0, count: 0 };
-    if (!force && now - last.at < 2500 && order.length - last.count < 6) return;
+    if (!force && (now - last.at < 30000 || order.length - last.count < 35)) return;
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
