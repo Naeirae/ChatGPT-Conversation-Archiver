@@ -3058,7 +3058,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.captureTarget || 'copy'
         );
       case 'ARCHIVER_GET_STATE': {
-        const job = await getJob();
+        let job = await getJob();
+        // A killed MV3 worker can leave an indefinitely "running" job behind.
+        // Never discard persisted drafts: expose the failure for manual resume.
+        if (job && ['starting', 'running'].includes(job.status) &&
+            Date.now() - Number(job.updatedAt || job.startedAt || Date.now()) > 300000) {
+          const draft = job.draftId ? await getDraft(job.draftId) : null;
+          job = await setJob({
+            status: 'error',
+            message: draft?.messages?.length
+              ? 'Сбор перестал отвечать. Контрольная точка сохранена — можно продолжить.'
+              : 'Сбор перестал отвечать до создания контрольной точки.',
+            draftCount: draft?.messages?.length || 0,
+            finishedAt: Date.now()
+          });
+        }
         const tab = await getActiveTab();
         let currentArchive = null;
         let linkedDoc = null;
