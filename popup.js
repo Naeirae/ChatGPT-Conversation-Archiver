@@ -455,6 +455,34 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(plan);
 
+    const deleteSaved = document.createElement('button');
+    deleteSaved.type = 'button';
+    deleteSaved.className = 'archive-link-more danger-outline';
+    deleteSaved.textContent = 'Удалить';
+    deleteSaved.disabled = busy;
+    deleteSaved.onclick = async () => {
+      if (!confirm((item.isFragment ? 'Удалить этот сохранённый фрагмент' : 'Удалить этот сохранённый архив') +
+        ' из Архиватора? Остальные архивы, черновики и Google Docs не изменятся.')) return;
+      deleteSaved.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_DELETE_ARCHIVE',
+          archiveId: item.id
+        });
+        if (!result?.ok || !result.removed) {
+          throw new Error(result?.error || 'Архив не удалось удалить.');
+        }
+        row.remove();
+        count.textContent = String(list.children.length);
+        setStatus('Выбранный архив удалён из Архиватора. Google Docs не изменён.');
+        await getState();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        deleteSaved.disabled = false;
+      }
+    };
+    actions.appendChild(deleteSaved);
+
     const destinationEditor = document.createElement('div');
     destinationEditor.className = 'archive-destination-editor hidden';
 
