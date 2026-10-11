@@ -765,7 +765,13 @@ async function startCapture({
 
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
-    if (current.tabId === sourceTab.id) return { ok: true, job: current, alreadyRunning: true };
+    // A tab ID is not a conversation ID. Never silently reuse an old job
+    // merely because Chrome reused the same tab for a different chat.
+    if (current.tabId === sourceTab.id &&
+        conversationKey(current.sourceUrl || '') &&
+        conversationKey(current.sourceUrl || '') === conversationKey(sourceTab.url || '')) {
+      return { ok: true, job: current, alreadyRunning: true };
+    }
     throw new Error('Другой сбор переписки уже выполняется.');
   }
 
@@ -1263,11 +1269,16 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
   const activeMatches = Boolean(active?.id && conversationKey(active.url || '') === conversationKey(draft.sourceUrl || ''));
 
   if (!activeMatches) {
+    throw new Error('Сохранённый проход относится к другой переписке. Откройте исходный чат вручную, затем повторите продолжение.');
+  }
+
+  /* disabled automatic navigation
     const sourceTab = await chrome.tabs.create({ url: draft.sourceUrl, active: true });
     if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
     await waitForChatTabComplete(sourceTab.id, 45000);
     await waitForChatDomReady(sourceTab.id, 45000);
   }
+  */
 
   return startCapture({
     mode: draft.capturePhase === 'top' && ['full', 'fragment'].includes(draft.captureMode)
