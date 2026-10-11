@@ -1272,13 +1272,6 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
     throw new Error('Сохранённый проход относится к другой переписке. Откройте исходный чат вручную, затем повторите продолжение.');
   }
 
-  /* disabled automatic navigation
-    const sourceTab = await chrome.tabs.create({ url: draft.sourceUrl, active: true });
-    if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
-    await waitForChatTabComplete(sourceTab.id, 45000);
-    await waitForChatDomReady(sourceTab.id, 45000);
-  }
-  */
 
   return startCapture({
     mode: draft.capturePhase === 'top' && ['full', 'fragment'].includes(draft.captureMode)
