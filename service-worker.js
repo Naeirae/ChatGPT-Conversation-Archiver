@@ -1083,7 +1083,11 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     await chrome.tabs.remove(job.captureTabId).catch(() => {});
   }
   if (job.sourceTabId != null) {
-    await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
+    const source = await chrome.tabs.get(job.sourceTabId).catch(() => null);
+    // Never steal focus back to a tab that the user navigated to a different chat.
+    if (source?.url && conversationKey(source.url) === conversationKey(job.sourceUrl || '')) {
+      await chrome.tabs.update(job.sourceTabId, { active: true }).catch(() => {});
+    }
   }
   await cleanupTemporaryBaseline(job);
 
