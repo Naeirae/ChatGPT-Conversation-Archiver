@@ -3266,7 +3266,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
-        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        if (!job || !['starting', 'running'].includes(job.status) || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId != null && senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Прогресс пришел не из вкладки сбора.' };
