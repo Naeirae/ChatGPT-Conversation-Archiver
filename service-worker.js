@@ -1182,7 +1182,9 @@ async function resumeFailedCaptureFromWorkingTab() {
     captureMode: resumeMode,
     captureTarget: target,
     recoveryDraftId: draft.id,
-    draftId: draft.id,
+    // Keep the previous checkpoint immutable while the resumed pass runs.
+    // Its own checkpoints use a fresh draft ID.
+    draftId: 'draft-' + jobId,
     draftCount: draft.messages.length,
     recoveryAvailable: false,
     captureTabId: captureTab.id,
