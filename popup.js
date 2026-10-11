@@ -249,16 +249,24 @@ function renderUnfinishedPasses(items = []) {
     remove.textContent = 'Удалить';
     remove.onclick = async () => {
       if (!confirm('Удалить этот сохранённый незавершённый проход?')) return;
-      const result = await chrome.runtime.sendMessage({
-        type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
-        passId: item.id
-      });
-      if (!result?.ok) {
-        setStatus(result?.error || 'Не удалось удалить незавершённый проход.', true);
-        return;
+      remove.disabled = true;
+      setStatus('Удаляю выбранный черновик…');
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
+          passId: item.id
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый проход.');
+        // Reflect successful deletion immediately instead of blocking the
+        // button on an expensive full-state reload.
+        row.remove();
+        count.textContent = String(list.children.length);
+        setStatus('Черновик удалён. Остальные данные сохранены.');
+        void getState().catch(error => setStatus(error.message || String(error), true));
+      } catch (error) {
+        remove.disabled = false;
+        setStatus(error.message || String(error), true);
       }
-      await getState();
-      setStatus('Незавершённый проход удалён.');
     };
 
     actions.append(resume, savePartial, view, copy, remove);
