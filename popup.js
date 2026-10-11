@@ -910,6 +910,8 @@ function render(data) {
   );
   $('retryCurrent').textContent = canResumeUnfinished ? 'Продолжить сбор' : 'Повторить в текущей вкладке';
   $('retryCurrent').classList.toggle('hidden', !(canResumeUnfinished || canRetryCurrent));
+  $('dismissFailedRun').classList.toggle('hidden', Boolean(running || job?.status !== 'error'));
+  $('dismissFailedRun').disabled = Boolean(running);
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
@@ -1295,6 +1297,19 @@ $('cancel').onclick = async () => {
     setStatus(error.message || String(error), true);
   } finally {
     $('cancel').disabled = false;
+  }
+};
+
+$('dismissFailedRun').onclick = async () => {
+  $('dismissFailedRun').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESET_CAPTURE_STATE' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось убрать ошибочный запуск.');
+    await getState();
+    setStatus('Ошибочный запуск убран. Сохранённые черновики не удалены.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('dismissFailedRun').disabled = false;
   }
 };
 
