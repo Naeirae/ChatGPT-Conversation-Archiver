@@ -1686,7 +1686,7 @@
     return null;
   }
 
-  async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null) {
+  async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
     let confirmedIdle = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -1706,6 +1706,7 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
+      if (checkpointBoundary) await saveRecoveryCheckpoint(map, order, checkpointBoundary);
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
@@ -1729,6 +1730,7 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
+      if (checkpointBoundary) await saveRecoveryCheckpoint(map, order, checkpointBoundary);
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
@@ -2134,6 +2136,7 @@
 
     try {
       const settings = await getSettings();
+      const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
       const selectedFragment = mode === 'fragment' ? (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] || {} : null;
       if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
       await progress(
@@ -2184,7 +2187,15 @@
 
       if (mode === 'full' || mode === 'images' || mode === 'fragment') {
         const navigationWindows = [];
-        await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null);
+        if (resumeNavigation) {
+          const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
+          const first = checkpoint?.messages?.[0];
+          if (!first || checkpoint.capturePhase !== 'top') throw new Error('Контрольная точка прокрутки вверх отсутствует.');
+          await reachResumeAnchor(first.id || '', first.text ? messageTextSignature(first) : '', [], map, order, settings);
+          // The second, chronological pass re-reads the whole selected range;
+          // this search only restores the position of the uppermost saved turn.
+        }
+        await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null, boundary);
         navigationMessages = [...map.values()];
         navigationSequence = buildNavigationSequence(navigationWindows);
       } else if (mode === 'retry-walk') {
@@ -2557,7 +2568,7 @@
       let draftId = '';
       let draftCount = 0;
 
-      if (chronologicalStarted && map.size > 0) {
+      if ((chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
         if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
@@ -2589,7 +2600,7 @@
             sourceUrl: location.href,
             capturedAt: new Date().toISOString(),
             captureMode: mode,
-            capturePhase: current.phase || 'walk',
+            capturePhase: chronologicalStarted ? 'walk' : 'top',
             captureBoundary: current.captureBoundary || fixedCaptureBoundary || null,
             navigationHighWater: Number(current.navigationHighWater || 0),
             chronologicalCount: draftMessages.length,
@@ -2605,6 +2616,10 @@
         }
       }
 
+      if (!draftId && current.draftId) {
+        const saved = (await chrome.storage.local.get('draft:' + current.draftId))['draft:' + current.draftId];
+        if (saved?.messages?.length) { draftId = current.draftId; draftCount = saved.messages.length; }
+      }
       await chrome.storage.local.set({
         activeCaptureJob: Object.assign({}, current, {
           jobId,
