@@ -511,7 +511,8 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     existingDraftId: options.existingDraftId || '',
     fixedCaptureBoundary: options.fixedCaptureBoundary || null,
     resumeAnchorSignature: options.resumeAnchorSignature || '',
-    resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : []
+    resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : [],
+    resumeNavigation: Boolean(options.resumeNavigation)
   };
   const expectedVersion = chrome.runtime.getManifest().version;
 
@@ -739,6 +740,7 @@ async function startCapture({
   existingDraft: providedDraft = null,
   fixedCaptureBoundary = null,
   resumeTailSignatures = [],
+  resumeNavigation = false,
   captureTarget = 'copy'
 } = {}) {
   const sourceTab = await getActiveTab();
@@ -845,10 +847,10 @@ async function startCapture({
       captureMode: mode,
       captureTarget,
       baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
-      recoveryDraftId: mode === 'resume-draft' ? (existingDraft?.id || '') : '',
-      draftId: mode === 'resume-draft' ? (existingDraft?.id || '') : '',
-      draftCount: mode === 'resume-draft' ? (existingDraft?.messages?.length || 0) : 0,
-      captureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null,
+      recoveryDraftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+      draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+      draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+      captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
       pendingDocUrl,
       pendingDocMode,
       message: mode === 'fragment'
@@ -911,7 +913,8 @@ async function startCapture({
       resumeTailSignatures,
       existingArchiveId: existingArchive?.id || '',
       existingDraftId: existingDraft?.id || '',
-      fixedCaptureBoundary: mode === 'resume-draft' ? fixedCaptureBoundary : null
+      fixedCaptureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+      resumeNavigation
     });
 
     if (captureTarget === 'copy') {
@@ -1223,7 +1226,9 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
   }
 
   return startCapture({
-    mode: 'resume-draft',
+    mode: draft.capturePhase === 'top' && ['full', 'fragment'].includes(draft.captureMode)
+      ? draft.captureMode : 'resume-draft',
+    resumeNavigation: draft.capturePhase === 'top',
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
     captureTarget
@@ -1338,7 +1343,7 @@ async function handleCaptureComplete(message) {
   }
   const completedDraftIds = new Set([
     job.draftId || '',
-    (message.mode === 'resume-draft' || message.mode === 'retry-walk') ? (job.recoveryDraftId || '') : ''
+    job.recoveryDraftId || ''
   ].filter(Boolean));
   for (const draftId of completedDraftIds) {
     await removeDraft(draftId).catch(() => {});
