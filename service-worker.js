@@ -451,9 +451,7 @@ async function resetCaptureState() {
   if (job && ['starting', 'running', 'paused'].includes(job.status)) {
     throw new Error('Сначала остановите текущий сбор.');
   }
-  if (job?.draftId) {
-    await removeDraft(job.draftId).catch(() => {});
-  }
+  // Resetting a failed run must not erase the preserved draft.
   if (
     job?.captureTarget === 'copy' &&
     job?.captureTabId != null &&
