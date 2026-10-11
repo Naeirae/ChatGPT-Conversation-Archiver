@@ -3249,6 +3249,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             label: message.label || ''
           }
         );
+      case 'ARCHIVER_CHECKPOINT_SAVED': {
+        const job = await getJob();
+        if (!job || job.jobId !== message.jobId ||
+            !['starting', 'running', 'paused'].includes(job.status) ||
+            (job.captureTabId != null && sender?.tab?.id !== job.captureTabId)) {
+          return { ok: false, error: 'Контрольная точка от устаревшего запуска.' };
+        }
+        const draft = await getDraft(message.draftId || '');
+        if (!draft?.messages?.length) return { ok: false, error: 'Контрольная точка недоступна.' };
+        await setJob({
+          draftId: message.draftId,
+          draftCount: draft.messages.length
+        });
+        return { ok: true };
+      }
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
         if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
