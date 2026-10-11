@@ -1479,7 +1479,7 @@ $('openFailedCapture').onclick = async () => {
 $('resumeFailedCapture').onclick = async () => {
   $('resumeFailedCapture').disabled = true;
   try {
-    setStatus('Возвращаю сохранённую рабочую вкладку к началу без пересчёта сообщений; затем повторю только проход вниз…');
+    setStatus('Ищу последнее сохранённое сообщение и продолжаю сбор без повторного полного прохода…');
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось повторить хронологический проход.');
     await getState();
