@@ -1242,6 +1242,22 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   await recordRunHistory(next);
 }
 
+async function focusUnfinishedRecoveryTab(passId = '') {
+  const draft = await getDraft(passId);
+  if (!draft?.id) throw new Error('Сохранённый незавершённый проход не найден.');
+
+  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
+  if (!recovery.available) {
+    throw new Error('Сохранённая рабочая вкладка этого прохода уже недоступна.');
+  }
+
+  await chrome.tabs.update(recovery.tab.id, { active: true });
+  if (recovery.tab.windowId != null) {
+    await chrome.windows.update(recovery.tab.windowId, { focused: true }).catch(() => {});
+  }
+  return { ok: true, tabId: recovery.tab.id };
+}
+
 async function focusRecoverableCaptureTab() {
   const job = await getJob();
   if (!job?.captureTabId || !job?.draftId) {
@@ -3503,6 +3519,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await clearRunHistory();
       case 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB':
         return await focusRecoverableCaptureTab();
+      case 'ARCHIVER_FOCUS_UNFINISHED_RECOVERY_TAB':
+        return await focusUnfinishedRecoveryTab(message.passId || message.draftId || '');
       case 'ARCHIVER_RESUME_FAILED_CAPTURE':
         return await resumeFailedCaptureFromWorkingTab();
       case 'ARCHIVER_RESUME_UNFINISHED_PASS':
@@ -3748,7 +3766,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   if (!job) return;
 
   if (
-    job.status === 'error' &&
+    ['error', 'cancelled'].includes(job.status) &&
     job.recoveryAvailable &&
     job.captureTabId === tabId
   ) {
