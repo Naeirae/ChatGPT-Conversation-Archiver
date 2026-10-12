@@ -185,7 +185,7 @@ function renderUnfinishedPasses(items = []) {
 
     const resume = document.createElement('button');
     resume.className = 'primary';
-    resume.textContent = 'Дособрать по сверке';
+    resume.textContent = 'Дособрать';
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus('Открываю исходный чат и ищу место остановки…');
@@ -215,7 +215,10 @@ function renderUnfinishedPasses(items = []) {
         });
         if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить частичный архив.');
         await getState();
-        setStatus('Частичный архив сохранён: ' + result.messageCount + ' сообщений. Исходный черновик сохранён.');
+        setStatus(
+          (result.updated ? 'Частичный архив обновлён: ' : 'Частичный архив сохранён: ') +
+          result.messageCount + ' сообщений. Его можно продолжить позже.'
+        );
       } catch (error) {
         setStatus(error.message || String(error), true);
       } finally {
@@ -336,6 +339,7 @@ function renderSavedArchives(items = []) {
     meta.className = 'archive-link-meta';
     const parts = [];
     if (item.isFragment) parts.push('Фрагмент переписки');
+    if (item.partial) parts.push('Частичный архив · можно продолжить');
     if (/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/share\//i.test(item.sourceUrl || '')) parts.push('Опубликованная переписка');
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
     if (item.capturedAt) {
@@ -352,7 +356,9 @@ function renderSavedArchives(items = []) {
     destination.className = 'archive-destination';
 
     const destinationText = document.createElement('span');
-    if (item.destination?.saved) {
+    if (item.partial && !item.destination?.saved) {
+      destinationText.textContent = 'Сохранён локально · сбор не завершён';
+    } else if (item.destination?.saved) {
       if (item.destination.kind === 'google-doc') {
         destinationText.textContent = 'Сохранён в Google Docs';
       } else if (item.destination.url) {
@@ -383,12 +389,14 @@ function renderSavedArchives(items = []) {
     const resume = document.createElement('button');
     resume.className = 'archive-link-open';
     resume.type = 'button';
-    resume.textContent = 'Продолжить';
+    resume.textContent = item.partial ? 'Дособрать' : 'Продолжить';
     resume.disabled = busy;
     resume.classList.toggle('hidden', Boolean(item.isFragment));
     resume.onclick = async () => {
       resume.disabled = true;
-      setStatus('Открываю чат и ищу место продолжения…');
+      setStatus(item.partial
+        ? 'Открываю чат и восстанавливаю место частичного архива…'
+        : 'Открываю чат и ищу место продолжения…');
       try {
         const result = await chrome.runtime.sendMessage({
           type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
@@ -955,7 +963,7 @@ function render(data) {
 
   const recoverableDraft = Boolean(
     draft &&
-    job?.status === 'error' &&
+    ['error', 'cancelled'].includes(job?.status) &&
     job?.recoveryAvailable &&
     job?.captureTabId != null
   );
@@ -1006,9 +1014,11 @@ function render(data) {
     setStatus(attemptText + nextText + ' ' + (job.message || ''), true);
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
-    setStatus(attempted
-      ? `Сбор отменён после ${attempted} сообщений.`
-      : 'Сбор отменён.');
+    const resumable = Boolean(draft?.messageCount);
+    setStatus(
+      (attempted ? `Сбор остановлен после ${attempted} сообщений.` : 'Сбор остановлен.') +
+      (resumable ? ' Сохранённую часть можно продолжить.' : '')
+    );
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
     setStatus(
