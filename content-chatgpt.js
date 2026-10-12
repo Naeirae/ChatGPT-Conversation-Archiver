@@ -1604,7 +1604,16 @@
         patch
       });
       if (result?.ok) return result;
-    } catch (_) {}
+      if (result && result.ok === false) {
+        throw new Error(result.error || 'Фоновый процесс остановил этот сбор.');
+      }
+    } catch (error) {
+      // A concrete response from the worker means the run is no longer active;
+      // do not keep driving the tab after the popup has declared it stopped.
+      if (error?.message && /останов|неактуал|Прогресс пришел не из вкладки сбора/i.test(error.message)) {
+        throw error;
+      }
+    }
     return updateJob(patch);
   }
 
