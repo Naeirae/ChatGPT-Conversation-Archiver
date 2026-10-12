@@ -2905,10 +2905,12 @@
         }
 
         await progress(
-          reconciliation.insertedCount
-            ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
-               ' пропущенных сообщений · итог ' + capturedMessages.length)
-            : ('Сверка проходов: пропусков не найдено · итог ' + capturedMessages.length),
+          mode === 'full' && !navigationSequence.length
+            ? ('Хронологический проход завершён без разрывов · итог ' + capturedMessages.length)
+            : reconciliation.insertedCount
+              ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
+                 ' пропущенных сообщений · итог ' + capturedMessages.length)
+              : ('Сверка проходов: пропусков не найдено · итог ' + capturedMessages.length),
           capturedMessages.length,
           {
             phase: 'finalizing',
@@ -2916,6 +2918,7 @@
             chronologicalCount: reconciliation.chronologicalCount,
             reconciledInsertedCount: reconciliation.insertedCount,
             reconciledUnresolvedCount: reconciliation.unresolvedCount,
+            navigationOnly: mode === 'full' && !navigationSequence.length,
             force: true
           }
         );
@@ -2934,15 +2937,24 @@
           ) {
             const missing = Math.max(0, navigationHighWater - finalCount);
             throw new Error(
-              'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
-              'Навигационный минимум: ' + navigationHighWater +
-              ', хронологический проход: ' + reconciliation.chronologicalCount +
-              ', после сверки: ' + finalCount +
-              (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
-              (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
-              (missing ? ', не хватает минимум ' + missing : '') +
-              (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
-              ' Результат сохранён как незавершённый проход; повторный полный проход автоматически не запускается.'
+              mode === 'full' && !navigationSequence.length
+                ? (
+                    'Полный архив не сохранён: хронологический проход не подтвердил весь диапазон ' +
+                    'от первой реплики до зафиксированной нижней метки.' +
+                    (!hasNavigationFirst ? ' Самая ранняя реплика отсутствует.' : '') +
+                    ' Результат оставлен как незавершённый проход.'
+                  )
+                : (
+                    'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
+                    'Навигационный минимум: ' + navigationHighWater +
+                    ', хронологический проход: ' + reconciliation.chronologicalCount +
+                    ', после сверки: ' + finalCount +
+                    (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
+                    (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
+                    (missing ? ', не хватает минимум ' + missing : '') +
+                    (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
+                    ' Результат сохранён как незавершённый проход; повторный полный проход автоматически не запускается.'
+                  )
             );
           }
         }
