@@ -395,15 +395,26 @@ function renderSavedArchives(items = []) {
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus(item.partial
-        ? 'Открываю чат и восстанавливаю место частичного архива…'
+        ? 'Открываю чат и восстанавливаю checkpoint частичного архива…'
         : 'Открываю чат и ищу место продолжения…');
       try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
-          archiveId: item.id,
-          captureTarget: $('captureTarget').value
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить чат.');
+        const result = item.partial && item.partialSourceDraftId
+          ? await chrome.runtime.sendMessage({
+              type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+              passId: item.partialSourceDraftId,
+              captureTarget: $('captureTarget').value
+            })
+          : await chrome.runtime.sendMessage({
+              type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
+              archiveId: item.id,
+              captureTarget: $('captureTarget').value
+            });
+        if (!result?.ok) throw new Error(
+          result?.error ||
+          (item.partial
+            ? 'Не удалось восстановить незавершённый проход частичного архива.'
+            : 'Не удалось продолжить чат.')
+        );
         render({ ...state, job: result.job });
         startPolling();
       } catch (error) {
