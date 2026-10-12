@@ -394,6 +394,16 @@ async function getJob() {
   return (await chrome.storage.local.get(ACTIVE_JOB_KEY))[ACTIVE_JOB_KEY] || null;
 }
 
+async function probeLiveCapture(job, timeoutMs = 1800) {
+  if (!job?.jobId || job.captureTabId == null) return null;
+  const probe = chrome.tabs.sendMessage(job.captureTabId, {
+    type: 'ARCHIVER_CAPTURE_HEALTH',
+    jobId: job.jobId
+  }).catch(() => null);
+  const timeout = sleep(timeoutMs).then(() => null);
+  return Promise.race([probe, timeout]);
+}
+
 async function setJob(patch) {
   const current = await getJob();
   const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
@@ -3467,19 +3477,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
       case 'ARCHIVER_GET_STATE': {
         let job = await getJob();
-        // A killed MV3 worker can leave an indefinitely "running" job behind.
-        // Never discard persisted drafts: expose the failure for manual resume.
+        // A killed MV3 worker can leave an indefinitely "running" job behind,
+        // but a long navigation-only pass may legitimately keep the message
+        // count unchanged. Before declaring the run dead, ask the concrete
+        // capture tab whether the same job is still executing.
         if (job && ['starting', 'running'].includes(job.status) &&
             Date.now() - Number(job.updatedAt || job.startedAt || Date.now()) > 300000) {
-          const draft = job.draftId ? await getDraft(job.draftId) : null;
-          job = await setJob({
-            status: 'error',
-            message: draft?.messages?.length
-              ? 'Сбор перестал отвечать. Контрольная точка сохранена — можно продолжить.'
-              : 'Сбор перестал отвечать до создания контрольной точки.',
-            draftCount: draft?.messages?.length || 0,
-            finishedAt: Date.now()
-          });
+          const health = await probeLiveCapture(job);
+          const alive = Boolean(
+            health?.ok &&
+            health.running &&
+            health.jobId === job.jobId
+          );
+
+          if (alive) {
+            job = await setJob({
+              lastHeartbeatAt: Date.now(),
+              contentScriptVersion: health.version || job.contentScriptVersion || '',
+              lastScrollDirection: health.lastScrollDirection || job.lastScrollDirection || ''
+            });
+          } else {
+            const draft = job.draftId ? await getDraft(job.draftId) : null;
+            job = await setJob({
+              status: 'error',
+              message: draft?.messages?.length
+                ? 'Сбор перестал отвечать. Контрольная точка сохранена — можно продолжить.'
+                : 'Сбор перестал отвечать до создания контрольной точки.',
+              draftCount: draft?.messages?.length || 0,
+              finishedAt: Date.now()
+            });
+          }
         }
         const tab = await getActiveTab();
         let currentArchive = null;
@@ -3655,7 +3682,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_PHYSICAL_SCROLL': {
         const job = await getJob();
-        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        if (!job || job.jobId !== message.jobId ||
+            !['starting', 'running'].includes(job.status)) {
+          return { ok: false, error: 'Сбор уже остановлен или неактуален.' };
+        }
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическая прокрутка разрешена только вкладке текущего сбора.' };
@@ -3666,11 +3696,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (expected && actual !== expected) {
           return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
         }
+
+        // A successful physical-scroll request is itself proof that the
+        // collector is alive, even if the navigation-only phase has not changed
+        // the message count for several minutes.
+        await setJob({
+          lastHeartbeatAt: Date.now(),
+          lastPhysicalActivity: 'scroll'
+        });
         return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
         const job = await getJob();
-        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        if (!job || job.jobId !== message.jobId ||
+            !['starting', 'running'].includes(job.status)) {
+          return { ok: false, error: 'Сбор уже остановлен или неактуален.' };
+        }
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое нажатие разрешено только вкладке текущего сбора.' };
@@ -3679,7 +3720,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_PHYSICAL_COPY_SELECTION': {
         const job = await getJob();
-        if (!job || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        if (!job || job.jobId !== message.jobId ||
+            !['starting', 'running'].includes(job.status)) {
+          return { ok: false, error: 'Сбор уже остановлен или неактуален.' };
+        }
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое копирование разрешено только вкладке текущего сбора.' };
