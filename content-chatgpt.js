@@ -2749,7 +2749,6 @@
             );
           } else {
             // Legacy drafts did not persist the visible checkpoint window.
-            // Keep their old anchor recovery path for compatibility.
             await reachResumeAnchor(
               fallbackAnchor.id || '',
               fallbackAnchor.text ? messageTextSignature(fallbackAnchor) : '',
@@ -2763,12 +2762,30 @@
 
           map.clear();
           order.length = 0;
-          // The restored position is only a navigation checkpoint.
-          // The chronological pass will still rebuild and verify the selected range.
         }
-        await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null, boundary);
-        navigationMessages = [...map.values()];
-        navigationSequence = buildNavigationSequence(navigationWindows);
+
+        if (mode === 'full') {
+          // Full capture no longer extracts the whole chat while travelling
+          // upward. It fixes the lower boundary first, then navigates quickly
+          // to the top. The user may manually drag/scroll upward at any time;
+          // the next probe simply continues from the new viewport.
+          map.clear();
+          order.length = 0;
+          await reachTopWithoutCapture(0, { fullCapture: true });
+        } else {
+          // Image recovery still benefits from a rich upward scan, and fragment
+          // capture may need to discover its explicit start marker.
+          await reachTop(
+            map,
+            order,
+            settings,
+            navigationWindows,
+            mode === 'fragment' ? selectedFragment.start || null : null,
+            boundary
+          );
+          navigationMessages = [...map.values()];
+          navigationSequence = buildNavigationSequence(navigationWindows);
+        }
       } else if (mode === 'retry-walk') {
         if (!existingDraftId) throw new Error('Для повторного прохода нужен сохранённый незавершённый проход.');
         const stored = await chrome.storage.local.get('draft:' + existingDraftId);
@@ -2827,11 +2844,14 @@
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
         navigationFirstSignature = firstAtTop ? turnTextSignature(firstAtTop) : '';
         await progress(
-          'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
+          mode === 'full'
+            ? 'Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз'
+            : 'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
           navigationHighWater,
           {
             phase: 'top',
             navigationHighWater,
+            navigationOnly: mode === 'full',
             force: true
           }
         );
