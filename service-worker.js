@@ -9,6 +9,7 @@ import {
 } from './lib/archive-store.mjs';
 
 import {
+  buildResumeTailSignatures,
   exportTailSignatures,
   findExportTailAnchor,
   hashText,
@@ -1038,28 +1039,39 @@ async function cancelCapture() {
     }
   } catch (_) {}
 
-  if (
-    job.captureTarget === 'copy' &&
-    job.captureTabId != null &&
-    job.captureTabId !== job.sourceTabId
-  ) {
-    await chrome.tabs.remove(job.captureTabId).catch(() => {});
+  // Give the content collector time to persist its current draft and report
+  // ARCHIVER_CAPTURE_FAILED(status=cancelled). Do not close the working tab:
+  // its scroll position is the cheapest and most reliable resume checkpoint.
+  const waitUntil = Date.now() + 3500;
+  while (Date.now() < waitUntil) {
+    await sleep(120);
+    const current = await getJob();
+    if (current?.jobId !== job.jobId || current?.status === 'cancelled') {
+      return { ok: true, job: current || job };
+    }
   }
+
+  const preservedDraft = job.draftId ? await getDraft(job.draftId) : null;
+  const canRecover = Boolean(
+    preservedDraft?.messages?.length &&
+    job.captureTabId != null
+  );
   await cleanupTemporaryBaseline(job);
 
   const next = await appendRunLog({
     status: 'cancelled',
-    message: 'Сбор остановлен.',
+    message: canRecover
+      ? 'Сбор остановлен. Сохранённую часть можно продолжить с рабочей вкладки.'
+      : 'Сбор остановлен.',
     finishedAt: Date.now(),
-    captureTabId: null,
-    recoveryAvailable: false,
-    recoveryDraftId: '',
-    draftId: '',
-    draftCount: 0
+    recoveryAvailable: canRecover,
+    draftCount: preservedDraft?.messages?.length || Number(job.draftCount || 0)
   }, {
     level: 'warn',
-    code: 'RUN_CANCELLED',
-    message: 'Сбор остановлен пользователем.',
+    code: canRecover ? 'RUN_CANCELLED_RECOVERABLE' : 'RUN_CANCELLED',
+    message: canRecover
+      ? 'Сбор остановлен пользователем; рабочая вкладка и контрольная точка сохранены.'
+      : 'Сбор остановлен пользователем.',
     phase: job.phase || '',
     count: Number(job.count || 0)
   });
@@ -1073,7 +1085,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
 
   let preservedCaptureTabId = null;
   if (
-    status === 'error' &&
+    ['error', 'cancelled'].includes(status) &&
     draftId &&
     ['full', 'fragment', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
     job.captureTabId != null
@@ -1174,6 +1186,7 @@ async function resumeFailedCaptureFromWorkingTab() {
   const jobId = makeJobId();
   const resumeMode = draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
     ? 'resume-draft' : 'retry-walk';
+  const resumeTailSignatures = buildResumeTailSignatures(draft.messages, 4);
   const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
     jobId,
@@ -1200,6 +1213,7 @@ async function resumeFailedCaptureFromWorkingTab() {
       mode: resumeMode,
       resumeAnchorId: lastMessage.id || '',
       resumeAnchorSignature: messageSignature(lastMessage.role, lastMessage.text),
+      resumeTailSignatures,
       existingDraftId: draft.id,
       fixedCaptureBoundary: boundary
     });
@@ -1235,30 +1249,53 @@ async function resumeFailedCaptureFromWorkingTab() {
   return { ok: true, job: next };
 }
 
+function partialArchiveIdForSource(sourceUrl = '') {
+  const key = conversationKey(sourceUrl) || String(sourceUrl || '');
+  return key ? 'partial-' + hashText(key) : '';
+}
+
 async function saveUnfinishedAsPartial(passId = '') {
   const draft = await getDraft(passId);
   if (!draft?.messages?.length) throw new Error('Незавершённый проход не найден.');
-  const id = 'partial-' + draft.id;
+
+  const id = partialArchiveIdForSource(draft.sourceUrl);
+  if (!id) throw new Error('Не удалось определить исходный чат для частичного архива.');
+
   const existing = await getArchive(id);
-  if (existing?.id) return { ok: true, archiveId: id, messageCount: existing.messages.length, alreadySaved: true };
-  const messages = draft.messages;
+  const messages = draft.messages.slice();
   const archive = {
+    ...(existing || {}),
     ...draft,
     id,
-    title: 'Частичный архив — ' + (draft.title || 'ChatGPT'),
+    title: draft.title || existing?.title || 'ChatGPT',
     capturedAt: new Date().toISOString(),
-    messages: messages.slice(),
+    messages,
     messageCount: messages.length,
     imageCount: messages.reduce((n, item) => n + (item.images?.length || 0), 0),
     partial: true,
     complete: false,
-    isFragment: true,
+    isFragment: false,
     partialSourceDraftId: draft.id,
-    capturePhase: draft.capturePhase || 'top',
+    capturePhase: draft.capturePhase || 'walk',
     lastCaptureMode: 'partial-draft'
   };
+
   await putArchive(archive);
-  return { ok: true, archiveId: id, messageCount: messages.length };
+
+  const currentCanonical = await getArchiveForUrl(draft.sourceUrl || '');
+  if (!currentCanonical?.complete || currentCanonical?.partial ||
+      messages.length >= (currentCanonical?.messages?.length || 0)) {
+    await indexArchive(archive);
+    await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+  }
+
+  return {
+    ok: true,
+    archiveId: id,
+    messageCount: messages.length,
+    updated: Boolean(existing?.id),
+    resumable: true
+  };
 }
 
 async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
@@ -1307,6 +1344,7 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
     mode: draft.capturePhase === 'top' && ['full', 'fragment'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
     resumeNavigation: draft.capturePhase === 'top',
+    resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
     captureTarget
@@ -1414,7 +1452,8 @@ function partialMessageKey(item) {
 
 async function reconcilePartialArchive(draftId, completed) {
   if (!draftId || !completed?.messages?.length) return { applied: false, reason: 'no-draft' };
-  const partialId = 'partial-' + draftId;
+  const partialId = partialArchiveIdForSource(completed.sourceUrl || '');
+  if (!partialId) return { applied: false, reason: 'no-partial-id' };
   const partial = await getArchive(partialId);
   if (!partial?.partial || !partial.messages?.length) return { applied: false, reason: 'no-partial' };
 
