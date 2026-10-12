@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.83
+
+- Turn “Сохранить частичный архив” into a persistent autosave binding instead of a one-off draft copy.
+- Mirror every later unfinished-pass checkpoint into the linked partial archive, including after resume and after an interrupted resumed run.
+- Preserve partial-save metadata when the content collector rewrites checkpoint drafts.
+- Verify the saved partial archive immediately in the popup and report failure instead of showing a false success state.
+- Show that partial autosave is active and open the saved-chat library after a successful partial save.
+- Prevent partial snapshots from replacing an existing completed archive in the canonical conversation index.
+
 ## 0.3.82
 
 - Read the remote version through the GitHub API first instead of relying on raw.githubusercontent.com CDN propagation.
