@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.85
+
+- Bind each unfinished draft to the concrete Chrome tab where its latest checkpoint was captured, using a lightweight storage record separate from the large draft payload.
+- Offer an explicit “Продолжить в той же вкладке” action when that exact tab is still open on the same conversation.
+- Keep ordinary “Дособрать” as a separate fresh-resume path instead of silently forcing the preserved tab.
+- Preserve the draft-to-tab link across service-worker restarts and later jobs; validate the tab by conversation identity before using it.
+- Clean the recovery-tab binding when the unfinished draft is deleted or successfully completed.
+
 ## 0.3.84
 
 - Pin each update run to one Git commit and one tree SHA.

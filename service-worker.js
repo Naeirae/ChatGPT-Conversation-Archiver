@@ -44,6 +44,7 @@ const SETTINGS_KEY = 'archiverSettings';
 const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/Naeirae/ChatGPT-Conversation-Archiver/main/manifest.json';
 const UPDATE_ALARM = 'archiver-update-check';
 const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
+const DRAFT_RECOVERY_TAB_PREFIX = 'draftRecoveryTab:';
 
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
@@ -73,6 +74,53 @@ const {
 const summarize = summarizeArchive;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function setDraftRecoveryTab(draftId, {
+  tabId = null,
+  sourceUrl = '',
+  sourceTabId = null,
+  captureTarget = '',
+  jobId = ''
+} = {}) {
+  if (!draftId || tabId == null) return null;
+  const record = {
+    draftId,
+    tabId: Number(tabId),
+    sourceUrl: String(sourceUrl || ''),
+    sourceTabId: sourceTabId == null ? null : Number(sourceTabId),
+    captureTarget: captureTarget === 'current' ? 'current' : 'copy',
+    jobId: String(jobId || ''),
+    updatedAt: Date.now()
+  };
+  await chrome.storage.local.set({ [DRAFT_RECOVERY_TAB_PREFIX + draftId]: record });
+  return record;
+}
+
+async function getDraftRecoveryTabRecord(draftId) {
+  if (!draftId) return null;
+  const key = DRAFT_RECOVERY_TAB_PREFIX + draftId;
+  return (await chrome.storage.local.get(key))[key] || null;
+}
+
+async function removeDraftRecoveryTab(draftId) {
+  if (!draftId) return;
+  await chrome.storage.local.remove(DRAFT_RECOVERY_TAB_PREFIX + draftId);
+}
+
+async function resolveDraftRecoveryTab(draftId, sourceUrl = '') {
+  const record = await getDraftRecoveryTabRecord(draftId);
+  if (!record?.tabId) return { available: false, record: null, tab: null };
+
+  const tab = await chrome.tabs.get(record.tabId).catch(() => null);
+  const expected = conversationKey(sourceUrl || record.sourceUrl || '');
+  const actual = conversationKey(tab?.url || '');
+  if (!tab?.id || !expected || actual !== expected) {
+    await removeDraftRecoveryTab(draftId).catch(() => {});
+    return { available: false, record: null, tab: null };
+  }
+
+  return { available: true, record, tab };
+}
 
 async function listLinkedArchives() {
   const keys = typeof chrome.storage.local.getKeys === 'function'
@@ -1077,6 +1125,15 @@ async function cancelCapture() {
     preservedDraft?.messages?.length &&
     job.captureTabId != null
   );
+  if (canRecover && job.draftId) {
+    await setDraftRecoveryTab(job.draftId, {
+      tabId: job.captureTabId,
+      sourceUrl: job.sourceUrl || '',
+      sourceTabId: job.sourceTabId ?? job.tabId ?? null,
+      captureTarget: job.captureTarget || '',
+      jobId: job.jobId
+    });
+  }
   await cleanupTemporaryBaseline(job);
 
   const next = await appendRunLog({
@@ -1132,6 +1189,16 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
 
   const recoveryAvailable = Boolean(preservedCaptureTabId != null && draftId);
 
+  if (recoveryAvailable) {
+    await setDraftRecoveryTab(draftId, {
+      tabId: preservedCaptureTabId,
+      sourceUrl: job.sourceUrl || '',
+      sourceTabId: job.sourceTabId ?? job.tabId ?? null,
+      captureTarget: job.captureTarget || '',
+      jobId: job.jobId
+    });
+  }
+
   if (draftId) {
     const failedDraft = await getDraft(draftId);
     if (failedDraft?.partialSaveEnabled) {
@@ -1173,6 +1240,22 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     count: Number(job.count || 0)
   });
   await recordRunHistory(next);
+}
+
+async function focusUnfinishedRecoveryTab(passId = '') {
+  const draft = await getDraft(passId);
+  if (!draft?.id) throw new Error('Сохранённый незавершённый проход не найден.');
+
+  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
+  if (!recovery.available) {
+    throw new Error('Сохранённая рабочая вкладка этого прохода уже недоступна.');
+  }
+
+  await chrome.tabs.update(recovery.tab.id, { active: true });
+  if (recovery.tab.windowId != null) {
+    await chrome.windows.update(recovery.tab.windowId, { focused: true }).catch(() => {});
+  }
+  return { ok: true, tabId: recovery.tab.id };
 }
 
 async function focusRecoverableCaptureTab() {
@@ -1383,10 +1466,61 @@ async function saveUnfinishedAsPartial(passId = '') {
   return syncPartialArchiveFromDraft(draft, { enable: true });
 }
 
-async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
-  // A resumable live tab is preferable to starting a new full capture.
+async function resumeUnfinishedInSavedTab(passId = '') {
+  const draft = await getDraft(passId);
+  if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+
+  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
+  if (!recovery.available) {
+    throw new Error('Та вкладка, в которой оборвался этот проход, уже недоступна.');
+  }
+
   const activeJob = await getJob();
-  if (['error', 'cancelled'].includes(activeJob?.status) && activeJob.recoveryAvailable &&
+  if (activeJob && ['starting', 'running', 'paused'].includes(activeJob.status)) {
+    const sameRun = activeJob.draftId === passId || activeJob.recoveryDraftId === passId;
+    if (!sameRun) {
+      throw new Error('Другой сбор ещё активен. Остановите его перед восстановлением этой вкладки.');
+    }
+  }
+
+  const boundary = draft.captureBoundary || null;
+  if (!boundary?.kind || !boundary?.key) {
+    throw new Error('У незавершённого прохода нет нижней метки. Без неё безопасно продолжить нельзя.');
+  }
+
+  // Recreate the minimal failed-job envelope so the existing same-tab resume
+  // path can be reused even after another job or service-worker restart.
+  await setJob({
+    status: 'error',
+    draftId: passId,
+    recoveryDraftId: passId,
+    draftCount: draft.messages.length,
+    recoveryAvailable: true,
+    captureTabId: recovery.tab.id,
+    sourceTabId: recovery.record.sourceTabId ?? recovery.tab.id,
+    tabId: recovery.record.sourceTabId ?? recovery.tab.id,
+    sourceUrl: draft.sourceUrl || recovery.tab.url || '',
+    captureBoundary: boundary,
+    captureMode: draft.captureMode || 'resume-draft',
+    captureTarget: recovery.record.captureTarget || 'copy',
+    partialSaveEnabled: Boolean(draft.partialSaveEnabled),
+    partialArchiveId: draft.partialArchiveId || '',
+    message: 'Восстанавливаю незавершённый проход в той же вкладке.'
+  });
+
+  return resumeFailedCaptureFromWorkingTab();
+}
+
+async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', resumeStrategy = 'auto') {
+  // "auto" preserves previous behavior. UI can explicitly choose "fresh" or
+  // "saved-tab" so a manually positioned interrupted tab is never discarded.
+  if (resumeStrategy === 'saved-tab') {
+    return resumeUnfinishedInSavedTab(passId);
+  }
+
+  const activeJob = await getJob();
+  if (resumeStrategy !== 'fresh' &&
+      ['error', 'cancelled'].includes(activeJob?.status) && activeJob.recoveryAvailable &&
       activeJob.captureTabId != null &&
       (activeJob.draftId === passId || activeJob.recoveryDraftId === passId)) {
     return resumeFailedCaptureFromWorkingTab();
@@ -1442,6 +1576,7 @@ async function deleteDraftAndRecoveryTab(draftId = '') {
   if (!targetId) return { ok: true, removed: false };
 
   await removeDraft(targetId);
+  await removeDraftRecoveryTab(targetId).catch(() => {});
 
   if (job?.draftId === targetId) {
     if (
@@ -1592,6 +1727,7 @@ async function handleCaptureComplete(message) {
   for (const draftId of completedDraftIds) {
     if (partialMerge.reason === 'unmatched' && draftId === partialSourceId) continue;
     await removeDraft(draftId).catch(() => {});
+    await removeDraftRecoveryTab(draftId).catch(() => {});
   }
 
   if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
@@ -3330,12 +3466,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const draft = job?.draftId ? await getDraft(job.draftId) : null;
         const drafts = await listDrafts();
-        return {
-          ok: true,
-          job,
-          archive: summarize(archive),
-          unfinishedPass: summarize(draft),
-          unfinishedPasses: drafts.map(item => ({
+        const unfinishedPasses = [];
+        for (const item of drafts) {
+          const recoveryTab = await resolveDraftRecoveryTab(item.id, item.sourceUrl || '');
+          unfinishedPasses.push({
             ...summarize(item),
             complete: Boolean(item.complete),
             error: item.error || '',
@@ -3346,8 +3480,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             partialSavedAt: item.partialSavedAt || '',
             navigationHighWater: Number(item.navigationHighWater || 0),
             chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
-            hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key)
-          })),
+            hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key),
+            recoveryTabAvailable: recoveryTab.available,
+            recoveryTabId: recoveryTab.available ? recoveryTab.record.tabId : null,
+            recoveryCaptureTarget: recoveryTab.available ? recoveryTab.record.captureTarget : ''
+          });
+        }
+        return {
+          ok: true,
+          job,
+          archive: summarize(archive),
+          unfinishedPass: summarize(draft),
+          unfinishedPasses,
           linkedDoc,
           savedArchives: await listLinkedArchives(),
           canContinue: Boolean(currentArchive?.messages?.length),
@@ -3375,13 +3519,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await clearRunHistory();
       case 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB':
         return await focusRecoverableCaptureTab();
+      case 'ARCHIVER_FOCUS_UNFINISHED_RECOVERY_TAB':
+        return await focusUnfinishedRecoveryTab(message.passId || message.draftId || '');
       case 'ARCHIVER_RESUME_FAILED_CAPTURE':
         return await resumeFailedCaptureFromWorkingTab();
       case 'ARCHIVER_RESUME_UNFINISHED_PASS':
         return await resumeSavedUnfinishedPass(
           message.passId || message.draftId || '',
-          message.captureTarget || 'copy'
+          message.captureTarget || 'copy',
+          message.resumeStrategy || 'auto'
         );
+      case 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB':
+        return await resumeUnfinishedInSavedTab(message.passId || message.draftId || '');
       case 'ARCHIVER_SAVE_UNFINISHED_PARTIAL':
         return await saveUnfinishedAsPartial(message.passId || message.draftId || '');
       case 'ARCHIVER_DELETE_DRAFT':
@@ -3418,6 +3567,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           draftId,
           draftCount: Math.max(Number(job.draftCount || 0), Number(message.draftCount || 0))
         });
+
+        const recoveryTabId = sender?.tab?.id ?? job.captureTabId;
+        if (recoveryTabId != null) {
+          await setDraftRecoveryTab(draftId, {
+            tabId: recoveryTabId,
+            sourceUrl: job.sourceUrl || sender?.tab?.url || '',
+            sourceTabId: job.sourceTabId ?? job.tabId ?? null,
+            captureTarget: job.captureTarget || '',
+            jobId: job.jobId
+          });
+        }
 
         const checkpointDraft = await getDraft(draftId);
         if (checkpointDraft?.partialSaveEnabled) {
@@ -3606,7 +3766,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
   if (!job) return;
 
   if (
-    job.status === 'error' &&
+    ['error', 'cancelled'].includes(job.status) &&
     job.recoveryAvailable &&
     job.captureTabId === tabId
   ) {
