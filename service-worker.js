@@ -126,6 +126,8 @@ async function listLinkedArchives() {
     rows.push({
       id: archive.id,
       isFragment: Boolean(archive.isFragment),
+      partial: Boolean(archive.partial),
+      complete: archive.complete !== false && !archive.partial,
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       imageCount: archive.imageCount || 0,
@@ -1156,7 +1158,7 @@ async function resumeFailedCaptureFromWorkingTab() {
   const failedJob = await getJob();
   if (
     !failedJob ||
-    failedJob.status !== 'error' ||
+    !['error', 'cancelled'].includes(failedJob.status) ||
     !failedJob.draftId ||
     failedJob.captureTabId == null
   ) {
@@ -1283,8 +1285,7 @@ async function saveUnfinishedAsPartial(passId = '') {
   await putArchive(archive);
 
   const currentCanonical = await getArchiveForUrl(draft.sourceUrl || '');
-  if (!currentCanonical?.complete || currentCanonical?.partial ||
-      messages.length >= (currentCanonical?.messages?.length || 0)) {
+  if (!currentCanonical?.id || currentCanonical.partial || currentCanonical.id === archive.id) {
     await indexArchive(archive);
     await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
   }
@@ -1301,7 +1302,7 @@ async function saveUnfinishedAsPartial(passId = '') {
 async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
   // A resumable live tab is preferable to starting a new full capture.
   const activeJob = await getJob();
-  if (activeJob?.status === 'error' && activeJob.recoveryAvailable &&
+  if (['error', 'cancelled'].includes(activeJob?.status) && activeJob.recoveryAvailable &&
       activeJob.captureTabId != null &&
       (activeJob.draftId === passId || activeJob.recoveryDraftId === passId)) {
     return resumeFailedCaptureFromWorkingTab();
