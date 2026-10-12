@@ -24,7 +24,15 @@
   const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { running: false, jobId: null, cancel: false, paused: false, pauseCheckpoint: null, resumeFailure: '' };
+  const state = {
+    running: false,
+    jobId: null,
+    cancel: false,
+    paused: false,
+    pauseCheckpoint: null,
+    resumeFailure: '',
+    lastScrollDirection: ''
+  };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
@@ -1626,13 +1634,15 @@
   }
 
   async function physicalScroll(direction, bursts = 7) {
+    const normalizedDirection = direction === 'down' ? 'down' : 'up';
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
       jobId: state.jobId,
-      direction,
+      direction: normalizedDirection,
       bursts
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
+    state.lastScrollDirection = normalizedDirection;
     await waitForTurnSettle();
     return result;
   }
@@ -1689,6 +1699,41 @@
     }
 
     return null;
+  }
+
+
+  function currentResumeWindowSignatures(limit = 6) {
+    const visible = visibleMeaningfulSignatures()
+      .map(item => item.externalSignature)
+      .filter(Boolean);
+    return visible.slice(-Math.max(2, Number(limit) || 6));
+  }
+
+  function checkpointWindowVisible(signatures) {
+    const target = (signatures || []).filter(Boolean);
+    if (target.length < 2) return false;
+    const current = visibleMeaningfulSignatures()
+      .map(item => item.externalSignature)
+      .filter(Boolean);
+    const maxLength = Math.min(target.length, current.length, 6);
+    for (let length = maxLength; length >= 2; length--) {
+      const suffix = target.slice(-length);
+      for (let start = 0; start <= current.length - length; start++) {
+        let same = true;
+        for (let offset = 0; offset < length; offset++) {
+          if (current[start + offset] !== suffix[offset]) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return true;
+      }
+    }
+    return false;
+  }
+
+  function oppositeScrollDirection(direction) {
+    return direction === 'up' ? 'down' : 'up';
   }
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
@@ -2006,39 +2051,64 @@
     anchorSignature,
     tailSignatures,
     knownSignatures,
+    checkpointSignatures,
+    lastScrollDirection,
     map,
     order,
-    settings,
-    phase = 'walk'
+    settings
   ) {
-    if (phase !== 'walk') {
-      return reachResumeAnchor(
-        anchorId,
-        anchorSignature,
-        tailSignatures,
-        map,
-        order,
-        settings,
-        { allowDownwardFallback: true }
-      );
+    const known = new Set((knownSignatures || []).filter(Boolean));
+    const savedDirection = lastScrollDirection === 'up' ? 'up' : 'down';
+
+    if (checkpointWindowVisible(checkpointSignatures)) {
+      await progress('Сохранённая контрольная точка уже видна. Продолжаю с неё.', map.size, {
+        phase: 'top',
+        anchorReached: true,
+        resumeSearchDirection: savedDirection,
+        force: true
+      });
+      return {
+        id: anchorId,
+        signature: anchorSignature,
+        matchLength: Math.min(6, (checkpointSignatures || []).length),
+        checkpointMatched: true
+      };
     }
 
-    const known = new Set((knownSignatures || []).filter(Boolean));
-    let direction = visibleHasKnownSignatures(known) ? 'down' : 'up';
-    let foundKnown = direction === 'down';
+    let knownVisible = visibleHasKnownSignatures(known);
+    let direction = knownVisible
+      ? savedDirection
+      : oppositeScrollDirection(savedDirection);
+    let crossedIntoKnown = knownVisible;
     let unchanged = 0;
     let previousSignature = '';
 
-    for (let i = 0; i < 520; i++) {
+    for (let i = 0; i < 600; i++) {
       await waitIfPaused();
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
+      if (checkpointWindowVisible(checkpointSignatures)) {
+        await progress('Найдена сохранённая контрольная точка.', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          anchorReached: true,
+          resumeSearchDirection: direction,
+          force: true
+        });
+        return {
+          id: anchorId,
+          signature: anchorSignature,
+          matchLength: Math.min(6, (checkpointSignatures || []).length),
+          checkpointMatched: true
+        };
+      }
+
       const tailMatch = findResumeTailMatch(tailSignatures);
-      if (tailMatch) {
+      if (tailMatch && savedDirection === 'down') {
         await progress(
-          'Найден сохранённый стык по ' + tailMatch.matchLength + ' соседним репликам.',
+          'Найден сохранённый хвост по ' + tailMatch.matchLength + ' соседним репликам.',
           map.size,
           {
             phase: 'top',
@@ -2052,8 +2122,8 @@
         return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
       }
 
-      if (hasResumeAnchor(anchorId, anchorSignature)) {
-        await progress('Найдена последняя сохранённая реплика незавершённого прохода.', map.size, {
+      if (savedDirection === 'down' && hasResumeAnchor(anchorId, anchorSignature)) {
+        await progress('Найдена последняя сохранённая реплика.', map.size, {
           phase: 'top',
           iteration: i + 1,
           anchorReached: true,
@@ -2063,14 +2133,14 @@
         return { id: anchorId, signature: anchorSignature, matchLength: 1 };
       }
 
-      const knownVisible = visibleHasKnownSignatures(known);
-      if (!foundKnown && knownVisible) {
-        foundKnown = true;
-        direction = 'down';
+      knownVisible = visibleHasKnownSignatures(known);
+      if (!crossedIntoKnown && knownVisible) {
+        crossedIntoKnown = true;
+        direction = savedDirection;
         unchanged = 0;
         previousSignature = '';
         await progress(
-          'Нашёл уже сохранённый участок; теперь иду вниз к последнему сохранённому стыку…',
+          'Найден сохранённый участок; продолжаю в направлении последней прокрутки…',
           map.size,
           {
             phase: 'top',
@@ -2081,9 +2151,9 @@
         );
       } else {
         await progress(
-          foundKnown
-            ? 'Иду вниз по сохранённому участку к месту продолжения…'
-            : 'Текущий участок ещё не сохранён; иду вверх до известной части…',
+          knownVisible
+            ? 'Иду по сохранённому участку в направлении последней прокрутки…'
+            : 'Текущий участок неизвестен; иду против последней прокрутки до сохранённой части…',
           map.size,
           {
             phase: 'top',
@@ -2103,14 +2173,14 @@
 
       if (unchanged >= 6) {
         throw new Error(
-          foundKnown
-            ? 'Сохранённый участок найден, но последнюю контрольную точку восстановить не удалось.'
-            : 'Не удалось найти ни одного сохранённого участка незавершённого прохода.'
+          crossedIntoKnown
+            ? 'Сохранённый участок найден, но контрольную точку продолжения восстановить не удалось.'
+            : 'Не удалось дойти до сохранённого участка в направлении, противоположном последней прокрутке.'
         );
       }
     }
 
-    throw new Error('Не удалось восстановить направленную точку продолжения незавершённого прохода.');
+    throw new Error('Не удалось восстановить контрольную точку незавершённого прохода.');
   }
 
   async function saveRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
@@ -2148,6 +2218,10 @@
       captureBoundary: current.captureBoundary || boundary,
       navigationHighWater: Number(current.navigationHighWater || 0),
       chronologicalCount: messages.length,
+      lastScrollDirection:
+        state.lastScrollDirection ||
+        (current.phase === 'walk' ? 'down' : 'up'),
+      resumeWindowSignatures: currentResumeWindowSignatures(6),
       messages,
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       complete: false,
@@ -2249,6 +2323,7 @@
     state.jobId = jobId;
     state.cancel = false;
     state.paused = false;
+    state.lastScrollDirection = '';
     lastProgressAt = 0;
 
     const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment'].includes(options.mode) ? options.mode : 'full';
@@ -2373,10 +2448,12 @@
             resumeAnchorSignature,
             resumeTailSignatures,
             knownSignatures,
+            existingPass.resumeWindowSignatures || [],
+            existingPass.lastScrollDirection ||
+              (existingPass.capturePhase === 'walk' ? 'down' : 'up'),
             map,
             order,
-            settings,
-            existingPass.capturePhase || 'walk'
+            settings
           );
         } else {
           matched = await reachResumeAnchor(
@@ -2734,6 +2811,10 @@
             captureBoundary: current.captureBoundary || fixedCaptureBoundary || null,
             navigationHighWater: Number(current.navigationHighWater || 0),
             chronologicalCount: draftMessages.length,
+            lastScrollDirection:
+              state.lastScrollDirection ||
+              (chronologicalStarted ? 'down' : 'up'),
+            resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
             complete: false,
@@ -2769,6 +2850,7 @@
       state.paused = false;
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
+      state.lastScrollDirection = '';
     }
   }
 
