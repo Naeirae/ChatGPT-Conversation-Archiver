@@ -336,6 +336,7 @@ function renderSavedArchives(items = []) {
     meta.className = 'archive-link-meta';
     const parts = [];
     if (item.isFragment) parts.push('Фрагмент переписки');
+    if (/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/share\//i.test(item.sourceUrl || '')) parts.push('Опубликованная переписка');
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
     if (item.capturedAt) {
       try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
