@@ -128,6 +128,8 @@ async function listLinkedArchives() {
       isFragment: Boolean(archive.isFragment),
       partial: Boolean(archive.partial),
       complete: archive.complete !== false && !archive.partial,
+      partialSourceDraftId: archive.partialSourceDraftId || '',
+      capturePhase: archive.capturePhase || '',
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       imageCount: archive.imageCount || 0,
