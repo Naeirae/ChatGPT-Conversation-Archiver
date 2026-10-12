@@ -178,6 +178,7 @@ function renderUnfinishedPasses(items = []) {
     ];
     if (item.navigationHighWater) parts.push('найдено на первом проходе: ' + item.navigationHighWater);
     if (item.hasBoundary) parts.push('конец исходного чата сохранён');
+    if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
     if (item.partialSaveEnabled) parts.push('частичный архив сохраняется автоматически');
     meta.textContent = parts.join(' · ');
 
@@ -194,7 +195,8 @@ function renderUnfinishedPasses(items = []) {
         const result = await chrome.runtime.sendMessage({
           type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
           passId: item.id,
-          captureTarget: $('captureTarget').value
+          captureTarget: $('captureTarget').value,
+          resumeStrategy: 'fresh'
         });
         if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый проход.');
         render({ ...state, job: result.job });
@@ -204,6 +206,30 @@ function renderUnfinishedPasses(items = []) {
         resume.disabled = false;
       }
     };
+
+    let resumeSameTab = null;
+    if (item.recoveryTabAvailable) {
+      resumeSameTab = document.createElement('button');
+      resumeSameTab.textContent = 'Продолжить в той же вкладке';
+      resumeSameTab.onclick = async () => {
+        resumeSameTab.disabled = true;
+        resume.disabled = true;
+        setStatus('Продолжаю в сохранённой рабочей вкладке…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB',
+            passId: item.id
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить в сохранённой вкладке.');
+          render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          resumeSameTab.disabled = false;
+          resume.disabled = false;
+        }
+      };
+    }
 
     const savePartial = document.createElement('button');
     savePartial.textContent = item.partialSaveEnabled
@@ -290,7 +316,9 @@ function renderUnfinishedPasses(items = []) {
       }
     };
 
-    actions.append(resume, savePartial, view, copy, remove);
+    actions.append(resume);
+    if (resumeSameTab) actions.append(resumeSameTab);
+    actions.append(savePartial, view, copy, remove);
     row.append(head, meta, actions);
     list.appendChild(row);
   }
