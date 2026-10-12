@@ -79,15 +79,12 @@ async function load() {
   (pass.messages || []).forEach((message, index) => list.appendChild(renderMessage(message, index)));
 
   const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
-  const isActiveRecovery = Boolean(
-    state?.unfinishedPass?.id === passId &&
-    ['error', 'cancelled'].includes(state?.job?.status) &&
-    state?.job?.recoveryAvailable
-  );
+  const passState = (state?.unfinishedPasses || []).find(item => item.id === passId) || null;
+  const hasSavedRecoveryTab = Boolean(passState?.recoveryTabAvailable);
   const canResume = Boolean(pass.captureBoundary?.kind && pass.captureBoundary?.key && pass.sourceUrl);
   $('resume').classList.toggle('hidden', !canResume);
-  $('resume').textContent = isActiveRecovery ? 'Продолжить в сохранённой вкладке' : 'Продолжить';
-  $('openCapture').classList.toggle('hidden', !isActiveRecovery);
+  $('resume').textContent = hasSavedRecoveryTab ? 'Продолжить в сохранённой вкладке' : 'Продолжить';
+  $('openCapture').classList.toggle('hidden', !hasSavedRecoveryTab);
 
   const compared = await chrome.runtime.sendMessage({
     type: 'ARCHIVER_COMPARE_UNFINISHED_PASS',
@@ -149,26 +146,36 @@ $('jumpLast').onclick = () => {
 };
 
 $('openCapture').onclick = async () => {
-  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB' });
-  if (!result?.ok) alert(result?.error || 'Не удалось открыть вкладку сбора.');
+  const passId = passIdFromUrl();
+  const result = await chrome.runtime.sendMessage({
+    type: 'ARCHIVER_FOCUS_UNFINISHED_RECOVERY_TAB',
+    passId
+  });
+  if (!result?.ok) alert(result?.error || 'Не удалось открыть сохранённую вкладку сбора.');
 };
 
 $('resume').onclick = async () => {
   const passId = passIdFromUrl();
   const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
-  const isActiveRecovery = Boolean(
-    state?.unfinishedPass?.id === passId &&
-    ['error', 'cancelled'].includes(state?.job?.status) &&
-    state?.job?.recoveryAvailable
-  );
+  const passState = (state?.unfinishedPasses || []).find(item => item.id === passId) || null;
+  const hasSavedRecoveryTab = Boolean(passState?.recoveryTabAvailable);
   const result = await chrome.runtime.sendMessage(
-    isActiveRecovery
-      ? { type: 'ARCHIVER_RESUME_FAILED_CAPTURE' }
-      : { type: 'ARCHIVER_RESUME_UNFINISHED_PASS', passId, captureTarget: 'copy' }
+    hasSavedRecoveryTab
+      ? { type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB', passId }
+      : {
+          type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+          passId,
+          captureTarget: 'copy',
+          resumeStrategy: 'fresh'
+        }
   );
   if (!result?.ok) {
     alert(result?.error || 'Не удалось продолжить незавершённый проход.');
     return;
   }
-  alert('Архиватор восстанавливает сохранённый участок и продолжает сбор в нужном направлении.');
+  alert(
+    hasSavedRecoveryTab
+      ? 'Архиватор продолжает сбор в той же сохранённой вкладке.'
+      : 'Архиватор восстанавливает сохранённый участок и продолжает сбор.'
+  );
 };
