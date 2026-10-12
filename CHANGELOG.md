@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.87
+
+- Make the first phase of a full capture navigation-only: fix the lower snapshot boundary first, then travel quickly to the beginning without accumulating the entire conversation in memory.
+- Allow manual upward scrolling in the same capture tab while automatic top navigation is running; no separate manual mode is required.
+- Replace the 320-step top-navigation limit with a two-hour time budget so very large conversations do not fail merely because they need more scroll cycles.
+- Replace the 900-step chronological-pass limit with a four-hour time budget.
+- Capture the current viewport before every downward movement, including the very first viewport at the top.
+- Verify overlap between neighbouring downward viewports; if a large scroll or manual jump skips past the overlap, move back up and re-cover the gap instead of silently saving an incomplete archive.
+- Keep image-recovery and explicit fragment-start scans on their richer upward traversal because those modes still need information from the upward pass.
+
 ## 0.3.86
 
 - Fix forward links between split Google Docs on very large exports.
