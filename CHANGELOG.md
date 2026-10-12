@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.84
+
+- Pin each update run to one Git commit and one tree SHA.
+- Download only extension/runtime files instead of the whole repository.
+- Verify every downloaded and written file against its Git blob SHA.
+- Write manifest.json last so the version cannot advance before the runtime files are safely in place.
+- Detect when the selected folder version and the Chrome-loaded extension version differ, instead of reporting a false successful update.
+- Apply the same commit-pinned, manifest-last flow to the PowerShell fallback updater.
+
 ## 0.3.83
 
 - Turn “Сохранить частичный архив” into a persistent autosave binding instead of a one-off draft copy.
