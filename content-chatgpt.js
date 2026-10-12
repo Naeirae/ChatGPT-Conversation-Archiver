@@ -1633,7 +1633,11 @@
     return previous;
   }
 
-  async function physicalScroll(direction, bursts = 7) {
+  async function physicalScroll(
+    direction,
+    bursts = 7,
+    { settleTimeout = 8000, quietWindow = 1400 } = {}
+  ) {
     const normalizedDirection = direction === 'down' ? 'down' : 'up';
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
@@ -1643,7 +1647,7 @@
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
     state.lastScrollDirection = normalizedDirection;
-    await waitForTurnSettle();
+    await waitForTurnSettle(settleTimeout, quietWindow);
     return result;
   }
 
@@ -1857,12 +1861,19 @@
     throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
-  async function reachTopWithoutCapture(existingCount = 0) {
+  async function reachTopWithoutCapture(
+    existingCount = 0,
+    {
+      fullCapture = false,
+      timeoutMs = 2 * 60 * 60 * 1000
+    } = {}
+  ) {
     let confirmedIdle = 0;
     let previousSignature = '';
     let firstVisibleKey = '';
+    const startedAt = Date.now();
 
-    for (let i = 0; i < 320; i++) {
+    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('top', existingCount)) {
@@ -1878,16 +1889,26 @@
         : '';
 
       await progress(
-        'Повторяю только проход вниз: возвращаю рабочую вкладку к началу без пересчёта сообщений…',
+        fullCapture
+          ? 'Этап 1/3: быстро иду к началу · можно помочь вручную, проматывая эту же вкладку вверх'
+          : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений · можно помочь вручную…',
         existingCount,
         {
           phase: 'top',
           iteration: i + 1,
-          retryWalkOnly: true
+          retryWalkOnly: !fullCapture,
+          manualAssistAllowed: true
         }
       );
 
-      await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
+      // This pass is navigation only. Large upward wheel bursts are safe because
+      // no messages are committed here; the real save happens afterwards,
+      // chronologically from top to the already fixed lower boundary.
+      await physicalScroll(
+        'up',
+        16,
+        { settleTimeout: 5000, quietWindow: 550 }
+      );
 
       let nextSignature = visibleTurnSignature();
       let turnsAfter = orderedTurns();
@@ -1903,7 +1924,19 @@
         firstAfter === firstVisibleKey;
 
       if (unchanged) {
-        await sleep(2600);
+        await progress(
+          'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
+          existingCount,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            topIdleConfirmations: confirmedIdle + 1,
+            retryWalkOnly: !fullCapture,
+            manualAssistAllowed: true
+          }
+        );
+
+        await sleep(2200);
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
         const afterWaitFirst = turnsAfter.length
@@ -1913,6 +1946,8 @@
         if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
           confirmedIdle++;
         } else {
+          // Manual scrolling or a newly loaded older chunk simply becomes the
+          // new current position. No separate manual mode is required.
           confirmedIdle = 0;
           nextSignature = afterWaitSignature;
           firstAfter = afterWaitFirst;
@@ -1926,13 +1961,16 @@
 
       if (confirmedIdle >= 5) {
         await progress(
-          'Начало подтверждено. Запускаю заново только хронологический проход вниз…',
+          fullCapture
+            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
           existingCount,
           {
             phase: 'walk',
             iteration: i + 1,
             topIdleConfirmations: confirmedIdle,
-            retryWalkOnly: true,
+            retryWalkOnly: !fullCapture,
+            manualAssistAllowed: true,
             force: true
           }
         );
@@ -1940,7 +1978,11 @@
       }
     }
 
-    throw new Error('Не удалось надежно вернуть рабочую вкладку к началу для повторного прохода вниз.');
+    throw new Error(
+      fullCapture
+        ? 'Не удалось подтвердить начало переписки за два часа непрерывной навигации.'
+        : 'Не удалось надежно вернуть рабочую вкладку к началу за два часа.'
+    );
   }
 
   async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings, { allowDownwardFallback = false } = {}) {
