@@ -2210,7 +2210,15 @@
           // Searching for the persisted anchor must not overwrite the existing
           // checkpoint. Keep the original saved draft untouched until the anchor
           // has been reached and the resumed upward traversal can progress.
-          await reachResumeAnchor(first.id || '', first.text ? messageTextSignature(first) : '', [], map, order, settings);
+          await reachResumeAnchor(
+            first.id || '',
+            first.text ? messageTextSignature(first) : '',
+            resumeTailSignatures,
+            map,
+            order,
+            settings,
+            { allowDownwardFallback: true }
+          );
           map.clear();
           order.length = 0;
           // The second, chronological pass re-reads the whole selected range;
