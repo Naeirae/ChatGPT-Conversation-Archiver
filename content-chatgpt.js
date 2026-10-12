@@ -3424,6 +3424,19 @@
       sendResponse({ ok: true, version: EXTENSION_VERSION });
       return false;
     }
+    if (message && message.type === 'ARCHIVER_CAPTURE_HEALTH') {
+      const sameJob = !message.jobId || message.jobId === state.jobId;
+      sendResponse({
+        ok: true,
+        running: Boolean(state.running && sameJob),
+        paused: Boolean(state.paused && sameJob),
+        cancelling: Boolean(state.cancel && sameJob),
+        jobId: state.jobId || '',
+        version: EXTENSION_VERSION,
+        lastScrollDirection: state.lastScrollDirection || ''
+      });
+      return false;
+    }
     if (message && message.type === 'ARCHIVER_START_CAPTURE') {
       if (state.running) {
         sendResponse({ ok: true, running: true, jobId: state.jobId, version: EXTENSION_VERSION });
