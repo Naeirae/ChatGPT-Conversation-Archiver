@@ -2453,12 +2453,85 @@
     state.recoveryCheckpoint = { at: now, count: messages.length };
   }
 
+  function visibleNavigationRefsLightweight() {
+    return orderedTurns()
+      .map(turn => ({
+        id: String(turnStableKey(turn) || ''),
+        signature: String(turnTextSignature(turn) || '')
+      }))
+      .filter(ref => ref.id || ref.signature);
+  }
+
+  function navigationWindowsOverlap(a, b) {
+    const left = (a || []).filter(ref => ref && (ref.id || ref.signature));
+    const right = (b || []).filter(ref => ref && (ref.id || ref.signature));
+    if (!left.length || !right.length) return false;
+
+    // A stable message ID is strong evidence on its own.
+    for (const x of left) {
+      if (!x.id) continue;
+      if (right.some(y => y.id && y.id === x.id)) return true;
+    }
+
+    // Text signatures can repeat, so require at least two adjacent messages in
+    // the same order before treating two virtualized windows as continuous.
+    const maxLength = Math.min(4, left.length, right.length);
+    for (let length = maxLength; length >= 2; length--) {
+      for (let i = 0; i <= left.length - length; i++) {
+        for (let j = 0; j <= right.length - length; j++) {
+          let same = true;
+          for (let offset = 0; offset < length; offset++) {
+            if (!left[i + offset].signature ||
+                left[i + offset].signature !== right[j + offset].signature) {
+              same = false;
+              break;
+            }
+          }
+          if (same) return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
+    for (let attempt = 0; attempt < 14; attempt++) {
+      const currentRefs = visibleNavigationRefsLightweight();
+      if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
+
+      await progress(
+        'Этап 2/3: слишком большой скачок вниз; возвращаюсь к последнему перекрывающемуся участку…',
+        map.size,
+        {
+          phase: 'walk',
+          continuityRecovery: true,
+          continuityAttempt: attempt + 1,
+          force: attempt === 0
+        }
+      );
+
+      await physicalScroll(
+        'up',
+        1,
+        { settleTimeout: 4000, quietWindow: 650 }
+      );
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+    }
+
+    return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
+  }
+
   async function walkDown(map, order, settings, boundary, { bursts = 3 } = {}) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
+    const startedAt = Date.now();
+    const timeoutMs = 4 * 60 * 60 * 1000;
 
-    for (let i = 0; i < 900; i++) {
+    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
@@ -2470,8 +2543,12 @@
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
 
+      // Always capture the current viewport before moving. This is especially
+      // important for the very first viewport at the real top of the chat.
+      collect(map, order, settings, boundary);
+      const beforeRefs = visibleNavigationRefsLightweight();
+
       if (boundaryIsVisible(boundary)) {
-        collect(map, order, settings, boundary);
         await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
@@ -2491,14 +2568,16 @@
       });
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      // Downward capture must be deliberately granular. Large wheel bursts can
-      // skip virtualized turns even though the boundary itself remains reachable.
+      // Downward capture stays granular. If either virtualization or a manual
+      // jump moves farther than one overlapping message window, recover upward
+      // and re-approach instead of silently accepting a possible gap.
       await physicalScroll('down', bursts);
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+
       if (boundaryIsVisible(boundary)) {
-        collect(map, order, settings, boundary);
         await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
@@ -2509,22 +2588,51 @@
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
         return;
       }
-      collect(map, order, settings);
+
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (beforeRefs.length && afterRefs.length &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Хронологический проход потерял перекрытие между соседними участками. ' +
+            'Сбор остановлен, чтобы не сохранить чат с пропуском.'
+          );
+        }
+
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+        await saveRecoveryCheckpoint(map, order, boundary);
+        continue;
+      }
+
       await saveRecoveryCheckpoint(map, order, boundary);
 
       const nextSignature = visibleTurnSignature();
-      if (nextSignature && nextSignature === signature && signature === previousSignature && map.size === previousSize) stable++;
+      if (nextSignature && nextSignature === signature &&
+          signature === previousSignature && map.size === previousSize) stable++;
       else stable = 0;
 
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 6) break;
+      if (stable >= 6) {
+        throw new Error(
+          'Хронологический проход остановился до зафиксированного конца снимка.'
+        );
+      }
     }
 
-    if (!boundaryIsVisible(boundary)) {
-      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
-    }
+    throw new Error(
+      'Не удалось дойти до зафиксированного конца снимка за четыре часа непрерывного прохода.'
+    );
   }
 
   async function captureConversation(jobId, options = {}) {
