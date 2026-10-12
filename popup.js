@@ -178,6 +178,7 @@ function renderUnfinishedPasses(items = []) {
     ];
     if (item.navigationHighWater) parts.push('найдено на первом проходе: ' + item.navigationHighWater);
     if (item.hasBoundary) parts.push('конец исходного чата сохранён');
+    if (item.partialSaveEnabled) parts.push('частичный архив сохраняется автоматически');
     meta.textContent = parts.join(' · ');
 
     const actions = document.createElement('div');
@@ -205,19 +206,36 @@ function renderUnfinishedPasses(items = []) {
     };
 
     const savePartial = document.createElement('button');
-    savePartial.textContent = 'Сохранить частичный архив';
+    savePartial.textContent = item.partialSaveEnabled
+      ? 'Обновить частичный архив сейчас'
+      : 'Сохранить частичный архив';
+    if (item.partialSaveEnabled) savePartial.classList.add('partial-save-active');
     savePartial.onclick = async () => {
       savePartial.disabled = true;
+      setStatus(item.partialSaveEnabled
+        ? 'Обновляю частичный архив…'
+        : 'Сохраняю текущую часть и включаю автосохранение…');
       try {
         const result = await chrome.runtime.sendMessage({
           type: 'ARCHIVER_SAVE_UNFINISHED_PARTIAL',
           passId: item.id
         });
         if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить частичный архив.');
-        await getState();
+
+        const nextState = await getState();
+        const savedPanel = $('savedArchivesPanel');
+        if (savedPanel) savedPanel.open = true;
+        const unfinishedPanel = $('unfinishedPassesPanel');
+        if (unfinishedPanel) unfinishedPanel.open = true;
+
+        const saved = (nextState?.savedArchives || []).find(record => record.id === result.archiveId);
+        if (!saved || !saved.partial || saved.messageCount < result.messageCount) {
+          throw new Error('Частичный архив записан не полностью: проверка сохранённой копии не прошла.');
+        }
+
         setStatus(
-          (result.updated ? 'Частичный архив обновлён: ' : 'Частичный архив сохранён: ') +
-          result.messageCount + ' сообщений. Его можно продолжить позже.'
+          'Частичный архив сохранён: ' + result.messageCount +
+          ' сообщений. Автосохранение следующих checkpoint включено.'
         );
       } catch (error) {
         setStatus(error.message || String(error), true);
