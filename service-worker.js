@@ -1186,8 +1186,13 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (!lastMessage) throw new Error('В сохранённом незавершённом проходе нет точки, от которой можно продолжить.');
 
   const jobId = makeJobId();
-  const resumeMode = draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
-    ? 'resume-draft' : 'retry-walk';
+  const resumeNavigation = draft.capturePhase === 'top' &&
+    ['full', 'fragment'].includes(draft.captureMode);
+  const resumeMode = resumeNavigation
+    ? draft.captureMode
+    : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
+        ? 'resume-draft'
+        : 'retry-walk');
   const resumeTailSignatures = buildResumeTailSignatures(draft.messages, 4);
   const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
@@ -1203,9 +1208,11 @@ async function resumeFailedCaptureFromWorkingTab() {
     draftCount: draft.messages.length,
     recoveryAvailable: false,
     captureTabId: captureTab.id,
-    message: resumeMode === 'resume-draft'
-      ? 'Ищу последнюю сохранённую реплику и продолжаю с неё без полного прохода…'
-      : 'Возвращаю рабочую вкладку к началу для восстановления…',
+    message: resumeNavigation
+      ? 'Продолжаю навигацию вверх от сохранённого места…'
+      : resumeMode === 'resume-draft'
+        ? 'Ищу последнюю сохранённую реплику и продолжаю с неё без полного прохода…'
+        : 'Возвращаю рабочую вкладку к началу для восстановления…',
     startedAt: Date.now(),
     finishedAt: null
   });
@@ -1217,7 +1224,8 @@ async function resumeFailedCaptureFromWorkingTab() {
       resumeAnchorSignature: messageSignature(lastMessage.role, lastMessage.text),
       resumeTailSignatures,
       existingDraftId: draft.id,
-      fixedCaptureBoundary: boundary
+      fixedCaptureBoundary: boundary,
+      resumeNavigation
     });
   } catch (error) {
     const message = error?.message || String(error);
@@ -1235,15 +1243,19 @@ async function resumeFailedCaptureFromWorkingTab() {
   const next = await appendRunLog({
     status: 'running',
     phase: 'top',
-    message: resumeMode === 'resume-draft'
-      ? 'Продолжаю после последней сохранённой реплики…'
-      : 'Восстанавливаю хронологический проход…'
+    message: resumeNavigation
+      ? 'Продолжаю путь к началу от сохранённой контрольной точки…'
+      : resumeMode === 'resume-draft'
+        ? 'Продолжаю после последней сохранённой реплики…'
+        : 'Восстанавливаю хронологический проход…'
   }, {
     level: 'info',
     code: 'UNFINISHED_PASS_RETRY_STARTED',
-    message: resumeMode === 'resume-draft'
-      ? 'Черновик сохранён; поиск последнего сохранённого сообщения и добор до исходной конечной метки.'
-      : 'Сохранённый незавершённый проход найден; повторяется хронологический проход.',
+    message: resumeNavigation
+      ? 'Черновик сохранён; навигация продолжается от последнего сохранённого участка без возврата к уже пройденной части.'
+      : resumeMode === 'resume-draft'
+        ? 'Черновик сохранён; поиск последнего сохранённого сообщения и добор до исходной конечной метки.'
+        : 'Сохранённый незавершённый проход найден; повторяется хронологический проход.',
     phase: 'top',
     count: draft.messages.length
   });
