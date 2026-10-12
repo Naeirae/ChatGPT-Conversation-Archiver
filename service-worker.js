@@ -3147,6 +3147,32 @@ async function selectGoogleDocTextAttached(tabId, query) {
   return Boolean(selected && selected.includes(expected));
 }
 
+async function selectInsertedGoogleDocNavigationAtEnd(tabId, text) {
+  const expected = normalizeDocSearchText(text);
+  if (!expected) return false;
+
+  // The forward link is inserted as the final standalone paragraph.
+  // Select it locally from the caret instead of opening Docs search:
+  // on very large documents Ctrl+F can lag, and typing the search query then
+  // lands in the document body, duplicating the label inside conversation text.
+  const attempts = [
+    { key: 'Home', code: 'Home', vk: 36, modifiers: 8 },       // Shift+Home
+    { key: 'ArrowUp', code: 'ArrowUp', vk: 38, modifiers: 10 } // Ctrl+Shift+Up
+  ];
+
+  for (const attempt of attempts) {
+    await dispatchKey(tabId, 'End', 'End', 35, 2); // Ctrl+End: collapse at true document end.
+    await sleep(180);
+    await dispatchKey(tabId, attempt.key, attempt.code, attempt.vk, attempt.modifiers);
+    await sleep(180);
+
+    const selected = normalizeDocSearchText(await copyEditorSelectionText(tabId));
+    if (selected === expected) return true;
+  }
+
+  return false;
+}
+
 async function insertGoogleDocNavigation(tabId, label, url, position = 'end') {
   let attached = false;
   try {
@@ -3171,19 +3197,21 @@ async function insertGoogleDocNavigation(tabId, label, url, position = 'end') {
     await cdp(tabId, 'Input.insertText', {
       text: goToStart ? text + '\n\n' : '\n\n' + text
     });
-    await sleep(220);
+    await sleep(goToStart ? 260 : 420);
 
-    const selected = await selectGoogleDocTextAttached(tabId, text);
+    const selected = goToStart
+      ? await selectGoogleDocTextAttached(tabId, text)
+      : await selectInsertedGoogleDocNavigationAtEnd(tabId, text);
     if (!selected) {
-      throw new Error('Не удалось выделить текст междокументной ссылки: ' + text);
+      throw new Error('Не удалось безопасно выделить текст междокументной ссылки: ' + text);
     }
 
     await dispatchKey(tabId, 'k', 'KeyK', 75, 2);
-    await sleep(320);
+    await sleep(goToStart ? 360 : 650);
     await cdp(tabId, 'Input.insertText', { text: String(url || '') });
-    await sleep(120);
+    await sleep(goToStart ? 160 : 260);
     await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
-    await sleep(260);
+    await sleep(goToStart ? 320 : 650);
     return true;
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});

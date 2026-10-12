@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.86
+
+- Fix forward links between split Google Docs on very large exports.
+- Select the just-inserted end-of-document navigation label locally instead of using Google Docs Ctrl+F, which could lag and type the search query into conversation text.
+- Keep the existing search-based path only for the backward link at the start of a newly created document.
+- Use longer settling delays for hyperlink application on large previous parts and fail safely if the inserted label cannot be selected exactly.
+
 ## 0.3.85
 
 - Bind each unfinished draft to the concrete Chrome tab where its latest checkpoint was captured, using a lightweight storage record separate from the large draft payload.
