@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.88
+
+- Treat every accepted physical scroll from the capture tab as a live heartbeat, so long navigation-only passes do not become stale merely because the message count is unchanged.
+- Before the five-minute stale-run watchdog marks a capture as failed, ask the concrete content script whether the same job is still running; refresh the job instead of raising a false error when it answers alive.
+- Reject physical scrolling, clicks, and selection-copy commands after the job has entered error/cancelled/done state.
+- Stop the content collector when the background worker explicitly rejects its progress as stopped or obsolete, instead of continuing to drive the tab behind a red error state.
+
 ## 0.3.87
 
 - Make the first phase of a full capture navigation-only: fix the lower snapshot boundary first, then travel quickly to the beginning without accumulating the entire conversation in memory.
