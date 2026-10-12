@@ -2363,6 +2363,8 @@
     if (!messages.length) return;
 
     const draftId = current.draftId || ('draft-' + jobId);
+    const previousDraftRecord =
+      (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId] || null;
     // In the upward phase the next checkpoint is cumulative. The older saved
     // slice is retained even when Chrome virtualizes it out of the DOM.
     if (current.recoveryDraftId && current.phase === 'top') {
@@ -2390,7 +2392,10 @@
       messages,
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       complete: false,
-      error: ''
+      error: '',
+      partialSaveEnabled: Boolean(previousDraftRecord?.partialSaveEnabled || current.partialSaveEnabled),
+      partialArchiveId: previousDraftRecord?.partialArchiveId || current.partialArchiveId || '',
+      partialSavedAt: previousDraftRecord?.partialSavedAt || ''
     };
 
     // Persist the large checkpoint independently. The background worker is
@@ -2974,9 +2979,11 @@
       if ((chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
+        let existingRecoveryDraft = null;
         if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
           const stored = await chrome.storage.local.get('draft:' + existingDraftId);
           const existing = stored['draft:' + existingDraftId];
+          existingRecoveryDraft = existing || null;
           if (existing?.messages?.length) {
             const seenIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
             const seenSignatures = new Set(
@@ -3014,7 +3021,10 @@
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
             complete: false,
-            error: message
+            error: message,
+            partialSaveEnabled: Boolean(existingRecoveryDraft?.partialSaveEnabled || current.partialSaveEnabled),
+            partialArchiveId: existingRecoveryDraft?.partialArchiveId || current.partialArchiveId || '',
+            partialSavedAt: existingRecoveryDraft?.partialSavedAt || ''
           };
           await chrome.storage.local.set({ ['draft:' + draftId]: draft });
           if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId && existingDraftId !== draftId) {

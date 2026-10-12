@@ -50,6 +50,8 @@ test('summarizeArchive exposes stable UI metadata only', () => {
   assert.equal(summary.imageBinaryReady, 2);
   assert.equal(summary.reasoningMessageCount, 1);
   assert.equal(summary.reasoningBlockCount, 2);
+  assert.equal(summary.partial, false);
+  assert.equal(summary.complete, true);
   assert.equal('messages' in summary, false);
 });
 
@@ -255,4 +257,27 @@ test('listDrafts returns saved unfinished-pass payloads newest first', async () 
 
   assert.deepEqual(passes.map(item => item.id), ['new', 'old']);
   assert.equal(passes[0].messages.length, 2);
+});
+
+
+test('summarizeArchive preserves resumable partial state', () => {
+  const summary = summarizeArchive({
+    id: 'partial-1',
+    title: 'Partial',
+    sourceUrl: 'https://chatgpt.com/c/partial-1',
+    messages: [{ id: 'm1' }],
+    partial: true,
+    complete: false,
+    partialSaveEnabled: true,
+    partialArchiveId: 'partial-1',
+    partialSourceDraftId: 'draft-1',
+    capturePhase: 'walk'
+  });
+
+  assert.equal(summary.partial, true);
+  assert.equal(summary.complete, false);
+  assert.equal(summary.partialSaveEnabled, true);
+  assert.equal(summary.partialArchiveId, 'partial-1');
+  assert.equal(summary.partialSourceDraftId, 'draft-1');
+  assert.equal(summary.capturePhase, 'walk');
 });
