@@ -2046,11 +2046,63 @@
     return visibleMeaningfulSignatures().some(item => known.has(item.externalSignature));
   }
 
+  function visibleSavedPrefixEvidence(savedRefs) {
+    const refs = (savedRefs || []).filter(ref => ref && (ref.id || ref.signature));
+    if (!refs.length) return { known: false, matchLength: 0, savedIndex: -1 };
+
+    const visible = visibleMeaningfulSignatures().map(item => ({
+      id: turnStableKey(item.turn),
+      signature: item.externalSignature
+    }));
+    if (!visible.length) return { known: false, matchLength: 0, savedIndex: -1 };
+
+    // Stable message IDs are strong enough on their own.
+    let strongestIndex = -1;
+    for (const item of visible) {
+      if (!item.id) continue;
+      const index = refs.findIndex(ref => ref.id && ref.id === item.id);
+      if (index >= 0) strongestIndex = Math.max(strongestIndex, index);
+    }
+    if (strongestIndex >= 0) {
+      return { known: true, matchLength: 1, savedIndex: strongestIndex, stable: true };
+    }
+
+    // Text signatures can repeat ("Да", "Окей", etc.), so require at least
+    // two neighbouring saved messages in the same order before classifying
+    // the viewport as part of the saved prefix.
+    const maxLength = Math.min(6, visible.length, refs.length);
+    for (let length = maxLength; length >= 2; length--) {
+      for (let v = 0; v <= visible.length - length; v++) {
+        for (let s = 0; s <= refs.length - length; s++) {
+          let same = true;
+          for (let offset = 0; offset < length; offset++) {
+            if (!visible[v + offset].signature ||
+                visible[v + offset].signature !== refs[s + offset].signature) {
+              same = false;
+              break;
+            }
+          }
+          if (same) {
+            return {
+              known: true,
+              matchLength: length,
+              savedIndex: s + length - 1,
+              stable: false
+            };
+          }
+        }
+      }
+    }
+
+    return { known: false, matchLength: 0, savedIndex: -1 };
+  }
+
   async function reachDraftResumeAnchor(
     anchorId,
     anchorSignature,
     tailSignatures,
     knownSignatures,
+    savedRefs,
     checkpointSignatures,
     lastScrollDirection,
     capturePhase,
@@ -2082,7 +2134,8 @@
     // - no saved messages => viewport is below the frontier, move up until the
     //   saved prefix is found, then turn down toward the exact checkpoint.
     if (capturePhase === 'walk') {
-      let knownVisible = visibleHasKnownSignatures(known);
+      let prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
+      let knownVisible = prefixEvidence.known;
       let direction = knownVisible ? 'down' : 'up';
       let enteredSavedPrefix = knownVisible;
       let overshotFrontier = false;
@@ -2139,7 +2192,8 @@
           return { id: anchorId, signature: anchorSignature, matchLength: 1 };
         }
 
-        knownVisible = visibleHasKnownSignatures(known);
+        prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
+        knownVisible = prefixEvidence.known;
 
         if (!enteredSavedPrefix) {
           if (knownVisible) {
@@ -2527,6 +2581,10 @@
               '',
               [],
               knownSignatures,
+              checkpoint.messages.map(item => ({
+                id: String(item?.id || ''),
+                signature: externalMatchSignature(item?.role || 'unknown', item?.text || '')
+              })),
               checkpoint.resumeWindowSignatures,
               checkpoint.lastScrollDirection || 'up',
               checkpoint.capturePhase || 'top',
@@ -2581,6 +2639,10 @@
             resumeAnchorSignature,
             resumeTailSignatures,
             knownSignatures,
+            existingPass.messages.map(item => ({
+              id: String(item?.id || ''),
+              signature: externalMatchSignature(item?.role || 'unknown', item?.text || '')
+            })),
             existingPass.resumeWindowSignatures || [],
             existingPass.lastScrollDirection ||
               (existingPass.capturePhase === 'walk' ? 'down' : 'up'),
