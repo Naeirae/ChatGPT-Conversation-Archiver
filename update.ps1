@@ -36,19 +36,44 @@ function Get-StateSha($State, [string]$RelativePath) {
   return [string]$property.Value
 }
 
-function Download-RemoteFile([string]$RelativePath, [string]$Target) {
-  $encoded = ($RelativePath -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/'
-  $url = 'https://raw.githubusercontent.com/' + $script:repo + '/' + $script:branch + '/' + $encoded
+function Download-RemoteBlob([string]$BlobSha, [string]$RelativePath, [string]$Target) {
+  if (-not $BlobSha) {
+    throw "Missing Git blob SHA for $RelativePath."
+  }
+
+  $url = $script:apiBase + '/git/blobs/' + [Uri]::EscapeDataString($BlobSha)
   $temporary = "$Target.download"
 
   try {
-    Invoke-WebRequest -Uri $url -Headers $script:rawHeaders -OutFile $temporary -UseBasicParsing -TimeoutSec $script:timeout -MaximumRedirection 5
+    $payload = Invoke-RestMethod -Uri $url -Headers $script:headers -Method Get -TimeoutSec $script:timeout
+    if (-not $payload.content -or [string]$payload.encoding -ne 'base64') {
+      throw "GitHub API returned no base64 content."
+    }
+
+    $bytes = [Convert]::FromBase64String(([string]$payload.content -replace '\s', ''))
+    [IO.File]::WriteAllBytes($temporary, $bytes)
+
+    $header = [Text.Encoding]::ASCII.GetBytes(('blob ' + $bytes.Length + [char]0))
+    $all = New-Object byte[] ($header.Length + $bytes.Length)
+    [Buffer]::BlockCopy($header, 0, $all, 0, $header.Length)
+    [Buffer]::BlockCopy($bytes, 0, $all, $header.Length, $bytes.Length)
+    $sha1 = [Security.Cryptography.SHA1]::Create()
+    try {
+      $actualSha = (($sha1.ComputeHash($all) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+      $sha1.Dispose()
+    }
+
+    if ($actualSha -ne $BlobSha) {
+      throw "Downloaded blob SHA mismatch for $RelativePath."
+    }
+
     Move-Item -LiteralPath $temporary -Destination $Target -Force
   } catch {
     if (Test-Path -LiteralPath $temporary) {
       Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
     }
-    throw "Could not download $RelativePath from $url. $($_.Exception.Message)"
+    throw "Could not download $RelativePath from GitHub blob $BlobSha. $($_.Exception.Message)"
   }
 }
 
@@ -95,9 +120,6 @@ try {
     'Accept' = 'application/vnd.github+json'
     'X-GitHub-Api-Version' = '2022-11-28'
   }
-  $script:rawHeaders = @{
-    'User-Agent' = 'ChatGPT-Conversation-Archiver-Updater'
-  }
   $script:timeout = 20
 
   $localManifest = Join-Path $InstallPath 'manifest.json'
@@ -134,7 +156,7 @@ try {
 
   $remoteManifestPath = Join-Path $env:TEMP 'ChatGPT-Conversation-Archiver-manifest.json'
   try {
-    Download-RemoteFile 'manifest.json' $remoteManifestPath
+    Download-RemoteBlob ([string]$remoteManifestItem.sha) 'manifest.json' $remoteManifestPath
     $remoteManifestData = Get-Content -Raw -LiteralPath $remoteManifestPath | ConvertFrom-Json
     $remoteVersion = [string]$remoteManifestData.version
   } finally {
@@ -260,7 +282,7 @@ try {
       Write-Log ('  Backed up: ' + $item.Path)
     }
 
-    Download-RemoteFile $item.Path $target
+    Download-RemoteBlob ([string]$item.Sha) $item.Path $target
     Write-Log ('  Updated: ' + $item.Path)
   }
 
