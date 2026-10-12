@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.82
+
+- Read the remote version through the GitHub API first instead of relying on raw.githubusercontent.com CDN propagation.
+- Download browser-updater files by the exact Git blob SHA returned by the repository tree and verify each downloaded blob before writing it.
+- Make the PowerShell fallback updater use exact GitHub blob objects as well, avoiding mixed-version updates when raw branch content is temporarily stale.
+
 ## 0.3.81
 
 - Resume interrupted chronological saves by saved-prefix geometry: a visible saved section means the viewport is above the saved frontier and must move down; no saved section means the viewport is below the frontier and must move up until the saved prefix is found, then turn down.
