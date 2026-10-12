@@ -897,6 +897,8 @@ async function startCapture({
       recoveryDraftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
       draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
       draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+      partialSaveEnabled: Boolean(existingDraft?.partialSaveEnabled),
+      partialArchiveId: existingDraft?.partialArchiveId || '',
       captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
       pendingDocUrl,
       pendingDocMode,
@@ -1129,6 +1131,24 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   await cleanupTemporaryBaseline(job);
 
   const recoveryAvailable = Boolean(preservedCaptureTabId != null && draftId);
+
+  if (draftId) {
+    const failedDraft = await getDraft(draftId);
+    if (failedDraft?.partialSaveEnabled) {
+      try {
+        await syncPartialArchiveFromDraft(failedDraft);
+      } catch (error) {
+        await appendRunLog({}, {
+          level: 'warn',
+          code: 'PARTIAL_AUTOSAVE_FAILED',
+          message: error?.message || String(error),
+          phase: failedDraft.capturePhase || job.phase || '',
+          count: failedDraft.messages?.length || 0
+        });
+      }
+    }
+  }
+
   const next = await appendRunLog({
     status,
     message,
@@ -1223,6 +1243,8 @@ async function resumeFailedCaptureFromWorkingTab() {
     // Its own checkpoints use a fresh draft ID.
     draftId: 'draft-' + jobId,
     draftCount: draft.messages.length,
+    partialSaveEnabled: Boolean(draft.partialSaveEnabled),
+    partialArchiveId: draft.partialArchiveId || '',
     recoveryAvailable: false,
     captureTabId: captureTab.id,
     message: resumeNavigation
