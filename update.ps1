@@ -135,7 +135,21 @@ try {
   }
 
   Write-Log '[1/4] Checking GitHub...'
-  $treeUrl = $script:apiBase + '/git/trees/' + [Uri]::EscapeDataString($script:branch) + '?recursive=1'
+  $commitUrl = $script:apiBase + '/commits/' + [Uri]::EscapeDataString($script:branch)
+  try {
+    $commit = Invoke-RestMethod -Uri $commitUrl -Headers $script:headers -Method Get -TimeoutSec $script:timeout
+  } catch {
+    throw "Could not reach GitHub commit endpoint $commitUrl. $($_.Exception.Message)"
+  }
+
+  $commitSha = [string]$commit.sha
+  $treeSha = [string]$commit.commit.tree.sha
+  if (-not $commitSha -or -not $treeSha) {
+    throw 'GitHub did not return commit/tree SHA.'
+  }
+
+  $treeUrl = $script:apiBase + '/git/trees/' + [Uri]::EscapeDataString($treeSha) + '?recursive=1'
+  Write-Log ('  Snapshot: ' + $commitSha)
   Write-Log ('  Request: ' + $treeUrl)
 
   try {
@@ -148,7 +162,22 @@ try {
     throw 'GitHub returned a truncated repository tree.'
   }
 
-  $remoteFiles = @($tree.tree | Where-Object { $_.type -eq 'blob' })
+  $managedFiles = @(
+    'manifest.json','service-worker.js','content-chatgpt.js',
+    'popup.html','popup.css','popup.js',
+    'help.html','help.css',
+    'updater.html','updater.css','updater.js',
+    'planner.html','planner.css','planner.js',
+    'offscreen.html','offscreen.js',
+    'Update ChatGPT Archiver.vbs'
+  )
+  $remoteFiles = @($tree.tree | Where-Object {
+    $_.type -eq 'blob' -and (
+      $managedFiles -contains [string]$_.path -or
+      [string]$_.path -like 'icons/*' -or
+      [string]$_.path -like 'lib/*'
+    )
+  })
   $remoteManifestItem = $remoteFiles | Where-Object { $_.path -eq 'manifest.json' } | Select-Object -First 1
   if (-not $remoteManifestItem) {
     throw 'Remote manifest.json not found.'
@@ -254,7 +283,10 @@ try {
     return
   }
 
+  $changed = @($changed | Sort-Object @{ Expression = { if ($_.Path -eq 'manifest.json') { 1 } else { 0 } } }, Path)
+
   Write-Log ("[2/4] Updating $localVersion -> $remoteVersion")
+  Write-Log ('  Snapshot: ' + $commitSha)
   Write-Log ('  Files to update: ' + $changed.Count)
 
   $backupRoot = $null
@@ -283,7 +315,17 @@ try {
     }
 
     Download-RemoteBlob ([string]$item.Sha) $item.Path $target
-    Write-Log ('  Updated: ' + $item.Path)
+    $writtenSha = Get-GitBlobSha $item.Path
+    if ($writtenSha -ne [string]$item.Sha) {
+      throw ('Written file SHA mismatch: ' + $item.Path)
+    }
+    Write-Log ('  Updated and verified: ' + $item.Path)
+  }
+
+  $finalManifestData = Get-Content -Raw -LiteralPath $localManifest | ConvertFrom-Json
+  $finalVersion = [string]$finalManifestData.version
+  if ($finalVersion -ne $remoteVersion) {
+    throw "manifest.json remained $finalVersion after update; expected $remoteVersion."
   }
 
   Save-UpdaterState $remoteFiles $remoteVersion $statePath

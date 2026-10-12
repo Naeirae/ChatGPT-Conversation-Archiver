@@ -148,9 +148,11 @@ try {
   if (!updaterJs.includes('showDirectoryPicker') ||
       !updaterJs.includes("const REPO='Naeirae/ChatGPT-Conversation-Archiver'") ||
       !updaterJs.includes('api.github.com/repos/') ||
+      !updaterJs.includes('/commits/') ||
+      !updaterJs.includes('/git/trees/') ||
       !updaterJs.includes('/git/blobs/') ||
-      !updaterJs.includes('/contents/')) {
-    fail('updater.js: missing directory access or deterministic GitHub API endpoints');
+      !updaterJs.includes("a.path==='manifest.json'")) {
+    fail('updater.js: missing commit-pinned GitHub API update flow');
   }
   if (/powershell\.exe|shell\.Run|RegWrite/i.test(updaterVbs)) {
     fail('Update ChatGPT Archiver.vbs: legacy executable/protocol behavior must stay removed');
