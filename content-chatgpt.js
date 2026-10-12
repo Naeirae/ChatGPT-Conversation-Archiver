@@ -1633,7 +1633,11 @@
     return previous;
   }
 
-  async function physicalScroll(direction, bursts = 7) {
+  async function physicalScroll(
+    direction,
+    bursts = 7,
+    { settleTimeout = 8000, quietWindow = 1400 } = {}
+  ) {
     const normalizedDirection = direction === 'down' ? 'down' : 'up';
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
@@ -1643,7 +1647,7 @@
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
     state.lastScrollDirection = normalizedDirection;
-    await waitForTurnSettle();
+    await waitForTurnSettle(settleTimeout, quietWindow);
     return result;
   }
 
@@ -1857,12 +1861,19 @@
     throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
-  async function reachTopWithoutCapture(existingCount = 0) {
+  async function reachTopWithoutCapture(
+    existingCount = 0,
+    {
+      fullCapture = false,
+      timeoutMs = 2 * 60 * 60 * 1000
+    } = {}
+  ) {
     let confirmedIdle = 0;
     let previousSignature = '';
     let firstVisibleKey = '';
+    const startedAt = Date.now();
 
-    for (let i = 0; i < 320; i++) {
+    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('top', existingCount)) {
@@ -1878,16 +1889,26 @@
         : '';
 
       await progress(
-        'Повторяю только проход вниз: возвращаю рабочую вкладку к началу без пересчёта сообщений…',
+        fullCapture
+          ? 'Этап 1/3: быстро иду к началу · можно помочь вручную, проматывая эту же вкладку вверх'
+          : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений · можно помочь вручную…',
         existingCount,
         {
           phase: 'top',
           iteration: i + 1,
-          retryWalkOnly: true
+          retryWalkOnly: !fullCapture,
+          manualAssistAllowed: true
         }
       );
 
-      await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
+      // This pass is navigation only. Large upward wheel bursts are safe because
+      // no messages are committed here; the real save happens afterwards,
+      // chronologically from top to the already fixed lower boundary.
+      await physicalScroll(
+        'up',
+        16,
+        { settleTimeout: 5000, quietWindow: 550 }
+      );
 
       let nextSignature = visibleTurnSignature();
       let turnsAfter = orderedTurns();
@@ -1903,7 +1924,19 @@
         firstAfter === firstVisibleKey;
 
       if (unchanged) {
-        await sleep(2600);
+        await progress(
+          'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
+          existingCount,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            topIdleConfirmations: confirmedIdle + 1,
+            retryWalkOnly: !fullCapture,
+            manualAssistAllowed: true
+          }
+        );
+
+        await sleep(2200);
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
         const afterWaitFirst = turnsAfter.length
@@ -1913,6 +1946,8 @@
         if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
           confirmedIdle++;
         } else {
+          // Manual scrolling or a newly loaded older chunk simply becomes the
+          // new current position. No separate manual mode is required.
           confirmedIdle = 0;
           nextSignature = afterWaitSignature;
           firstAfter = afterWaitFirst;
@@ -1926,13 +1961,16 @@
 
       if (confirmedIdle >= 5) {
         await progress(
-          'Начало подтверждено. Запускаю заново только хронологический проход вниз…',
+          fullCapture
+            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
           existingCount,
           {
             phase: 'walk',
             iteration: i + 1,
             topIdleConfirmations: confirmedIdle,
-            retryWalkOnly: true,
+            retryWalkOnly: !fullCapture,
+            manualAssistAllowed: true,
             force: true
           }
         );
@@ -1940,7 +1978,11 @@
       }
     }
 
-    throw new Error('Не удалось надежно вернуть рабочую вкладку к началу для повторного прохода вниз.');
+    throw new Error(
+      fullCapture
+        ? 'Не удалось подтвердить начало переписки за два часа непрерывной навигации.'
+        : 'Не удалось надежно вернуть рабочую вкладку к началу за два часа.'
+    );
   }
 
   async function reachResumeAnchor(anchorId, anchorSignature, tailSignatures, map, order, settings, { allowDownwardFallback = false } = {}) {
@@ -2411,12 +2453,85 @@
     state.recoveryCheckpoint = { at: now, count: messages.length };
   }
 
+  function visibleNavigationRefsLightweight() {
+    return orderedTurns()
+      .map(turn => ({
+        id: String(turnStableKey(turn) || ''),
+        signature: String(turnTextSignature(turn) || '')
+      }))
+      .filter(ref => ref.id || ref.signature);
+  }
+
+  function navigationWindowsOverlap(a, b) {
+    const left = (a || []).filter(ref => ref && (ref.id || ref.signature));
+    const right = (b || []).filter(ref => ref && (ref.id || ref.signature));
+    if (!left.length || !right.length) return false;
+
+    // A stable message ID is strong evidence on its own.
+    for (const x of left) {
+      if (!x.id) continue;
+      if (right.some(y => y.id && y.id === x.id)) return true;
+    }
+
+    // Text signatures can repeat, so require at least two adjacent messages in
+    // the same order before treating two virtualized windows as continuous.
+    const maxLength = Math.min(4, left.length, right.length);
+    for (let length = maxLength; length >= 2; length--) {
+      for (let i = 0; i <= left.length - length; i++) {
+        for (let j = 0; j <= right.length - length; j++) {
+          let same = true;
+          for (let offset = 0; offset < length; offset++) {
+            if (!left[i + offset].signature ||
+                left[i + offset].signature !== right[j + offset].signature) {
+              same = false;
+              break;
+            }
+          }
+          if (same) return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
+    for (let attempt = 0; attempt < 14; attempt++) {
+      const currentRefs = visibleNavigationRefsLightweight();
+      if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
+
+      await progress(
+        'Этап 2/3: слишком большой скачок вниз; возвращаюсь к последнему перекрывающемуся участку…',
+        map.size,
+        {
+          phase: 'walk',
+          continuityRecovery: true,
+          continuityAttempt: attempt + 1,
+          force: attempt === 0
+        }
+      );
+
+      await physicalScroll(
+        'up',
+        1,
+        { settleTimeout: 4000, quietWindow: 650 }
+      );
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+    }
+
+    return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
+  }
+
   async function walkDown(map, order, settings, boundary, { bursts = 3 } = {}) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
+    const startedAt = Date.now();
+    const timeoutMs = 4 * 60 * 60 * 1000;
 
-    for (let i = 0; i < 900; i++) {
+    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
@@ -2428,8 +2543,12 @@
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
 
+      // Always capture the current viewport before moving. This is especially
+      // important for the very first viewport at the real top of the chat.
+      collect(map, order, settings, boundary);
+      const beforeRefs = visibleNavigationRefsLightweight();
+
       if (boundaryIsVisible(boundary)) {
-        collect(map, order, settings, boundary);
         await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
@@ -2449,14 +2568,16 @@
       });
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      // Downward capture must be deliberately granular. Large wheel bursts can
-      // skip virtualized turns even though the boundary itself remains reachable.
+      // Downward capture stays granular. If either virtualization or a manual
+      // jump moves farther than one overlapping message window, recover upward
+      // and re-approach instead of silently accepting a possible gap.
       await physicalScroll('down', bursts);
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+
       if (boundaryIsVisible(boundary)) {
-        collect(map, order, settings, boundary);
         await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
@@ -2467,22 +2588,51 @@
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
         return;
       }
-      collect(map, order, settings);
+
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (beforeRefs.length && afterRefs.length &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Хронологический проход потерял перекрытие между соседними участками. ' +
+            'Сбор остановлен, чтобы не сохранить чат с пропуском.'
+          );
+        }
+
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+        await saveRecoveryCheckpoint(map, order, boundary);
+        continue;
+      }
+
       await saveRecoveryCheckpoint(map, order, boundary);
 
       const nextSignature = visibleTurnSignature();
-      if (nextSignature && nextSignature === signature && signature === previousSignature && map.size === previousSize) stable++;
+      if (nextSignature && nextSignature === signature &&
+          signature === previousSignature && map.size === previousSize) stable++;
       else stable = 0;
 
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 6) break;
+      if (stable >= 6) {
+        throw new Error(
+          'Хронологический проход остановился до зафиксированного конца снимка.'
+        );
+      }
     }
 
-    if (!boundaryIsVisible(boundary)) {
-      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
-    }
+    throw new Error(
+      'Не удалось дойти до зафиксированного конца снимка за четыре часа непрерывного прохода.'
+    );
   }
 
   async function captureConversation(jobId, options = {}) {
@@ -2599,7 +2749,6 @@
             );
           } else {
             // Legacy drafts did not persist the visible checkpoint window.
-            // Keep their old anchor recovery path for compatibility.
             await reachResumeAnchor(
               fallbackAnchor.id || '',
               fallbackAnchor.text ? messageTextSignature(fallbackAnchor) : '',
@@ -2613,12 +2762,30 @@
 
           map.clear();
           order.length = 0;
-          // The restored position is only a navigation checkpoint.
-          // The chronological pass will still rebuild and verify the selected range.
         }
-        await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null, boundary);
-        navigationMessages = [...map.values()];
-        navigationSequence = buildNavigationSequence(navigationWindows);
+
+        if (mode === 'full') {
+          // Full capture no longer extracts the whole chat while travelling
+          // upward. It fixes the lower boundary first, then navigates quickly
+          // to the top. The user may manually drag/scroll upward at any time;
+          // the next probe simply continues from the new viewport.
+          map.clear();
+          order.length = 0;
+          await reachTopWithoutCapture(0, { fullCapture: true });
+        } else {
+          // Image recovery still benefits from a rich upward scan, and fragment
+          // capture may need to discover its explicit start marker.
+          await reachTop(
+            map,
+            order,
+            settings,
+            navigationWindows,
+            mode === 'fragment' ? selectedFragment.start || null : null,
+            boundary
+          );
+          navigationMessages = [...map.values()];
+          navigationSequence = buildNavigationSequence(navigationWindows);
+        }
       } else if (mode === 'retry-walk') {
         if (!existingDraftId) throw new Error('Для повторного прохода нужен сохранённый незавершённый проход.');
         const stored = await chrome.storage.local.get('draft:' + existingDraftId);
@@ -2677,11 +2844,14 @@
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
         navigationFirstSignature = firstAtTop ? turnTextSignature(firstAtTop) : '';
         await progress(
-          'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
+          mode === 'full'
+            ? 'Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз'
+            : 'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
           navigationHighWater,
           {
             phase: 'top',
             navigationHighWater,
+            navigationOnly: mode === 'full',
             force: true
           }
         );
@@ -2735,10 +2905,12 @@
         }
 
         await progress(
-          reconciliation.insertedCount
-            ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
-               ' пропущенных сообщений · итог ' + capturedMessages.length)
-            : ('Сверка проходов: пропусков не найдено · итог ' + capturedMessages.length),
+          mode === 'full' && !navigationSequence.length
+            ? ('Хронологический проход завершён без разрывов · итог ' + capturedMessages.length)
+            : reconciliation.insertedCount
+              ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
+                 ' пропущенных сообщений · итог ' + capturedMessages.length)
+              : ('Сверка проходов: пропусков не найдено · итог ' + capturedMessages.length),
           capturedMessages.length,
           {
             phase: 'finalizing',
@@ -2746,6 +2918,7 @@
             chronologicalCount: reconciliation.chronologicalCount,
             reconciledInsertedCount: reconciliation.insertedCount,
             reconciledUnresolvedCount: reconciliation.unresolvedCount,
+            navigationOnly: mode === 'full' && !navigationSequence.length,
             force: true
           }
         );
@@ -2764,15 +2937,24 @@
           ) {
             const missing = Math.max(0, navigationHighWater - finalCount);
             throw new Error(
-              'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
-              'Навигационный минимум: ' + navigationHighWater +
-              ', хронологический проход: ' + reconciliation.chronologicalCount +
-              ', после сверки: ' + finalCount +
-              (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
-              (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
-              (missing ? ', не хватает минимум ' + missing : '') +
-              (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
-              ' Результат сохранён как незавершённый проход; повторный полный проход автоматически не запускается.'
+              mode === 'full' && !navigationSequence.length
+                ? (
+                    'Полный архив не сохранён: хронологический проход не подтвердил весь диапазон ' +
+                    'от первой реплики до зафиксированной нижней метки.' +
+                    (!hasNavigationFirst ? ' Самая ранняя реплика отсутствует.' : '') +
+                    ' Результат оставлен как незавершённый проход.'
+                  )
+                : (
+                    'Полный архив не сохранён: сверка двух проходов не смогла доказательно восстановить все сообщения. ' +
+                    'Навигационный минимум: ' + navigationHighWater +
+                    ', хронологический проход: ' + reconciliation.chronologicalCount +
+                    ', после сверки: ' + finalCount +
+                    (reconciliation.insertedCount ? ', вставлено из навигационного прохода: ' + reconciliation.insertedCount : '') +
+                    (reconciliation.unresolvedCount ? ', не удалось разместить: ' + reconciliation.unresolvedCount : '') +
+                    (missing ? ', не хватает минимум ' + missing : '') +
+                    (!hasNavigationFirst ? '. Самая ранняя найденная реплика отсутствует.' : '.') +
+                    ' Результат сохранён как незавершённый проход; повторный полный проход автоматически не запускается.'
+                  )
             );
           }
         }
