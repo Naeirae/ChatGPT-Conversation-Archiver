@@ -1,7 +1,8 @@
 const REPO='Naeirae/ChatGPT-Conversation-Archiver';
 const BRANCH='main';
 const API_TREE='https://api.github.com/repos/'+REPO+'/git/trees/'+BRANCH+'?recursive=1';
-const RAW_ROOT='https://raw.githubusercontent.com/'+REPO+'/'+BRANCH+'/';
+const API_CONTENTS='https://api.github.com/repos/'+REPO+'/contents/';
+const API_BLOBS='https://api.github.com/repos/'+REPO+'/git/blobs/';
 const DB_NAME='chatgpt-archiver-updater';
 const STORE_NAME='handles';
 const ROOT_KEY='extension-root';
@@ -34,9 +35,9 @@ async function ensureRoot(requestPermission=false){if(!rootHandle){try{rootHandl
 async function refreshFolderState(){if(!rootHandle){$('folderState').textContent='Папка пока не выбрана.';$('diskVersion').textContent='—';return}try{const permission=await ensurePermission(rootHandle,false);$('folderState').textContent=permission?'Выбрана: '+rootHandle.name:'Сохранена: '+rootHandle.name+' · нужно снова разрешить запись.';const manifest=permission?await verifyInstallRoot(rootHandle):null;$('diskVersion').textContent=manifest?.version||'нужно разрешение'}catch(error){$('folderState').textContent='Сохранённая папка недоступна: '+(error.message||String(error));$('diskVersion').textContent='—'}}
 
 async function fetchJson(url){const response=await fetch(url,{cache:'no-store',headers:{Accept:'application/vnd.github+json'}});if(!response.ok)throw new Error('GitHub ответил '+response.status+'.');return response.json()}
-async function fetchRemoteManifest(){const response=await fetch(RAW_ROOT+'manifest.json',{cache:'no-store'});if(!response.ok)throw new Error('Не удалось прочитать manifest.json с GitHub: '+response.status);const manifest=await response.json();$('remoteVersion').textContent=manifest.version||'—';return manifest}
-function rawUrl(path){return RAW_ROOT+path.split('/').map(encodeURIComponent).join('/')}
-async function fetchRaw(path){const response=await fetch(rawUrl(path),{cache:'no-store'});if(!response.ok)throw new Error('Не удалось скачать '+path+': HTTP '+response.status);return new Uint8Array(await response.arrayBuffer())}
+function decodeBase64Bytes(content=''){const binary=atob(String(content||'').replace(/\s/g,''));const bytes=new Uint8Array(binary.length);for(let i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);return bytes}
+async function fetchRemoteManifest(){const url=API_CONTENTS+'manifest.json?ref='+encodeURIComponent(BRANCH)+'&check='+Date.now();const payload=await fetchJson(url);if(!payload?.content||payload.encoding!=='base64')throw new Error('GitHub API вернул manifest.json без содержимого.');const manifest=JSON.parse(new TextDecoder().decode(decodeBase64Bytes(payload.content)));$('remoteVersion').textContent=manifest.version||'—';return manifest}
+async function fetchBlob(item){if(!item?.sha)throw new Error('У файла '+(item?.path||'—')+' нет Git blob SHA.');const payload=await fetchJson(API_BLOBS+encodeURIComponent(item.sha)+'?check='+Date.now());if(!payload?.content||payload.encoding!=='base64')throw new Error('GitHub API не вернул содержимое '+item.path+'.');const bytes=decodeBase64Bytes(payload.content);const actualSha=await gitBlobSha(bytes);if(actualSha!==item.sha)throw new Error('Контрольная сумма '+item.path+' не совпала с деревом GitHub.');return bytes}
 function concatBytes(a,b){const out=new Uint8Array(a.length+b.length);out.set(a,0);out.set(b,a.length);return out}
 async function gitBlobSha(bytes){const header=new TextEncoder().encode('blob '+bytes.byteLength+'\0');const digest=await crypto.subtle.digest('SHA-1',concatBytes(header,bytes));return[...new Uint8Array(digest)].map(v=>v.toString(16).padStart(2,'0')).join('')}
 function backupStamp(){const d=new Date();const p=n=>String(n).padStart(2,'0');return d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'-'+p(d.getHours())+p(d.getMinutes())+p(d.getSeconds())}
@@ -48,7 +49,7 @@ async function checkUpdate(){setBusy(true);try{const remote=await fetchRemoteMan
 
 async function runUpdate(){setBusy(true);try{if(!rootHandle)await chooseFolder();const root=await ensureRoot(true);if(!root)throw new Error('Нужно разрешить запись в папку расширения.');const local=await verifyInstallRoot(root);const remote=await fetchRemoteManifest();log('Запуск обновления: '+local.version+' → '+remote.version);setStatus('Читаю список файлов репозитория…');const tree=await fetchJson(API_TREE);if(tree.truncated)throw new Error('GitHub вернул неполное дерево репозитория.');const remoteFiles=(tree.tree||[]).filter(item=>item.type==='blob'&&item.path);log('Файлов в репозитории: '+remoteFiles.length);const changed=await buildPlan(root,remoteFiles);if(!changed.length){setStatus('Уже установлена актуальная копия. Изменённых файлов нет.','success');log('Изменённых файлов нет.');await persistLog();return}
 
-log('Изменить файлов: '+changed.length+'. Сначала скачиваю всё во временную память.');const downloads=[];for(let i=0;i<changed.length;i++){const item=changed[i];setStatus('Скачиваю обновление: '+(i+1)+' / '+changed.length);downloads.push({item,bytes:await fetchRaw(item.path)});log('Скачан: '+item.path)}
+log('Изменить файлов: '+changed.length+'. Сначала скачиваю всё во временную память.');const downloads=[];for(let i=0;i<changed.length;i++){const item=changed[i];setStatus('Скачиваю обновление: '+(i+1)+' / '+changed.length);downloads.push({item,bytes:await fetchBlob(item)});log('Скачан: '+item.path)}
 
 const existing=downloads.filter(entry=>entry.item.exists);let backupPrefix='';if(existing.length){backupPrefix='.archiver-update-backup/browser-'+backupStamp();log('Резервная копия: '+backupPrefix);for(const entry of existing)await writeBytes(root,backupPrefix+'/'+entry.item.path,entry.item.local)}
 
