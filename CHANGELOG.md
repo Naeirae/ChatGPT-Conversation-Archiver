@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.81
+
+- Resume interrupted chronological saves by saved-prefix geometry: a visible saved section means the viewport is above the saved frontier and must move down; no saved section means the viewport is below the frontier and must move up until the saved prefix is found, then turn down.
+- Do not use the last physical scroll direction to decide resume direction during the top-to-bottom chronological save pass.
+- Classify a viewport as part of the saved prefix using a stable message ID or at least two neighbouring saved text signatures, reducing false direction changes on repeated short messages.
+
 ## 0.3.80
 
 - Keep stopped capture working tabs and saved checkpoints available for later resume instead of discarding the resume state.

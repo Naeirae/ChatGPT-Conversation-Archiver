@@ -2046,25 +2046,77 @@
     return visibleMeaningfulSignatures().some(item => known.has(item.externalSignature));
   }
 
+  function visibleSavedPrefixEvidence(savedRefs) {
+    const refs = (savedRefs || []).filter(ref => ref && (ref.id || ref.signature));
+    if (!refs.length) return { known: false, matchLength: 0, savedIndex: -1 };
+
+    const visible = visibleMeaningfulSignatures().map(item => ({
+      id: turnStableKey(item.turn),
+      signature: item.externalSignature
+    }));
+    if (!visible.length) return { known: false, matchLength: 0, savedIndex: -1 };
+
+    // Stable message IDs are strong enough on their own.
+    let strongestIndex = -1;
+    for (const item of visible) {
+      if (!item.id) continue;
+      const index = refs.findIndex(ref => ref.id && ref.id === item.id);
+      if (index >= 0) strongestIndex = Math.max(strongestIndex, index);
+    }
+    if (strongestIndex >= 0) {
+      return { known: true, matchLength: 1, savedIndex: strongestIndex, stable: true };
+    }
+
+    // Text signatures can repeat ("Да", "Окей", etc.), so require at least
+    // two neighbouring saved messages in the same order before classifying
+    // the viewport as part of the saved prefix.
+    const maxLength = Math.min(6, visible.length, refs.length);
+    for (let length = maxLength; length >= 2; length--) {
+      for (let v = 0; v <= visible.length - length; v++) {
+        for (let s = 0; s <= refs.length - length; s++) {
+          let same = true;
+          for (let offset = 0; offset < length; offset++) {
+            if (!visible[v + offset].signature ||
+                visible[v + offset].signature !== refs[s + offset].signature) {
+              same = false;
+              break;
+            }
+          }
+          if (same) {
+            return {
+              known: true,
+              matchLength: length,
+              savedIndex: s + length - 1,
+              stable: false
+            };
+          }
+        }
+      }
+    }
+
+    return { known: false, matchLength: 0, savedIndex: -1 };
+  }
+
   async function reachDraftResumeAnchor(
     anchorId,
     anchorSignature,
     tailSignatures,
     knownSignatures,
+    savedRefs,
     checkpointSignatures,
     lastScrollDirection,
+    capturePhase,
     map,
     order,
     settings
   ) {
     const known = new Set((knownSignatures || []).filter(Boolean));
-    const savedDirection = lastScrollDirection === 'up' ? 'up' : 'down';
 
     if (checkpointWindowVisible(checkpointSignatures)) {
       await progress('Сохранённая контрольная точка уже видна. Продолжаю с неё.', map.size, {
         phase: 'top',
         anchorReached: true,
-        resumeSearchDirection: savedDirection,
+        resumeSearchDirection: capturePhase === 'walk' ? 'down' : lastScrollDirection,
         force: true
       });
       return {
@@ -2075,6 +2127,161 @@
       };
     }
 
+    // During the chronological save pass, captured messages form a continuous
+    // prefix from the beginning of the conversation to the saved frontier.
+    // Therefore geometry is deterministic:
+    // - visible saved messages => viewport is above the frontier, move down;
+    // - no saved messages => viewport is below the frontier, move up until the
+    //   saved prefix is found, then turn down toward the exact checkpoint.
+    if (capturePhase === 'walk') {
+      let prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
+      let knownVisible = prefixEvidence.known;
+      let direction = knownVisible ? 'down' : 'up';
+      let enteredSavedPrefix = knownVisible;
+      let overshotFrontier = false;
+      let unchanged = 0;
+      let previousSignature = '';
+
+      for (let i = 0; i < 700; i++) {
+        await waitIfPaused();
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings);
+
+        if (checkpointWindowVisible(checkpointSignatures)) {
+          await progress('Найдена сохранённая контрольная точка.', map.size, {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            resumeSearchDirection: direction,
+            force: true
+          });
+          return {
+            id: anchorId,
+            signature: anchorSignature,
+            matchLength: Math.min(6, (checkpointSignatures || []).length),
+            checkpointMatched: true
+          };
+        }
+
+        const tailMatch = findResumeTailMatch(tailSignatures);
+        if (tailMatch) {
+          await progress(
+            'Найден последний сохранённый участок по ' + tailMatch.matchLength + ' соседним репликам.',
+            map.size,
+            {
+              phase: 'top',
+              iteration: i + 1,
+              anchorReached: true,
+              anchorMatchLength: tailMatch.matchLength,
+              resumeSearchDirection: direction,
+              force: true
+            }
+          );
+          return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
+        }
+
+        if (hasResumeAnchor(anchorId, anchorSignature)) {
+          await progress('Найдена последняя сохранённая реплика.', map.size, {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            resumeSearchDirection: direction,
+            force: true
+          });
+          return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+        }
+
+        prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
+        knownVisible = prefixEvidence.known;
+
+        if (!enteredSavedPrefix) {
+          if (knownVisible) {
+            enteredSavedPrefix = true;
+            overshotFrontier = false;
+            direction = 'down';
+            unchanged = 0;
+            previousSignature = '';
+            await progress(
+              'Нашёл сохранённую часть; теперь иду вниз к месту остановки…',
+              map.size,
+              {
+                phase: 'top',
+                iteration: i + 1,
+                resumeSearchDirection: direction,
+                force: true
+              }
+            );
+          } else {
+            direction = 'up';
+            await progress(
+              'Текущий участок ниже сохранённой границы; иду вверх до сохранённой части…',
+              map.size,
+              {
+                phase: 'top',
+                iteration: i + 1,
+                resumeSearchDirection: direction
+              }
+            );
+          }
+        } else if (knownVisible) {
+          // Any known message belongs to the saved prefix, so the saved frontier
+          // is at or below the current viewport.
+          direction = 'down';
+          overshotFrontier = false;
+          await progress(
+            'Я внутри сохранённой части; иду вниз к последней сохранённой точке…',
+            map.size,
+            {
+              phase: 'top',
+              iteration: i + 1,
+              resumeSearchDirection: direction
+            }
+          );
+        } else {
+          // We had already been inside the saved prefix and then lost every
+          // known message while moving down: the viewport stepped below the
+          // frontier. Move back up, then approach the frontier more carefully.
+          direction = 'up';
+          overshotFrontier = true;
+          await progress(
+            'Прошёл ниже сохранённой границы; возвращаюсь вверх к последнему известному участку…',
+            map.size,
+            {
+              phase: 'top',
+              iteration: i + 1,
+              resumeSearchDirection: direction,
+              force: true
+            }
+          );
+        }
+
+        const before = visibleTurnSignature();
+        const bursts = overshotFrontier ? 1 : (direction === 'down' ? 2 : 4);
+        await physicalScroll(direction, bursts);
+        const after = visibleTurnSignature();
+
+        if (after && after === before && after === previousSignature) unchanged++;
+        else unchanged = 0;
+        previousSignature = after;
+
+        if (unchanged >= 7) {
+          throw new Error(
+            enteredSavedPrefix
+              ? 'Сохранённую часть нашёл, но точную границу продолжения восстановить не удалось.'
+              : 'Не удалось найти сохранённую часть выше текущей позиции.'
+          );
+        }
+      }
+
+      throw new Error('Не удалось восстановить границу сохранённого прохода сверху вниз.');
+    }
+
+    // Navigation-to-top drafts are not chronological prefixes. For them the
+    // only reliable directional hint is the last physical scroll direction:
+    // known viewport => continue that way; unknown viewport => search in the
+    // opposite direction until known content is found, then turn back.
+    const savedDirection = lastScrollDirection === 'down' ? 'down' : 'up';
     let knownVisible = visibleHasKnownSignatures(known);
     let direction = knownVisible
       ? savedDirection
@@ -2105,63 +2312,25 @@
         };
       }
 
-      const tailMatch = findResumeTailMatch(tailSignatures);
-      if (tailMatch && savedDirection === 'down') {
-        await progress(
-          'Найден сохранённый хвост по ' + tailMatch.matchLength + ' соседним репликам.',
-          map.size,
-          {
-            phase: 'top',
-            iteration: i + 1,
-            anchorReached: true,
-            anchorMatchLength: tailMatch.matchLength,
-            resumeSearchDirection: direction,
-            force: true
-          }
-        );
-        return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
-      }
-
-      if (savedDirection === 'down' && hasResumeAnchor(anchorId, anchorSignature)) {
-        await progress('Найдена последняя сохранённая реплика.', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          anchorReached: true,
-          resumeSearchDirection: direction,
-          force: true
-        });
-        return { id: anchorId, signature: anchorSignature, matchLength: 1 };
-      }
-
       knownVisible = visibleHasKnownSignatures(known);
       if (!crossedIntoKnown && knownVisible) {
         crossedIntoKnown = true;
         direction = savedDirection;
         unchanged = 0;
         previousSignature = '';
-        await progress(
-          'Найден сохранённый участок; продолжаю в направлении последней прокрутки…',
-          map.size,
-          {
-            phase: 'top',
-            iteration: i + 1,
-            resumeSearchDirection: direction,
-            force: true
-          }
-        );
-      } else {
-        await progress(
-          knownVisible
-            ? 'Иду по сохранённому участку в направлении последней прокрутки…'
-            : 'Текущий участок неизвестен; иду против последней прокрутки до сохранённой части…',
-          map.size,
-          {
-            phase: 'top',
-            iteration: i + 1,
-            resumeSearchDirection: direction
-          }
-        );
       }
+
+      await progress(
+        knownVisible
+          ? 'Иду по сохранённому участку в направлении последней прокрутки…'
+          : 'Ищу сохранённый участок в противоположном направлении…',
+        map.size,
+        {
+          phase: 'top',
+          iteration: i + 1,
+          resumeSearchDirection: direction
+        }
+      );
 
       const before = visibleTurnSignature();
       await physicalScroll(direction, direction === 'down' ? 3 : 5);
@@ -2172,11 +2341,7 @@
       previousSignature = after;
 
       if (unchanged >= 6) {
-        throw new Error(
-          crossedIntoKnown
-            ? 'Сохранённый участок найден, но контрольную точку продолжения восстановить не удалось.'
-            : 'Не удалось дойти до сохранённого участка в направлении, противоположном последней прокрутке.'
-        );
+        throw new Error('Не удалось восстановить контрольную точку навигационного прохода.');
       }
     }
 
@@ -2416,8 +2581,13 @@
               '',
               [],
               knownSignatures,
+              checkpoint.messages.map(item => ({
+                id: String(item?.id || ''),
+                signature: externalMatchSignature(item?.role || 'unknown', item?.text || '')
+              })),
               checkpoint.resumeWindowSignatures,
               checkpoint.lastScrollDirection || 'up',
+              checkpoint.capturePhase || 'top',
               map,
               order,
               settings
@@ -2469,9 +2639,14 @@
             resumeAnchorSignature,
             resumeTailSignatures,
             knownSignatures,
+            existingPass.messages.map(item => ({
+              id: String(item?.id || ''),
+              signature: externalMatchSignature(item?.role || 'unknown', item?.text || '')
+            })),
             existingPass.resumeWindowSignatures || [],
             existingPass.lastScrollDirection ||
               (existingPass.capturePhase === 'walk' ? 'down' : 'up'),
+            existingPass.capturePhase || 'walk',
             map,
             order,
             settings
