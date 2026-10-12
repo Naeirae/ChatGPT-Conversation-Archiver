@@ -2401,24 +2401,45 @@
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
-          const first = checkpoint?.messages?.[checkpoint.messages.length - 1];
-          if (!first || checkpoint.capturePhase !== 'top') throw new Error('Контрольная точка прокрутки вверх отсутствует.');
-          // Searching for the persisted anchor must not overwrite the existing
-          // checkpoint. Keep the original saved draft untouched until the anchor
-          // has been reached and the resumed upward traversal can progress.
-          await reachResumeAnchor(
-            first.id || '',
-            first.text ? messageTextSignature(first) : '',
-            resumeTailSignatures,
-            map,
-            order,
-            settings,
-            { allowDownwardFallback: true }
-          );
+          const fallbackAnchor = checkpoint?.messages?.[checkpoint.messages.length - 1];
+          if (!fallbackAnchor || checkpoint.capturePhase !== 'top') {
+            throw new Error('Контрольная точка прокрутки вверх отсутствует.');
+          }
+
+          const knownSignatures = checkpoint.messages
+            .filter(item => cleanMessageText(item?.text || '', item?.role || ''))
+            .map(item => externalMatchSignature(item.role, item.text));
+
+          if ((checkpoint.resumeWindowSignatures || []).length >= 2) {
+            await reachDraftResumeAnchor(
+              '',
+              '',
+              [],
+              knownSignatures,
+              checkpoint.resumeWindowSignatures,
+              checkpoint.lastScrollDirection || 'up',
+              map,
+              order,
+              settings
+            );
+          } else {
+            // Legacy drafts did not persist the visible checkpoint window.
+            // Keep their old anchor recovery path for compatibility.
+            await reachResumeAnchor(
+              fallbackAnchor.id || '',
+              fallbackAnchor.text ? messageTextSignature(fallbackAnchor) : '',
+              resumeTailSignatures,
+              map,
+              order,
+              settings,
+              { allowDownwardFallback: true }
+            );
+          }
+
           map.clear();
           order.length = 0;
-          // The second, chronological pass re-reads the whole selected range;
-          // this search only restores the position of the uppermost saved turn.
+          // The restored position is only a navigation checkpoint.
+          // The chronological pass will still rebuild and verify the selected range.
         }
         await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null, boundary);
         navigationMessages = [...map.values()];
