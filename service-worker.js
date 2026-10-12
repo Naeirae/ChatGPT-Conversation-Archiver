@@ -109,8 +109,13 @@ async function listLinkedArchives() {
 
     const key = conversationKey(archive.sourceUrl || '');
     if (!archive.isFragment && key && repairedIndex[key] !== archive.id) {
-      repairedIndex[key] = archive.id;
-      indexChanged = true;
+      const indexedArchiveId = repairedIndex[key] || '';
+      const indexedArchive = indexedArchiveId ? await getArchive(indexedArchiveId) : null;
+      const canRepair = !archive.partial || !indexedArchive?.id || Boolean(indexedArchive.partial);
+      if (canRepair) {
+        repairedIndex[key] = archive.id;
+        indexChanged = true;
+      }
     }
 
     const linked = archive.isFragment ? null : await getLinkedDoc(archive.sourceUrl);
@@ -1280,11 +1285,12 @@ function partialArchiveIdForSource(sourceUrl = '') {
   return key ? 'partial-' + hashText(key) : '';
 }
 
-async function saveUnfinishedAsPartial(passId = '') {
-  const draft = await getDraft(passId);
-  if (!draft?.messages?.length) throw new Error('Незавершённый проход не найден.');
+async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
+  if (!draft?.id || !draft?.messages?.length) {
+    throw new Error('Незавершённый проход не найден.');
+  }
 
-  const id = partialArchiveIdForSource(draft.sourceUrl);
+  const id = draft.partialArchiveId || partialArchiveIdForSource(draft.sourceUrl);
   if (!id) throw new Error('Не удалось определить исходный чат для частичного архива.');
 
   const existing = await getArchive(id);
@@ -1302,16 +1308,41 @@ async function saveUnfinishedAsPartial(passId = '') {
     complete: false,
     isFragment: false,
     partialSourceDraftId: draft.id,
+    partialSaveEnabled: true,
     capturePhase: draft.capturePhase || 'walk',
     lastCaptureMode: 'partial-draft'
   };
 
   await putArchive(archive);
 
+  // Keep the binding on the unfinished pass itself. The content collector
+  // preserves these fields across later checkpoints.
+  const boundDraft = {
+    ...draft,
+    partialSaveEnabled: true,
+    partialArchiveId: id,
+    partialSavedAt: new Date().toISOString()
+  };
+  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + draft.id]: boundDraft });
+
+  // A partial snapshot must never replace an already completed canonical
+  // archive for the same conversation. If there is no completed archive yet,
+  // indexing the partial makes it discoverable as the current local state.
   const currentCanonical = await getArchiveForUrl(draft.sourceUrl || '');
   if (!currentCanonical?.id || currentCanonical.partial || currentCanonical.id === archive.id) {
     await indexArchive(archive);
-    await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+  }
+
+  // lastArchiveId is presentation state, not the canonical conversation index.
+  // It is safe to point it at the freshly saved partial snapshot.
+  await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+
+  const job = await getJob();
+  if (job && (job.draftId === draft.id || job.recoveryDraftId === draft.id)) {
+    await setJob({
+      partialSaveEnabled: true,
+      partialArchiveId: id
+    });
   }
 
   return {
@@ -1319,8 +1350,15 @@ async function saveUnfinishedAsPartial(passId = '') {
     archiveId: id,
     messageCount: messages.length,
     updated: Boolean(existing?.id),
-    resumable: true
+    resumable: true,
+    partialSaveEnabled: true,
+    enabled: enable || Boolean(draft.partialSaveEnabled)
   };
+}
+
+async function saveUnfinishedAsPartial(passId = '') {
+  const draft = await getDraft(passId);
+  return syncPartialArchiveFromDraft(draft, { enable: true });
 }
 
 async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
@@ -3281,6 +3319,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             error: item.error || '',
             captureMode: item.captureMode || '',
             capturePhase: item.capturePhase || '',
+            partialSaveEnabled: Boolean(item.partialSaveEnabled),
+            partialArchiveId: item.partialArchiveId || '',
+            partialSavedAt: item.partialSavedAt || '',
             navigationHighWater: Number(item.navigationHighWater || 0),
             chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
             hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key)
@@ -3355,6 +3396,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           draftId,
           draftCount: Math.max(Number(job.draftCount || 0), Number(message.draftCount || 0))
         });
+
+        const checkpointDraft = await getDraft(draftId);
+        if (checkpointDraft?.partialSaveEnabled) {
+          try {
+            await syncPartialArchiveFromDraft(checkpointDraft);
+          } catch (error) {
+            await appendRunLog({}, {
+              level: 'warn',
+              code: 'PARTIAL_AUTOSAVE_FAILED',
+              message: error?.message || String(error),
+              phase: checkpointDraft.capturePhase || job.phase || '',
+              count: checkpointDraft.messages?.length || 0
+            });
+          }
+        }
+
         return { ok: true };
       }
       case 'ARCHIVER_CAPTURE_PROGRESS': {
