@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.80
+
+- Keep stopped capture working tabs and saved checkpoints available for later resume instead of discarding the resume state.
+- Resume chronological downward collection directionally: if a saved section is already visible, move down toward the saved frontier; if the current section is unknown, move up until a known saved section appears, then turn downward to the frontier.
+- Resume interrupted upward navigation in the upward direction from its saved checkpoint.
+- Match unfinished-pass resumes by a multi-message tail instead of relying on one last message whenever possible.
+- Save partial archives as resumable chat archives rather than fragment records; repeated partial saves update the saved copy instead of silently keeping the first snapshot.
+- Mark partial archives clearly in the saved-chat UI and keep their continuation action available.
+
 ## 0.3.60
 
 - Persist resumable drafts while navigating upward to find the top of a full chat or a selected fragment.

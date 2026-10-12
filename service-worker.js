@@ -9,6 +9,7 @@ import {
 } from './lib/archive-store.mjs';
 
 import {
+  buildResumeTailSignatures,
   exportTailSignatures,
   findExportTailAnchor,
   hashText,
@@ -125,6 +126,10 @@ async function listLinkedArchives() {
     rows.push({
       id: archive.id,
       isFragment: Boolean(archive.isFragment),
+      partial: Boolean(archive.partial),
+      complete: archive.complete !== false && !archive.partial,
+      partialSourceDraftId: archive.partialSourceDraftId || '',
+      capturePhase: archive.capturePhase || '',
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       imageCount: archive.imageCount || 0,
@@ -1038,28 +1043,39 @@ async function cancelCapture() {
     }
   } catch (_) {}
 
-  if (
-    job.captureTarget === 'copy' &&
-    job.captureTabId != null &&
-    job.captureTabId !== job.sourceTabId
-  ) {
-    await chrome.tabs.remove(job.captureTabId).catch(() => {});
+  // Give the content collector time to persist its current draft and report
+  // ARCHIVER_CAPTURE_FAILED(status=cancelled). Do not close the working tab:
+  // its scroll position is the cheapest and most reliable resume checkpoint.
+  const waitUntil = Date.now() + 3500;
+  while (Date.now() < waitUntil) {
+    await sleep(120);
+    const current = await getJob();
+    if (current?.jobId !== job.jobId || current?.status === 'cancelled') {
+      return { ok: true, job: current || job };
+    }
   }
+
+  const preservedDraft = job.draftId ? await getDraft(job.draftId) : null;
+  const canRecover = Boolean(
+    preservedDraft?.messages?.length &&
+    job.captureTabId != null
+  );
   await cleanupTemporaryBaseline(job);
 
   const next = await appendRunLog({
     status: 'cancelled',
-    message: 'Сбор остановлен.',
+    message: canRecover
+      ? 'Сбор остановлен. Сохранённую часть можно продолжить с рабочей вкладки.'
+      : 'Сбор остановлен.',
     finishedAt: Date.now(),
-    captureTabId: null,
-    recoveryAvailable: false,
-    recoveryDraftId: '',
-    draftId: '',
-    draftCount: 0
+    recoveryAvailable: canRecover,
+    draftCount: preservedDraft?.messages?.length || Number(job.draftCount || 0)
   }, {
     level: 'warn',
-    code: 'RUN_CANCELLED',
-    message: 'Сбор остановлен пользователем.',
+    code: canRecover ? 'RUN_CANCELLED_RECOVERABLE' : 'RUN_CANCELLED',
+    message: canRecover
+      ? 'Сбор остановлен пользователем; рабочая вкладка и контрольная точка сохранены.'
+      : 'Сбор остановлен пользователем.',
     phase: job.phase || '',
     count: Number(job.count || 0)
   });
@@ -1073,7 +1089,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
 
   let preservedCaptureTabId = null;
   if (
-    status === 'error' &&
+    ['error', 'cancelled'].includes(status) &&
     draftId &&
     ['full', 'fragment', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
     job.captureTabId != null
@@ -1144,7 +1160,7 @@ async function resumeFailedCaptureFromWorkingTab() {
   const failedJob = await getJob();
   if (
     !failedJob ||
-    failedJob.status !== 'error' ||
+    !['error', 'cancelled'].includes(failedJob.status) ||
     !failedJob.draftId ||
     failedJob.captureTabId == null
   ) {
@@ -1172,8 +1188,14 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (!lastMessage) throw new Error('В сохранённом незавершённом проходе нет точки, от которой можно продолжить.');
 
   const jobId = makeJobId();
-  const resumeMode = draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
-    ? 'resume-draft' : 'retry-walk';
+  const resumeNavigation = draft.capturePhase === 'top' &&
+    ['full', 'fragment'].includes(draft.captureMode);
+  const resumeMode = resumeNavigation
+    ? draft.captureMode
+    : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
+        ? 'resume-draft'
+        : 'retry-walk');
+  const resumeTailSignatures = buildResumeTailSignatures(draft.messages, 4);
   const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
     jobId,
@@ -1188,9 +1210,11 @@ async function resumeFailedCaptureFromWorkingTab() {
     draftCount: draft.messages.length,
     recoveryAvailable: false,
     captureTabId: captureTab.id,
-    message: resumeMode === 'resume-draft'
-      ? 'Ищу последнюю сохранённую реплику и продолжаю с неё без полного прохода…'
-      : 'Возвращаю рабочую вкладку к началу для восстановления…',
+    message: resumeNavigation
+      ? 'Продолжаю навигацию вверх от сохранённого места…'
+      : resumeMode === 'resume-draft'
+        ? 'Ищу последнюю сохранённую реплику и продолжаю с неё без полного прохода…'
+        : 'Возвращаю рабочую вкладку к началу для восстановления…',
     startedAt: Date.now(),
     finishedAt: null
   });
@@ -1200,8 +1224,10 @@ async function resumeFailedCaptureFromWorkingTab() {
       mode: resumeMode,
       resumeAnchorId: lastMessage.id || '',
       resumeAnchorSignature: messageSignature(lastMessage.role, lastMessage.text),
+      resumeTailSignatures,
       existingDraftId: draft.id,
-      fixedCaptureBoundary: boundary
+      fixedCaptureBoundary: boundary,
+      resumeNavigation
     });
   } catch (error) {
     const message = error?.message || String(error);
@@ -1219,15 +1245,19 @@ async function resumeFailedCaptureFromWorkingTab() {
   const next = await appendRunLog({
     status: 'running',
     phase: 'top',
-    message: resumeMode === 'resume-draft'
-      ? 'Продолжаю после последней сохранённой реплики…'
-      : 'Восстанавливаю хронологический проход…'
+    message: resumeNavigation
+      ? 'Продолжаю путь к началу от сохранённой контрольной точки…'
+      : resumeMode === 'resume-draft'
+        ? 'Продолжаю после последней сохранённой реплики…'
+        : 'Восстанавливаю хронологический проход…'
   }, {
     level: 'info',
     code: 'UNFINISHED_PASS_RETRY_STARTED',
-    message: resumeMode === 'resume-draft'
-      ? 'Черновик сохранён; поиск последнего сохранённого сообщения и добор до исходной конечной метки.'
-      : 'Сохранённый незавершённый проход найден; повторяется хронологический проход.',
+    message: resumeNavigation
+      ? 'Черновик сохранён; навигация продолжается от последнего сохранённого участка без возврата к уже пройденной части.'
+      : resumeMode === 'resume-draft'
+        ? 'Черновик сохранён; поиск последнего сохранённого сообщения и добор до исходной конечной метки.'
+        : 'Сохранённый незавершённый проход найден; повторяется хронологический проход.',
     phase: 'top',
     count: draft.messages.length
   });
@@ -1235,36 +1265,58 @@ async function resumeFailedCaptureFromWorkingTab() {
   return { ok: true, job: next };
 }
 
+function partialArchiveIdForSource(sourceUrl = '') {
+  const key = conversationKey(sourceUrl) || String(sourceUrl || '');
+  return key ? 'partial-' + hashText(key) : '';
+}
+
 async function saveUnfinishedAsPartial(passId = '') {
   const draft = await getDraft(passId);
   if (!draft?.messages?.length) throw new Error('Незавершённый проход не найден.');
-  const id = 'partial-' + draft.id;
+
+  const id = partialArchiveIdForSource(draft.sourceUrl);
+  if (!id) throw new Error('Не удалось определить исходный чат для частичного архива.');
+
   const existing = await getArchive(id);
-  if (existing?.id) return { ok: true, archiveId: id, messageCount: existing.messages.length, alreadySaved: true };
-  const messages = draft.messages;
+  const messages = draft.messages.slice();
   const archive = {
+    ...(existing || {}),
     ...draft,
     id,
-    title: 'Частичный архив — ' + (draft.title || 'ChatGPT'),
+    title: draft.title || existing?.title || 'ChatGPT',
     capturedAt: new Date().toISOString(),
-    messages: messages.slice(),
+    messages,
     messageCount: messages.length,
     imageCount: messages.reduce((n, item) => n + (item.images?.length || 0), 0),
     partial: true,
     complete: false,
-    isFragment: true,
+    isFragment: false,
     partialSourceDraftId: draft.id,
-    capturePhase: draft.capturePhase || 'top',
+    capturePhase: draft.capturePhase || 'walk',
     lastCaptureMode: 'partial-draft'
   };
+
   await putArchive(archive);
-  return { ok: true, archiveId: id, messageCount: messages.length };
+
+  const currentCanonical = await getArchiveForUrl(draft.sourceUrl || '');
+  if (!currentCanonical?.id || currentCanonical.partial || currentCanonical.id === archive.id) {
+    await indexArchive(archive);
+    await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+  }
+
+  return {
+    ok: true,
+    archiveId: id,
+    messageCount: messages.length,
+    updated: Boolean(existing?.id),
+    resumable: true
+  };
 }
 
 async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
   // A resumable live tab is preferable to starting a new full capture.
   const activeJob = await getJob();
-  if (activeJob?.status === 'error' && activeJob.recoveryAvailable &&
+  if (['error', 'cancelled'].includes(activeJob?.status) && activeJob.recoveryAvailable &&
       activeJob.captureTabId != null &&
       (activeJob.draftId === passId || activeJob.recoveryDraftId === passId)) {
     return resumeFailedCaptureFromWorkingTab();
@@ -1307,6 +1359,7 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy') {
     mode: draft.capturePhase === 'top' && ['full', 'fragment'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
     resumeNavigation: draft.capturePhase === 'top',
+    resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
     captureTarget
@@ -1414,7 +1467,8 @@ function partialMessageKey(item) {
 
 async function reconcilePartialArchive(draftId, completed) {
   if (!draftId || !completed?.messages?.length) return { applied: false, reason: 'no-draft' };
-  const partialId = 'partial-' + draftId;
+  const partialId = partialArchiveIdForSource(completed.sourceUrl || '');
+  if (!partialId) return { applied: false, reason: 'no-partial-id' };
   const partial = await getArchive(partialId);
   if (!partial?.partial || !partial.messages?.length) return { applied: false, reason: 'no-partial' };
 

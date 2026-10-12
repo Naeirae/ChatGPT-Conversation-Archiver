@@ -81,7 +81,7 @@ async function load() {
   const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
   const isActiveRecovery = Boolean(
     state?.unfinishedPass?.id === passId &&
-    state?.job?.status === 'error' &&
+    ['error', 'cancelled'].includes(state?.job?.status) &&
     state?.job?.recoveryAvailable
   );
   const canResume = Boolean(pass.captureBoundary?.kind && pass.captureBoundary?.key && pass.sourceUrl);
@@ -158,7 +158,7 @@ $('resume').onclick = async () => {
   const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
   const isActiveRecovery = Boolean(
     state?.unfinishedPass?.id === passId &&
-    state?.job?.status === 'error' &&
+    ['error', 'cancelled'].includes(state?.job?.status) &&
     state?.job?.recoveryAvailable
   );
   const result = await chrome.runtime.sendMessage(
@@ -170,5 +170,5 @@ $('resume').onclick = async () => {
     alert(result?.error || 'Не удалось продолжить незавершённый проход.');
     return;
   }
-  alert('Архиватор ищет сохранённый стык и продолжает сбор.');
+  alert('Архиватор восстанавливает сохранённый участок и продолжает сбор в нужном направлении.');
 };

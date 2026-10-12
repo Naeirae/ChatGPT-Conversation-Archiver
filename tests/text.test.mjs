@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildResumeTailSignatures,
   exportTailSignatures,
+  externalMatchSignature,
   findExportTailAnchor,
   messageSignature,
   normalizeDisplayText,
@@ -75,4 +77,22 @@ test('tail anchor fails when the saved suffix is not present', () => {
     findExportTailAnchor(current, exportTailSignatures(other)),
     -1
   );
+});
+
+
+test('resume tail uses several neighbouring prefix signatures', () => {
+  const messages = [
+    { role: 'user', text: 'Старое сообщение' },
+    { role: 'assistant', text: 'Ответ один' },
+    { role: 'user', text: 'Сообщение два' },
+    { role: 'assistant', text: 'Ответ три' },
+    { role: 'user', text: 'Последняя сохранённая реплика' }
+  ];
+
+  const tail = buildResumeTailSignatures(messages, 4);
+
+  assert.equal(tail.length, 4);
+  assert.deepEqual(tail, messages.slice(-4).map(item =>
+    externalMatchSignature(item.role, item.text)
+  ));
 });

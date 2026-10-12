@@ -24,7 +24,15 @@
   const TURN_SELECTOR = TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR;
   const EXPAND_RE = /^(show more|read more|expand|показать больше|показать полностью|читать полностью|развернуть|ещ[её]|more)$/i;
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { running: false, jobId: null, cancel: false, paused: false, pauseCheckpoint: null, resumeFailure: '' };
+  const state = {
+    running: false,
+    jobId: null,
+    cancel: false,
+    paused: false,
+    pauseCheckpoint: null,
+    resumeFailure: '',
+    lastScrollDirection: ''
+  };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
@@ -1626,13 +1634,15 @@
   }
 
   async function physicalScroll(direction, bursts = 7) {
+    const normalizedDirection = direction === 'down' ? 'down' : 'up';
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
       jobId: state.jobId,
-      direction,
+      direction: normalizedDirection,
       bursts
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
+    state.lastScrollDirection = normalizedDirection;
     await waitForTurnSettle();
     return result;
   }
@@ -1689,6 +1699,41 @@
     }
 
     return null;
+  }
+
+
+  function currentResumeWindowSignatures(limit = 6) {
+    const visible = visibleMeaningfulSignatures()
+      .map(item => item.externalSignature)
+      .filter(Boolean);
+    return visible.slice(-Math.max(2, Number(limit) || 6));
+  }
+
+  function checkpointWindowVisible(signatures) {
+    const target = (signatures || []).filter(Boolean);
+    if (target.length < 2) return false;
+    const current = visibleMeaningfulSignatures()
+      .map(item => item.externalSignature)
+      .filter(Boolean);
+    const maxLength = Math.min(target.length, current.length, 6);
+    for (let length = maxLength; length >= 2; length--) {
+      const suffix = target.slice(-length);
+      for (let start = 0; start <= current.length - length; start++) {
+        let same = true;
+        for (let offset = 0; offset < length; offset++) {
+          if (current[start + offset] !== suffix[offset]) {
+            same = false;
+            break;
+          }
+        }
+        if (same) return true;
+      }
+    }
+    return false;
+  }
+
+  function oppositeScrollDirection(direction) {
+    return direction === 'up' ? 'down' : 'up';
   }
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
@@ -1992,6 +2037,152 @@
     throw new Error('Не удалось надежно сопоставить хвост сохраненного архива с текущим чатом.');
   }
 
+
+  function visibleHasKnownSignatures(knownSignatures) {
+    const known = knownSignatures instanceof Set
+      ? knownSignatures
+      : new Set((knownSignatures || []).filter(Boolean));
+    if (!known.size) return false;
+    return visibleMeaningfulSignatures().some(item => known.has(item.externalSignature));
+  }
+
+  async function reachDraftResumeAnchor(
+    anchorId,
+    anchorSignature,
+    tailSignatures,
+    knownSignatures,
+    checkpointSignatures,
+    lastScrollDirection,
+    map,
+    order,
+    settings
+  ) {
+    const known = new Set((knownSignatures || []).filter(Boolean));
+    const savedDirection = lastScrollDirection === 'up' ? 'up' : 'down';
+
+    if (checkpointWindowVisible(checkpointSignatures)) {
+      await progress('Сохранённая контрольная точка уже видна. Продолжаю с неё.', map.size, {
+        phase: 'top',
+        anchorReached: true,
+        resumeSearchDirection: savedDirection,
+        force: true
+      });
+      return {
+        id: anchorId,
+        signature: anchorSignature,
+        matchLength: Math.min(6, (checkpointSignatures || []).length),
+        checkpointMatched: true
+      };
+    }
+
+    let knownVisible = visibleHasKnownSignatures(known);
+    let direction = knownVisible
+      ? savedDirection
+      : oppositeScrollDirection(savedDirection);
+    let crossedIntoKnown = knownVisible;
+    let unchanged = 0;
+    let previousSignature = '';
+
+    for (let i = 0; i < 600; i++) {
+      await waitIfPaused();
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
+
+      if (checkpointWindowVisible(checkpointSignatures)) {
+        await progress('Найдена сохранённая контрольная точка.', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          anchorReached: true,
+          resumeSearchDirection: direction,
+          force: true
+        });
+        return {
+          id: anchorId,
+          signature: anchorSignature,
+          matchLength: Math.min(6, (checkpointSignatures || []).length),
+          checkpointMatched: true
+        };
+      }
+
+      const tailMatch = findResumeTailMatch(tailSignatures);
+      if (tailMatch && savedDirection === 'down') {
+        await progress(
+          'Найден сохранённый хвост по ' + tailMatch.matchLength + ' соседним репликам.',
+          map.size,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            anchorMatchLength: tailMatch.matchLength,
+            resumeSearchDirection: direction,
+            force: true
+          }
+        );
+        return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
+      }
+
+      if (savedDirection === 'down' && hasResumeAnchor(anchorId, anchorSignature)) {
+        await progress('Найдена последняя сохранённая реплика.', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          anchorReached: true,
+          resumeSearchDirection: direction,
+          force: true
+        });
+        return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+      }
+
+      knownVisible = visibleHasKnownSignatures(known);
+      if (!crossedIntoKnown && knownVisible) {
+        crossedIntoKnown = true;
+        direction = savedDirection;
+        unchanged = 0;
+        previousSignature = '';
+        await progress(
+          'Найден сохранённый участок; продолжаю в направлении последней прокрутки…',
+          map.size,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            resumeSearchDirection: direction,
+            force: true
+          }
+        );
+      } else {
+        await progress(
+          knownVisible
+            ? 'Иду по сохранённому участку в направлении последней прокрутки…'
+            : 'Текущий участок неизвестен; иду против последней прокрутки до сохранённой части…',
+          map.size,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            resumeSearchDirection: direction
+          }
+        );
+      }
+
+      const before = visibleTurnSignature();
+      await physicalScroll(direction, direction === 'down' ? 3 : 5);
+      const after = visibleTurnSignature();
+
+      if (after && after === before && after === previousSignature) unchanged++;
+      else unchanged = 0;
+      previousSignature = after;
+
+      if (unchanged >= 6) {
+        throw new Error(
+          crossedIntoKnown
+            ? 'Сохранённый участок найден, но контрольную точку продолжения восстановить не удалось.'
+            : 'Не удалось дойти до сохранённого участка в направлении, противоположном последней прокрутке.'
+        );
+      }
+    }
+
+    throw new Error('Не удалось восстановить контрольную точку незавершённого прохода.');
+  }
+
   async function saveRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
     const jobId = state.jobId;
     if (!jobId || !boundary?.kind || !boundary?.key || !order.length) return;
@@ -2027,6 +2218,10 @@
       captureBoundary: current.captureBoundary || boundary,
       navigationHighWater: Number(current.navigationHighWater || 0),
       chronologicalCount: messages.length,
+      lastScrollDirection:
+        state.lastScrollDirection ||
+        (current.phase === 'walk' ? 'down' : 'up'),
+      resumeWindowSignatures: currentResumeWindowSignatures(6),
       messages,
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       complete: false,
@@ -2128,6 +2323,7 @@
     state.jobId = jobId;
     state.cancel = false;
     state.paused = false;
+    state.lastScrollDirection = '';
     lastProgressAt = 0;
 
     const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment'].includes(options.mode) ? options.mode : 'full';
@@ -2205,16 +2401,45 @@
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
-          const first = checkpoint?.messages?.[checkpoint.messages.length - 1];
-          if (!first || checkpoint.capturePhase !== 'top') throw new Error('Контрольная точка прокрутки вверх отсутствует.');
-          // Searching for the persisted anchor must not overwrite the existing
-          // checkpoint. Keep the original saved draft untouched until the anchor
-          // has been reached and the resumed upward traversal can progress.
-          await reachResumeAnchor(first.id || '', first.text ? messageTextSignature(first) : '', [], map, order, settings);
+          const fallbackAnchor = checkpoint?.messages?.[checkpoint.messages.length - 1];
+          if (!fallbackAnchor || checkpoint.capturePhase !== 'top') {
+            throw new Error('Контрольная точка прокрутки вверх отсутствует.');
+          }
+
+          const knownSignatures = checkpoint.messages
+            .filter(item => cleanMessageText(item?.text || '', item?.role || ''))
+            .map(item => externalMatchSignature(item.role, item.text));
+
+          if ((checkpoint.resumeWindowSignatures || []).length >= 2) {
+            await reachDraftResumeAnchor(
+              '',
+              '',
+              [],
+              knownSignatures,
+              checkpoint.resumeWindowSignatures,
+              checkpoint.lastScrollDirection || 'up',
+              map,
+              order,
+              settings
+            );
+          } else {
+            // Legacy drafts did not persist the visible checkpoint window.
+            // Keep their old anchor recovery path for compatibility.
+            await reachResumeAnchor(
+              fallbackAnchor.id || '',
+              fallbackAnchor.text ? messageTextSignature(fallbackAnchor) : '',
+              resumeTailSignatures,
+              map,
+              order,
+              settings,
+              { allowDownwardFallback: true }
+            );
+          }
+
           map.clear();
           order.length = 0;
-          // The second, chronological pass re-reads the whole selected range;
-          // this search only restores the position of the uppermost saved turn.
+          // The restored position is only a navigation checkpoint.
+          // The chronological pass will still rebuild and verify the selected range.
         }
         await reachTop(map, order, settings, navigationWindows, mode === 'fragment' ? selectedFragment.start || null : null, boundary);
         navigationMessages = [...map.values()];
@@ -2228,15 +2453,40 @@
         }
         await reachTopWithoutCapture(existingPass.messages.length);
       } else {
-        const matched = await reachResumeAnchor(
-          resumeAnchorId,
-          resumeAnchorSignature,
-          resumeTailSignatures,
-          map,
-          order,
-          settings,
-          { allowDownwardFallback: mode === 'resume-draft' }
-        );
+        let matched;
+        if (mode === 'resume-draft' && existingDraftId) {
+          const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+          const existingPass = stored['draft:' + existingDraftId];
+          if (!existingPass?.messages?.length) {
+            throw new Error('Сохранённый незавершённый проход недоступен.');
+          }
+          const knownSignatures = existingPass.messages
+            .filter(item => cleanMessageText(item?.text || '', item?.role || ''))
+            .map(item => externalMatchSignature(item.role, item.text));
+
+          matched = await reachDraftResumeAnchor(
+            resumeAnchorId,
+            resumeAnchorSignature,
+            resumeTailSignatures,
+            knownSignatures,
+            existingPass.resumeWindowSignatures || [],
+            existingPass.lastScrollDirection ||
+              (existingPass.capturePhase === 'walk' ? 'down' : 'up'),
+            map,
+            order,
+            settings
+          );
+        } else {
+          matched = await reachResumeAnchor(
+            resumeAnchorId,
+            resumeAnchorSignature,
+            resumeTailSignatures,
+            map,
+            order,
+            settings,
+            { allowDownwardFallback: false }
+          );
+        }
         matchedAnchorId = matched?.id || '';
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
@@ -2582,6 +2832,10 @@
             captureBoundary: current.captureBoundary || fixedCaptureBoundary || null,
             navigationHighWater: Number(current.navigationHighWater || 0),
             chronologicalCount: draftMessages.length,
+            lastScrollDirection:
+              state.lastScrollDirection ||
+              (chronologicalStarted ? 'down' : 'up'),
+            resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
             complete: false,
@@ -2617,6 +2871,7 @@
       state.paused = false;
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
+      state.lastScrollDirection = '';
     }
   }
 
