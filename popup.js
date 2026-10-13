@@ -179,7 +179,7 @@ function renderUnfinishedPasses(items = []) {
     if (item.navigationHighWater) parts.push('найдено на первом проходе: ' + item.navigationHighWater);
     if (item.hasBoundary) parts.push('конец исходного чата сохранён');
     if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
-    if (item.partialSaveEnabled) parts.push('частичный архив сохраняется автоматически');
+    if (item.partialSaveEnabled) parts.push('checkpoint зеркалится в локальный snapshot');
     meta.textContent = parts.join(' · ');
 
     const actions = document.createElement('div');
@@ -231,44 +231,35 @@ function renderUnfinishedPasses(items = []) {
       };
     }
 
-    const savePartial = document.createElement('button');
-    savePartial.textContent = item.partialSaveEnabled
-      ? 'Обновить частичный архив сейчас'
-      : 'Сохранить частичный архив';
-    if (item.partialSaveEnabled) savePartial.classList.add('partial-save-active');
-    savePartial.onclick = async () => {
-      savePartial.disabled = true;
-      setStatus(item.partialSaveEnabled
-        ? 'Обновляю частичный архив…'
-        : 'Сохраняю текущую часть и включаю автосохранение…');
-      try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_SAVE_UNFINISHED_PARTIAL',
-          passId: item.id
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить частичный архив.');
+    let exportCurrent = null;
+    if (['walk', 'finalizing'].includes(item.capturePhase || '')) {
+      exportCurrent = document.createElement('button');
+      exportCurrent.textContent = 'Текущую часть → Google Doc';
+      exportCurrent.onclick = async () => {
+        exportCurrent.disabled = true;
+        setStatus('Фиксирую текущий checkpoint и создаю Google Doc…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC',
+            passId: item.id
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить текущую часть в Google Doc.');
 
-        const nextState = await getState();
-        const savedPanel = $('savedArchivesPanel');
-        if (savedPanel) savedPanel.open = true;
-        const unfinishedPanel = $('unfinishedPassesPanel');
-        if (unfinishedPanel) unfinishedPanel.open = true;
-
-        const saved = (nextState?.savedArchives || []).find(record => record.id === result.archiveId);
-        if (!saved || !saved.partial || saved.messageCount < result.messageCount) {
-          throw new Error('Частичный архив записан не полностью: проверка сохранённой копии не прошла.');
+          await getState();
+          setStatus(
+            'Сохранено в Google Doc: ' + Number(result.exportedMessageCount || result.addedCount || 0) +
+            ' сообщений. Позже этот документ можно сверить с продолжением чата.'
+          );
+          if (result.docUrl) {
+            await chrome.tabs.create({ url: result.docUrl });
+          }
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+        } finally {
+          exportCurrent.disabled = false;
         }
-
-        setStatus(
-          'Частичный архив сохранён: ' + result.messageCount +
-          ' сообщений. Автосохранение следующих checkpoint включено.'
-        );
-      } catch (error) {
-        setStatus(error.message || String(error), true);
-      } finally {
-        savePartial.disabled = false;
-      }
-    };
+      };
+    }
 
     const view = document.createElement('button');
     view.textContent = 'Просмотреть';
@@ -318,7 +309,8 @@ function renderUnfinishedPasses(items = []) {
 
     actions.append(resume);
     if (resumeSameTab) actions.append(resumeSameTab);
-    actions.append(savePartial, view, copy, remove);
+    if (exportCurrent) actions.append(exportCurrent);
+    actions.append(view, copy, remove);
     row.append(head, meta, actions);
     list.appendChild(row);
   }
