@@ -1166,3 +1166,26 @@ body.tour-open .header-popover {
   padding:6px 8px;
   font-size:10px;
 }
+
+
+.unfinished-save-hint,
+.unfinished-document-status {
+  margin-top:6px;
+  color:var(--muted);
+  font-size:10px;
+  line-height:1.4;
+}
+.unfinished-document-status {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  align-items:center;
+}
+.unfinished-document-status a {
+  color:var(--accent);
+  text-decoration:none;
+}
+.unfinished-save:disabled {
+  opacity:.58;
+  cursor:not-allowed;
+}
