@@ -110,7 +110,7 @@ function renderRunLog(job) {
       : job.captureMode === 'compare'
       ? 'сверка с локальным архивом'
       : job.captureMode === 'sync'
-        ? 'восстановление по Google Doc'
+        ? 'восстановление по документу Google Docs'
         : job.captureMode === 'continue'
           ? 'продолжение'
           : job.captureMode === 'images'
@@ -122,7 +122,7 @@ function renderRunLog(job) {
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
-  if (job.draftCount) meta.push(job.draftCount + ' в незавершённом проходе');
+  if (job.draftCount) meta.push(job.draftCount + ' в незавершённом сборе');
   if (job.startedAt && (job.finishedAt || !['starting', 'running', 'paused'].includes(job.status))) {
     meta.push(formatDuration((job.finishedAt || Date.now()) - job.startedAt));
   }
@@ -130,14 +130,13 @@ function renderRunLog(job) {
   $('runLogMessage').textContent = job.message || '';
 }
 
-function renderDraft(draft) {
-  const box = $('draft');
-  if (!box) return;
-  box.classList.toggle('hidden', !draft);
-  if (!draft) return;
-  $('draftTitle').textContent = 'Сбор не завершён' + (draft.title ? ' · ' + draft.title : '');
-  $('draftMeta').textContent =
-    (draft.messageCount || 0) + ' сообщений · ' + (draft.imageCount || 0) + ' изображений';
+function unfinishedPhaseLabel(phase = '') {
+  return {
+    top: 'идёт к началу',
+    walk: 'сохраняется сверху вниз',
+    finalizing: 'готовится итоговый архив',
+    paused: 'приостановлен'
+  }[phase] || 'не завершён';
 }
 
 function renderUnfinishedPasses(items = []) {
@@ -151,20 +150,22 @@ function renderUnfinishedPasses(items = []) {
 
   if (!rows.length) return;
 
+  const busy = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
+
   for (const item of rows) {
     const row = document.createElement('div');
-    row.className = 'history-item';
+    row.className = 'history-item unfinished-capture-row';
 
     const head = document.createElement('div');
     head.className = 'history-item-head';
 
     const title = document.createElement('div');
     title.className = 'history-item-title';
-    title.textContent = item.title || 'Незавершённый проход';
+    title.textContent = item.title || 'Незавершённый сбор';
 
     const status = document.createElement('div');
-    status.className = 'history-item-status error';
-    status.textContent = item.capturePhase || 'оборван';
+    status.className = 'history-item-status';
+    status.textContent = unfinishedPhaseLabel(item.capturePhase);
 
     head.append(title, status);
 
@@ -173,146 +174,208 @@ function renderUnfinishedPasses(items = []) {
     const when = item.capturedAt ? new Date(item.capturedAt).toLocaleString('ru-RU') : '—';
     const parts = [
       when,
-      (item.messageCount || 0) + ' сообщений',
-      (item.imageCount || 0) + ' изображений'
+      Number(item.messageCount || 0) + ' сообщений',
+      Number(item.imageCount || 0) + ' изображений'
     ];
-    if (item.navigationHighWater) parts.push('найдено на первом проходе: ' + item.navigationHighWater);
-    if (item.hasBoundary) parts.push('конец исходного чата сохранён');
+    if (item.hasBoundary) parts.push('конец чата зафиксирован');
     if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
-    if (item.partialSaveEnabled) parts.push('checkpoint зеркалится в локальный snapshot');
     meta.textContent = parts.join(' · ');
 
-    const actions = document.createElement('div');
-    actions.className = 'actions';
+    let saveHint = null;
+    if (!item.canExportCurrent) {
+      saveHint = document.createElement('div');
+      saveHint.className = 'unfinished-save-hint';
+      saveHint.textContent = 'Сохранить в документ можно после начала прохода сверху вниз.';
+    }
+
+    let documentStatus = null;
+    if (item.linkedDocUrl) {
+      documentStatus = document.createElement('div');
+      documentStatus.className = 'unfinished-document-status';
+      const text = document.createElement('span');
+      text.textContent = 'Текущая часть уже связана с документ Google Docs.';
+      const link = document.createElement('a');
+      link.href = item.linkedDocUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Открыть документ ↗';
+      documentStatus.append(text, link);
+    }
+
+    const primaryActions = document.createElement('div');
+    primaryActions.className = 'unfinished-primary-actions';
 
     const resume = document.createElement('button');
     resume.className = 'primary';
-    resume.textContent = 'Дособрать';
+    resume.textContent = 'Продолжить';
+    resume.disabled = busy;
     resume.onclick = async () => {
       resume.disabled = true;
-      setStatus('Открываю исходный чат и ищу место остановки…');
+      if (saveCurrent) saveCurrent.disabled = true;
+      setStatus(
+        item.recoveryTabAvailable
+          ? 'Продолжаю сбор в сохранённой рабочей вкладке…'
+          : 'Открываю исходный чат и восстанавливаю место продолжения…'
+      );
       try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
-          passId: item.id,
-          captureTarget: $('captureTarget').value,
-          resumeStrategy: 'fresh'
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый проход.');
+        const passId = item.resumePassId || item.id;
+        const result = item.resumeFromJob
+          ? await chrome.runtime.sendMessage({
+              type: 'ARCHIVER_RESUME_FAILED_CAPTURE'
+            })
+          : item.recoveryTabAvailable
+            ? await chrome.runtime.sendMessage({
+                type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB',
+                passId
+              })
+            : await chrome.runtime.sendMessage({
+                type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+                passId,
+                captureTarget: $('captureTarget').value,
+                resumeStrategy: 'fresh'
+              });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сбор.');
         render({ ...state, job: result.job });
         startPolling();
       } catch (error) {
         setStatus(error.message || String(error), true);
         resume.disabled = false;
+        if (saveCurrent) saveCurrent.disabled = false;
       }
     };
+    primaryActions.appendChild(resume);
 
-    let resumeSameTab = null;
-    if (item.recoveryTabAvailable) {
-      resumeSameTab = document.createElement('button');
-      resumeSameTab.textContent = 'Продолжить в той же вкладке';
-      resumeSameTab.onclick = async () => {
-        resumeSameTab.disabled = true;
-        resume.disabled = true;
-        setStatus('Продолжаю в сохранённой рабочей вкладке…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB',
-            passId: item.id
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить в сохранённой вкладке.');
-          render({ ...state, job: result.job });
-          startPolling();
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-          resumeSameTab.disabled = false;
-          resume.disabled = false;
-        }
-      };
+    const saveCurrent = document.createElement('button');
+    saveCurrent.className = 'unfinished-save';
+    saveCurrent.textContent = 'Сохранить текущую часть в документ Google Docs';
+    saveCurrent.disabled = Boolean(busy || !item.canExportCurrent || !item.exportPassId);
+    if (!item.canExportCurrent || !item.exportPassId) {
+      saveCurrent.title = 'Сохранение станет доступно, когда начнётся проход сверху вниз и появится непрерывная сохранённая часть.';
     }
-
-    let exportCurrent = null;
-    if (['walk', 'finalizing'].includes(item.capturePhase || '')) {
-      exportCurrent = document.createElement('button');
-      exportCurrent.textContent = 'Текущую часть → Google Doc';
-      exportCurrent.onclick = async () => {
-        exportCurrent.disabled = true;
-        setStatus('Фиксирую текущий checkpoint и создаю Google Doc…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC',
-            passId: item.id
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить текущую часть в Google Doc.');
-
-          await getState();
-          setStatus(
-            'Сохранено в Google Doc: ' + Number(result.exportedMessageCount || result.addedCount || 0) +
-            ' сообщений. Позже этот документ можно сверить с продолжением чата.'
-          );
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-        } finally {
-          exportCurrent.disabled = false;
-        }
-      };
-    }
-
-    const view = document.createElement('button');
-    view.textContent = 'Просмотреть';
-    view.onclick = async () => {
-      const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(item.id));
-      await chrome.tabs.create({ url });
-    };
-
-    const copy = document.createElement('button');
-    copy.textContent = 'Скопировать';
-    copy.onclick = async () => {
-      const result = await chrome.runtime.sendMessage({
-        type: 'ARCHIVER_COPY_UNFINISHED_PASS',
-        passId: item.id
-      });
-      if (!result?.ok) {
-        setStatus(result?.error || 'Не удалось скопировать незавершённый проход.', true);
+    saveCurrent.onclick = async () => {
+      if (!item.canExportCurrent || !item.exportPassId) {
+        setStatus('Сначала Архиватор должен начать сохранять чат сверху вниз. После первой сохранённой части эту кнопку можно будет использовать.');
         return;
       }
-      setStatus('Незавершённый проход скопирован: ' + (result.count || 0) + ' сообщений.');
+      saveCurrent.disabled = true;
+      resume.disabled = true;
+      setStatus('Сохраняю текущую собранную часть в документ Google Docs…');
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC',
+          passId: item.exportPassId
+        });
+        if (!result?.ok) {
+          throw new Error(result?.error || 'Не удалось сохранить текущую часть в документ Google Docs.');
+        }
+        setStatus(
+          'Текущая часть сохранена в документ Google Docs: ' +
+          Number(result.exportedMessageCount || result.addedCount || item.exportMessageCount || 0) +
+          ' сообщений.'
+        );
+        await getState();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        saveCurrent.disabled = Boolean(
+          state?.job && ['starting', 'running', 'paused'].includes(state.job.status)
+        );
+        resume.disabled = Boolean(
+          state?.job && ['starting', 'running', 'paused'].includes(state.job.status)
+        );
+      }
     };
+    primaryActions.appendChild(saveCurrent);
+
+    const more = document.createElement('details');
+    more.className = 'unfinished-more';
+
+    const moreSummary = document.createElement('summary');
+    moreSummary.textContent = 'Ещё';
+    more.appendChild(moreSummary);
+
+    const secondary = document.createElement('div');
+    secondary.className = 'unfinished-secondary-actions';
+
+    if (item.recoveryTabAvailable) {
+      const openCapture = document.createElement('button');
+      openCapture.textContent = 'Открыть рабочую вкладку';
+      openCapture.onclick = async () => {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_FOCUS_UNFINISHED_RECOVERY_TAB',
+          passId: item.resumePassId || item.id
+        });
+        if (!result?.ok) setStatus(result?.error || 'Не удалось открыть рабочую вкладку.', true);
+      };
+      secondary.appendChild(openCapture);
+    }
+
+    if (item.viewPassId) {
+      const view = document.createElement('button');
+      view.textContent = 'Просмотреть сохранённую часть';
+      view.onclick = async () => {
+        const url = chrome.runtime.getURL(
+          'unfinished.html?passId=' + encodeURIComponent(item.viewPassId)
+        );
+        await chrome.tabs.create({ url });
+      };
+      secondary.appendChild(view);
+    }
+
+    if (item.copyPassId) {
+      const copy = document.createElement('button');
+      copy.textContent = 'Скопировать сохранённую часть';
+      copy.onclick = async () => {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_COPY_UNFINISHED_PASS',
+          passId: item.copyPassId
+        });
+        if (!result?.ok) {
+          setStatus(result?.error || 'Не удалось скопировать сохранённую часть.', true);
+          return;
+        }
+        setStatus('Скопировано сообщений: ' + Number(result.count || 0) + '.');
+      };
+      secondary.appendChild(copy);
+    }
 
     const remove = document.createElement('button');
     remove.className = 'danger-outline';
-    remove.textContent = 'Удалить';
+    remove.textContent = item.resumeFromJob
+      ? 'Убрать остановленный запуск из списка'
+      : 'Удалить незавершённый сбор';
     remove.onclick = async () => {
-      if (!confirm('Удалить этот сохранённый незавершённый проход?')) return;
+      if (!confirm('Удалить сохранённые данные этого незавершённого сбора? Рабочая вкладка останется открытой.')) return;
       remove.disabled = true;
-      setStatus('Удаляю выбранный черновик…');
+      setStatus('Удаляю сохранённые данные незавершённого сбора…');
       try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
-          passId: item.id
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый проход.');
-        // Reflect successful deletion immediately instead of blocking the
-        // button on an expensive full-state reload.
+        const result = item.resumeFromJob
+          ? await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESET_CAPTURE_STATE' })
+          : await chrome.runtime.sendMessage({
+              type: 'ARCHIVER_DELETE_UNFINISHED_GROUP',
+              logicalGroupId: item.logicalGroupId || '',
+              passIds: item.passIds || [item.id]
+            });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось убрать незавершённый сбор.');
         row.remove();
         count.textContent = String(list.children.length);
-        setStatus('Черновик удалён. Остальные данные сохранены.');
+        setStatus('Сохранённые данные незавершённого сбора удалены. Рабочая вкладка не закрыта.');
         void getState().catch(error => setStatus(error.message || String(error), true));
       } catch (error) {
         remove.disabled = false;
         setStatus(error.message || String(error), true);
       }
     };
+    secondary.appendChild(remove);
 
-    actions.append(resume);
-    if (resumeSameTab) actions.append(resumeSameTab);
-    if (exportCurrent) actions.append(exportCurrent);
-    actions.append(view, copy, remove);
-    row.append(head, meta, actions);
+    more.appendChild(secondary);
+    row.append(head, meta);
+    if (saveHint) row.appendChild(saveHint);
+    if (documentStatus) row.appendChild(documentStatus);
+    row.append(primaryActions, more);
     list.appendChild(row);
   }
 }
-
 
 function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
@@ -395,7 +458,7 @@ function renderSavedArchives(items = []) {
       destinationText.textContent = 'Сохранён локально · сбор не завершён';
     } else if (item.destination?.saved) {
       if (item.destination.kind === 'google-doc') {
-        destinationText.textContent = 'Сохранён в Google Docs';
+        destinationText.textContent = 'Сохранён в документ Google Docs';
       } else if (item.destination.url) {
         destinationText.textContent = 'Сохранён отдельно';
       } else {
@@ -412,7 +475,7 @@ function renderSavedArchives(items = []) {
       destinationLink.href = destinationUrl;
       destinationLink.target = '_blank';
       destinationLink.rel = 'noopener noreferrer';
-      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть Google Doc ↗' : 'Открыть ↗';
+      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть документ Google Docs ↗' : 'Открыть ↗';
       destination.appendChild(destinationLink);
     }
 
@@ -430,7 +493,7 @@ function renderSavedArchives(items = []) {
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus(item.partial
-        ? 'Открываю чат и восстанавливаю checkpoint частичного архива…'
+        ? 'Открываю чат и восстанавливаю сохранённое место продолжения…'
         : 'Открываю чат и ищу место продолжения…');
       try {
         const result = item.partial && item.partialSourceDraftId
@@ -447,7 +510,7 @@ function renderSavedArchives(items = []) {
         if (!result?.ok) throw new Error(
           result?.error ||
           (item.partial
-            ? 'Не удалось восстановить незавершённый проход частичного архива.'
+            ? 'Не удалось восстановить незавершённый сбор частичного архива.'
             : 'Не удалось продолжить чат.')
         );
         render({ ...state, job: result.job });
@@ -487,17 +550,17 @@ function renderSavedArchives(items = []) {
       open.href = item.docUrl || item.destination.url;
       open.target = '_blank';
       open.rel = 'noopener noreferrer';
-      open.textContent = 'Google Doc ↗';
+      open.textContent = 'Документ Google Docs ↗';
       actions.appendChild(open);
     } else {
       const exportButton = document.createElement('button');
       exportButton.className = 'archive-link-open';
       exportButton.type = 'button';
-      exportButton.textContent = 'В Google Docs';
+      exportButton.textContent = 'В документ Google Docs';
       exportButton.disabled = busy;
       exportButton.onclick = async () => {
         exportButton.disabled = true;
-        setStatus('Создаю Google Doc…');
+        setStatus('Создаю документ Google Docs…');
         try {
           const sameTitle = rows.filter(record => record.id !== item.id &&
             normalizedTitle(record.title) === normalizedTitle(item.title));
@@ -507,15 +570,15 @@ function renderSavedArchives(items = []) {
             const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
               record.docUrl);
             const explanation = existingDoc
-              ? 'Для этой переписки уже найден сохранённый Google Doc.'
+              ? 'Для этой переписки уже найден сохранённый документ Google Docs.'
               : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
-            if (!confirm(explanation + '\n\nСоздать ещё один Google Doc? Нажмите «Отмена», чтобы избежать дубля.')) {
+            if (!confirm(explanation + '\n\nСоздать ещё один документ Google Docs? Нажмите «Отмена», чтобы избежать дубля.')) {
               setStatus('Создание документа отменено. Сохранённые данные не изменены.');
               return;
             }
           }
           const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-          setStatus('Сохранено в Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
+          setStatus('Сохранено в документ Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
           await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
@@ -550,7 +613,7 @@ function renderSavedArchives(items = []) {
     deleteSaved.disabled = busy;
     deleteSaved.onclick = async () => {
       if (!confirm((item.isFragment ? 'Удалить этот сохранённый фрагмент' : 'Удалить этот сохранённый архив') +
-        ' из Архиватора? Остальные архивы, черновики и Google Docs не изменятся.')) return;
+        ' из Архиватора? Остальные архивы, черновики и документ Google Docs не изменятся.')) return;
       deleteSaved.disabled = true;
       try {
         const result = await chrome.runtime.sendMessage({
@@ -562,7 +625,7 @@ function renderSavedArchives(items = []) {
         }
         row.remove();
         count.textContent = String(list.children.length);
-        setStatus('Выбранный архив удалён из Архиватора. Google Docs не изменён.');
+        setStatus('Выбранный архив удалён из Архиватора. документ Google Docs не изменён.');
         await getState();
       } catch (error) {
         setStatus(error.message || String(error), true);
@@ -941,7 +1004,6 @@ function render(data) {
   state = data || {};
   const job = state.job;
   const archive = state.archive;
-  const draft = state.unfinishedPass || state.draft || null;
   const running = job && ['starting', 'running', 'paused'].includes(job.status);
   const activelyRunning = job && ['starting', 'running'].includes(job.status);
   const paused = job?.status === 'paused';
@@ -952,8 +1014,12 @@ function render(data) {
   renderUnfinishedPasses(state.unfinishedPasses || []);
   renderSavedArchives(state.savedArchives || []);
   const hasUnfinished = Boolean((state.unfinishedPasses || []).length);
-  $('unfinishedPassesPanel')?.classList.toggle('hidden', !hasUnfinished);
-  $('unfinishedPassesPanel')?.classList.toggle('has-items', hasUnfinished);
+  const unfinishedPanel = $('unfinishedPassesPanel');
+  unfinishedPanel?.classList.toggle('hidden', !hasUnfinished);
+  unfinishedPanel?.classList.toggle('has-items', hasUnfinished);
+  if (hasUnfinished && ['error', 'cancelled'].includes(job?.status)) {
+    unfinishedPanel.open = true;
+  }
 
   const isFragmentRun = job?.captureMode === 'fragment' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
@@ -980,44 +1046,25 @@ function render(data) {
 
   $('linkedDocHint').textContent = state.linkedDoc?.url
     ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
-    : 'Связанного Google Doc для этого чата сейчас нет.';
-  const latestUnfinished = (state.unfinishedPasses || []).find(item => {
-    try {
-      const expected = state.job?.sourceUrl;
-      return expected && item.sourceUrl &&
-        new URL(item.sourceUrl).origin === new URL(expected).origin &&
-        new URL(item.sourceUrl).pathname === new URL(expected).pathname;
-    } catch (_) { return false; }
-  }) || null;
-  const canResumeUnfinished = Boolean(!running && latestUnfinished?.id);
+    : 'Связанного документа Google Docs для этого чата сейчас нет.';
   const canRetryCurrent = Boolean(
     !running &&
-    !canResumeUnfinished &&
+    !hasUnfinished &&
     job?.status === 'error' &&
     job?.captureTarget === 'copy'
   );
-  $('retryCurrent').textContent = canResumeUnfinished ? 'Продолжить сбор' : 'Повторить в текущей вкладке';
-  $('retryCurrent').classList.toggle('hidden', !(canResumeUnfinished || canRetryCurrent));
-  $('dismissFailedRun').classList.toggle('hidden', Boolean(running || job?.status !== 'error'));
+  $('retryCurrent').textContent = 'Повторить в текущей вкладке';
+  $('retryCurrent').classList.toggle('hidden', !canRetryCurrent);
+  $('dismissFailedRun').classList.toggle(
+    'hidden',
+    Boolean(running || hasUnfinished || job?.status !== 'error')
+  );
   $('dismissFailedRun').disabled = Boolean(running);
   if (!running && !$('docUrl').value && state.linkedDoc?.url) {
     $('docUrl').value = state.linkedDoc.url;
   }
   renderCaptureProgress(job, running);
   renderRunLog(job);
-  renderDraft(running ? null : draft);
-
-  const recoverableCapture = Boolean(
-    ['error', 'cancelled'].includes(job?.status) &&
-    job?.recoveryAvailable &&
-    job?.captureTabId != null
-  );
-  $('openFailedCapture').classList.toggle('hidden', !recoverableCapture);
-  $('resumeFailedCapture').classList.toggle('hidden', !recoverableCapture);
-  $('resumeFailedCapture').disabled = Boolean(running || !recoverableCapture);
-  $('resumeFailedCapture').textContent = 'Продолжить в той же вкладке';
-  $('draftRecoveryHint').classList.toggle('hidden', !draft);
-  $('deleteDraft').disabled = Boolean(running || !draft);
 
   $('archive').classList.add('hidden');
   $('archiveTitle').textContent = archive?.title || '';
@@ -1026,10 +1073,10 @@ function render(data) {
       (archive.lastImageRecoveredCount ? ` · добор изображений +${archive.lastImageRecoveredCount}` : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
-  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в Google Docs' : 'Чат сохранён';
+  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
   $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
   $('archiveDocStatus').textContent = linkedUrl
-    ? 'Google Doc связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
+    ? 'Документ Google Docs связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
     : 'Архив пока хранится только локально.';
   $('archiveDocLink').classList.toggle('hidden', !linkedUrl);
   $('archiveDocLink').href = linkedUrl || '#';
@@ -1052,18 +1099,16 @@ function render(data) {
     setStatus(job.message || 'Сбор идет в фоне…');
   } else if (job?.status === 'error') {
     const attempted = Number(job.count || 0);
-    const hasDraft = Boolean(draft?.messageCount);
     const attemptText = attempted
       ? `Сбор остановился после ${attempted} сообщений.`
       : 'Сбор остановился.';
-    const nextText = hasDraft ? ' Незавершённый сбор можно продолжить ниже.' : '';
+    const nextText = hasUnfinished ? ' Незавершённый сбор можно продолжить ниже.' : '';
     setStatus(attemptText + nextText + ' ' + (job.message || ''), true);
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
-    const resumable = Boolean(draft?.messageCount);
     setStatus(
       (attempted ? `Сбор остановлен после ${attempted} сообщений.` : 'Сбор остановлен.') +
-      (resumable ? ' Сохранённую часть можно продолжить.' : '')
+      (hasUnfinished ? ' Сохранённую часть можно продолжить.' : '')
     );
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
@@ -1098,27 +1143,84 @@ async function getState() {
   return result;
 }
 
+function mergeLiveUnfinished(rows = [], live = null) {
+  const next = Array.isArray(rows) ? rows.map(item => ({ ...item })) : [];
+  if (!live?.id) return next;
+
+  const index = next.findIndex(item =>
+    live.logicalGroupId &&
+    item.logicalGroupId === live.logicalGroupId
+  );
+
+  if (index < 0) {
+    next.unshift(live);
+    return next;
+  }
+
+  const current = next[index];
+  next[index] = {
+    ...current,
+    ...live,
+    title: current.title || live.title,
+    passIds: [...new Set([...(current.passIds || []), ...(live.passIds || [])])],
+    messageCount: Math.max(Number(current.messageCount || 0), Number(live.messageCount || 0)),
+    exportPassId: live.exportPassId || current.exportPassId || '',
+    canExportCurrent: Boolean(live.canExportCurrent || current.canExportCurrent),
+    exportMessageCount: Math.max(
+      Number(current.exportMessageCount || 0),
+      Number(live.exportMessageCount || 0)
+    ),
+    recoveryTabAvailable: Boolean(
+      live.recoveryTabAvailable || current.recoveryTabAvailable
+    ),
+    recoveryTabId: live.recoveryTabId ?? current.recoveryTabId ?? null
+  };
+  return next;
+}
+
+async function getLiveState() {
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_LIVE_STATE' });
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось получить состояние сбора.');
+
+  const previousStatus = state?.job?.status || '';
+  const nextState = {
+    ...(state || {}),
+    job: result.job || null,
+    unfinishedPasses: mergeLiveUnfinished(
+      state?.unfinishedPasses || [],
+      result.unfinishedPass || null
+    )
+  };
+  render(nextState);
+
+  const nextStatus = result.job?.status || '';
+  const wasActive = ['starting', 'running', 'paused'].includes(previousStatus);
+  const isActive = ['starting', 'running', 'paused'].includes(nextStatus);
+  if (wasActive && !isActive) {
+    return getState();
+  }
+  return result;
+}
+
 let stateRefreshPending = false;
 function startPolling() {
   if (pollTimer) clearInterval(pollTimer);
-  // State includes full saved drafts/archives in the background worker.
-  // Never pile up overlapping heavyweight requests every 650 ms.
   pollTimer = setInterval(async () => {
     if (stateRefreshPending) return;
     stateRefreshPending = true;
     try {
-      await getState();
+      await getLiveState();
     } catch (_) {
-      // A transient MV3 worker restart should not multiply polling requests.
+      // Перезапуск фонового процесса не должен создавать параллельные опросы.
     } finally {
       stateRefreshPending = false;
     }
-  }, 5000);
+  }, 2500);
 }
 
 async function exportToDoc(type, payload = {}) {
   const result = await chrome.runtime.sendMessage({ type, ...payload });
-  if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить в Google Docs.');
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить в документ Google Docs.');
   return result;
 }
 
@@ -1214,7 +1316,7 @@ $('continue').onclick = async () => {
   $('continue').disabled = true;
   setStatus(
     $('docUrl').value.trim()
-      ? 'Ищу последний сохранённый стык; новые сообщения добавлю в указанный Google Doc…'
+      ? 'Ищу последний сохранённый стык; новые сообщения добавлю в указанный документ Google Docs…'
       : 'Ищу последний сохранённый стык и добираю только новое…'
   );
   try {
@@ -1242,14 +1344,14 @@ $('continue').onclick = async () => {
 $('syncDoc').onclick = async () => {
   const docUrl = $('docUrl').value.trim();
   if (!docUrl) {
-    setStatus('Для восстановления точки продолжения вставьте ссылку на Google Doc.', true);
+    setStatus('Для восстановления точки продолжения вставьте ссылку на документ Google Docs.', true);
     return;
   }
 
   $('syncDoc').disabled = true;
   $('continue').disabled = true;
   $('capture').disabled = true;
-  setStatus('Читаю Google Doc как резервную точку продолжения и ищу его хвост в текущем чате…');
+  setStatus('Читаю документ Google Docs как резервную точку продолжения и ищу его хвост в текущем чате…');
 
   try {
     const result = await chrome.runtime.sendMessage({
@@ -1257,7 +1359,7 @@ $('syncDoc').onclick = async () => {
       docUrl,
       captureTarget: $('captureTarget').value
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось восстановить стык по Google Doc.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось восстановить стык по документу Google Docs.');
     render({
       ...state,
       job: result.job,
@@ -1315,7 +1417,7 @@ $('retryCurrent').onclick = async () => {
     let result;
     if (previousMode === 'sync') {
       const docUrl = $('docUrl').value.trim();
-      if (!docUrl) throw new Error('Для восстановления по Google Doc нужна ссылка.');
+      if (!docUrl) throw new Error('Для восстановления по документу Google Docs нужна ссылка.');
       setStatus('Повторяю восстановление в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_SYNC_CURRENT',
@@ -1476,12 +1578,12 @@ $('patchRecoveredImages').onclick = async () => {
     return;
   }
   if (!state?.linkedDoc?.url) {
-    setStatus('У этого чата нет связанного Google Doc.', true);
+    setStatus('У этого чата нет связанного документа Google Docs.', true);
     return;
   }
 
   $('patchRecoveredImages').disabled = true;
-  setStatus('Ищу сообщения в связанном Google Doc и довставляю только добранные картинки…');
+  setStatus('Ищу сообщения в связанном документе Google Docs и довставляю только добранные картинки…');
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PATCH_RECOVERED_IMAGES',
@@ -1489,7 +1591,7 @@ $('patchRecoveredImages').onclick = async () => {
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось довставить изображения.');
     if (result.noChanges) {
-      setStatus('Новых добранных картинок для этого Google Doc нет.');
+      setStatus('Новых добранных картинок для этого документа Google Docs нет.');
     } else {
       setStatus(
         `Довставка завершена: ${result.inserted || 0} изображений вставлено` +
@@ -1520,59 +1622,10 @@ $('copyArchive').onclick = async () => {
   }
 };
 
-$('openFailedCapture').onclick = async () => {
-  $('openFailedCapture').disabled = true;
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB' });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть вкладку сбора.');
-    setStatus('Рабочая вкладка открыта. Её можно вручную довести до нужного места и затем продолжить именно в ней.');
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('openFailedCapture').disabled = false;
-  }
-};
-
-$('resumeFailedCapture').onclick = async () => {
-  $('resumeFailedCapture').disabled = true;
-  try {
-    setStatus('Продолжаю сбор в сохранённой рабочей вкладке…');
-    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сбор в сохранённой вкладке.');
-    await getState();
-    startPolling();
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('resumeFailedCapture').disabled = false;
-  }
-};
-
-$('deleteDraft').onclick = async () => {
-  const draft = state?.draft;
-  if (!draft) return;
-  if (!confirm('Удалить этот незавершённый проход? Рабочая вкладка останется открытой.')) return;
-
-  $('deleteDraft').disabled = true;
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
-      passId: draft.id
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый проход.');
-    await getState();
-    setStatus('Незавершённый проход удалён.');
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('deleteDraft').disabled = false;
-  }
-};
-
 $('deleteArchive').onclick = async () => {
   const archive = state?.archive;
   if (!archive) return;
-  if (!confirm('Удалить этот локальный архив? Связанный Google Doc удалён не будет.')) return;
+  if (!confirm('Удалить этот локальный архив? Связанный документ Google Docs удалён не будет.')) return;
 
   $('deleteArchive').disabled = true;
   try {
@@ -1582,34 +1635,11 @@ $('deleteArchive').onclick = async () => {
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить локальный архив.');
     await getState();
-    setStatus('Локальный архив удалён. Связанный Google Doc, если он был, не изменён.');
+    setStatus('Локальный архив удалён. Связанный документ Google Docs, если он был, не изменён.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
     $('deleteArchive').disabled = false;
-  }
-};
-
-$('viewDraft').onclick = async () => {
-  const passId = (state?.unfinishedPass || state?.draft)?.id;
-  if (!passId) return;
-  const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(passId));
-  await chrome.tabs.create({ url });
-};
-
-$('copyDraft').onclick = async () => {
-  $('copyDraft').disabled = true;
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_COPY_UNFINISHED_PASS',
-      passId: (state?.unfinishedPass || state?.draft)?.id
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать незавершённый проход.');
-    setStatus('Незавершённый проход скопирован: ' + (result.count || 0) + ' сообщений.');
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('copyDraft').disabled = false;
   }
 };
 
@@ -1644,13 +1674,13 @@ $('openPlanner').onclick = async () => {
 
 $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
-  setStatus('Открываю Google Docs и вставляю переписку…');
+  setStatus('Открываю документ Google Docs и вставляю переписку…');
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
     const imagePart = (result.imageInsertedCount || result.imageFailedCount)
       ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
       : '';
-    setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.` + imagePart);
+    setStatus(`Готово. В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` + imagePart);
     await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -1661,11 +1691,11 @@ $('newDoc').onclick = async () => {
 
 $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
-  setStatus('Проверяю, что уже вставлено в этот Google Doc…');
+  setStatus('Проверяю, что уже вставлено в этот документ Google Docs…');
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC', { archiveId: state?.archive?.id || '' });
     if (result.noChanges) {
-      setStatus('В этом Google Doc уже есть все сообщения из локального архива.');
+      setStatus('В этом документе Google Docs уже есть все сообщения из локального архива.');
     } else if (result.exportMode === 'delta') {
       const imagePart = (result.imageInsertedCount || result.imageFailedCount)
         ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
@@ -1758,12 +1788,12 @@ const TOUR_STEPS = [
   {
     selector: '',
     title: 'Оборванный проход не пропадает',
-    text: 'Если сбор прервётся после сохранения части сообщений, появится отдельный незавершённый проход. Его можно продолжить, просмотреть, скопировать или удалить.'
+    text: 'Если сбор прервётся после сохранения части сообщений, появится один незавершённый сбор. Его можно продолжить или сохранить текущую часть в Google Docs.'
   },
   {
     selector: '#savedArchivesPanel > summary',
     title: 'Готовые чаты — в одном списке',
-    text: 'Здесь можно продолжить чат, скопировать его, сохранить в Google Docs или разбить по темам.'
+    text: 'Здесь можно продолжить чат, скопировать его, сохранить в документ Google Docs или разбить по темам.'
   },
   {
     selector: '.accessibility-options > summary',
@@ -1876,7 +1906,7 @@ const WHATS_NEW_COPY = {
     'Во время знакомства нет затемняющей подложки вокруг интерфейса.'
   ],
   '0.3.48': [
-    'Незавершённый проход теперь сохраняется по ходу хронологического сбора, поэтому закрытие рабочей вкладки не должно терять точку продолжения.',
+    'Незавершённый сбор теперь сохраняется по ходу хронологического прохода, поэтому закрытие рабочей вкладки не должно терять точку продолжения.',
     'Знакомство автоматически сворачивает открытую справку или настройки перед первым шагом.',
     'Индикатор доступного обновления в popup теперь всегда зелёный.'
   ],

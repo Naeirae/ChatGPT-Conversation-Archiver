@@ -1121,3 +1121,71 @@ body.tour-open .header-popover {
   line-height:1.4;
 }
 .whats-new li + li { margin-top:4px; }
+
+
+/* Unified unfinished-capture card */
+.unfinished-capture-row { padding:10px 0; }
+.unfinished-primary-actions {
+  display:grid;
+  grid-template-columns:1fr;
+  gap:6px;
+  margin-top:8px;
+}
+.unfinished-primary-actions button {
+  width:100%;
+  margin:0;
+}
+.unfinished-save {
+  border-color:color-mix(in srgb,var(--accent) 32%,var(--border));
+  background:color-mix(in srgb,var(--soft) 72%,var(--panel));
+  color:var(--accent);
+  font-weight:700;
+}
+.unfinished-more {
+  margin-top:6px;
+}
+.unfinished-more > summary {
+  width:max-content;
+  cursor:pointer;
+  list-style:none;
+  color:var(--muted);
+  font-size:10.5px;
+  font-weight:650;
+}
+.unfinished-more > summary::-webkit-details-marker { display:none; }
+.unfinished-more > summary::after { content:' · дополнительные действия'; font-weight:400; }
+.unfinished-secondary-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+  padding-top:6px;
+}
+.unfinished-secondary-actions button {
+  width:auto;
+  margin:0;
+  padding:6px 8px;
+  font-size:10px;
+}
+
+
+.unfinished-save-hint,
+.unfinished-document-status {
+  margin-top:6px;
+  color:var(--muted);
+  font-size:10px;
+  line-height:1.4;
+}
+.unfinished-document-status {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  align-items:center;
+}
+.unfinished-document-status a {
+  color:var(--accent);
+  text-decoration:none;
+}
+.unfinished-save:disabled {
+  opacity:.58;
+  cursor:not-allowed;
+}

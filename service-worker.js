@@ -125,6 +125,205 @@ async function resolveDraftRecoveryTab(draftId, sourceUrl = '') {
   return { available: true, record, tab };
 }
 
+function unfinishedGroupKey(item) {
+  return conversationKey(item?.sourceUrl || '') ||
+    String(item?.sourceUrl || '') ||
+    String(item?.id || '');
+}
+
+function unfinishedBoundaryKey(item) {
+  const kind = item?.boundaryKind || item?.captureBoundary?.kind || '';
+  const key = item?.boundaryKey || item?.captureBoundary?.key || '';
+  return kind && key ? String(kind) + ':' + String(key) : 'legacy';
+}
+
+async function buildUnfinishedCaptureGroups(drafts = []) {
+  const groups = new Map();
+
+  for (const item of drafts || []) {
+    if (!item?.id) continue;
+    const recoveryTab = await resolveDraftRecoveryTab(item.id, item.sourceUrl || '');
+    const row = {
+      ...summarize(item),
+      complete: Boolean(item.complete),
+      error: item.error || '',
+      captureMode: item.captureMode || '',
+      capturePhase: item.capturePhase || '',
+      partialSaveEnabled: Boolean(item.partialSaveEnabled),
+      partialArchiveId: item.partialArchiveId || '',
+      partialSavedAt: item.partialSavedAt || '',
+      navigationHighWater: Number(item.navigationHighWater || 0),
+      chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
+      hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key),
+      boundaryKind: item.captureBoundary?.kind || '',
+      boundaryKey: item.captureBoundary?.key || '',
+      recoveryTabAvailable: recoveryTab.available,
+      recoveryTabId: recoveryTab.available ? recoveryTab.record.tabId : null,
+      recoveryCaptureTarget: recoveryTab.available ? recoveryTab.record.captureTarget : '',
+      recoveryTabUpdatedAt: Number(recoveryTab.record?.updatedAt || 0),
+      canExportPrefix: ['walk', 'finalizing'].includes(item.capturePhase || '')
+    };
+    const key = unfinishedGroupKey(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+
+  const result = [];
+  for (const [groupKey, members] of groups.entries()) {
+    members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
+    const latest = members[0];
+
+    // One user-facing card per chat. Internally there may be several recovery
+    // attempts, sometimes even from older snapshot boundaries. Choose one
+    // current chain for resume/export and keep the rest hidden as technical
+    // history instead of rendering competing cards.
+    const resumeCandidate = [...members]
+      .filter(item => item.recoveryTabAvailable)
+      .sort((a, b) =>
+        Number(b.recoveryTabUpdatedAt || 0) - Number(a.recoveryTabUpdatedAt || 0) ||
+        String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+      )[0] || null;
+    const primary = resumeCandidate || latest;
+    const primaryBoundary = unfinishedBoundaryKey(primary);
+    const chain = members.filter(item => unfinishedBoundaryKey(item) === primaryBoundary);
+    const byCount = [...chain].sort((a, b) =>
+      Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
+      String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+    );
+
+    // Export is independent from the current recovery attempt: if an older
+    // technical attempt already contains a valid top-to-bottom prefix, keep
+    // offering it even when the newest attempt is travelling back to the top.
+    const exportCandidate = [...members]
+      .filter(item => item.canExportPrefix)
+      .sort((a, b) =>
+        Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
+        String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+      )[0] || null;
+    const contentCandidate = exportCandidate || byCount[0] || primary;
+    const linkedDoc = await getLinkedDoc(primary.sourceUrl || contentCandidate.sourceUrl || '');
+
+    result.push({
+      ...primary,
+      id: resumeCandidate?.id || contentCandidate?.id || primary.id,
+      logicalGroupId: groupKey,
+      resumePassId: resumeCandidate?.id || contentCandidate?.id || primary.id,
+      exportPassId: exportCandidate?.id || '',
+      copyPassId: contentCandidate?.id || primary.id,
+      viewPassId: contentCandidate?.id || primary.id,
+      passIds: members.map(item => item.id),
+      technicalPassCount: members.length,
+      messageCount: Number(contentCandidate?.messageCount || 0),
+      imageCount: Number(contentCandidate?.imageCount || 0),
+      chronologicalCount: Number(contentCandidate?.chronologicalCount || 0),
+      canExportCurrent: Boolean(exportCandidate?.id),
+      exportMessageCount: Number(exportCandidate?.messageCount || 0),
+      recoveryTabAvailable: Boolean(resumeCandidate?.recoveryTabAvailable),
+      recoveryTabId: resumeCandidate?.recoveryTabId ?? null,
+      recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
+      capturePhase: primary.capturePhase || contentCandidate?.capturePhase || '',
+      capturedAt: primary.capturedAt || contentCandidate?.capturedAt || '',
+      hasBoundary: chain.some(item => item.hasBoundary),
+      linkedDocUrl: linkedDoc?.url || ''
+    });
+  }
+
+  result.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
+  return result;
+}
+
+function liveUnfinishedSummary(job) {
+  if (!job?.draftId || !Number(job.draftCount || 0)) return null;
+  const boundary = job.captureBoundary || null;
+  const groupKey = unfinishedGroupKey({
+    id: job.draftId,
+    sourceUrl: job.sourceUrl || '',
+    captureBoundary: boundary
+  });
+  const canExport = ['walk', 'finalizing'].includes(job.phase || '');
+  return {
+    id: job.draftId,
+    logicalGroupId: groupKey,
+    resumePassId: job.draftId,
+    exportPassId: canExport ? job.draftId : '',
+    copyPassId: job.draftId,
+    viewPassId: job.draftId,
+    passIds: [job.draftId],
+    title: job.title || 'Незавершённый сбор',
+    sourceUrl: job.sourceUrl || '',
+    capturedAt: new Date(Number(job.updatedAt || Date.now())).toISOString(),
+    messageCount: Number(job.draftCount || 0),
+    imageCount: 0,
+    captureMode: job.captureMode || '',
+    capturePhase: job.phase || '',
+    hasBoundary: Boolean(boundary?.kind && boundary?.key),
+    boundaryKind: boundary?.kind || '',
+    boundaryKey: boundary?.key || '',
+    canExportCurrent: canExport,
+    exportMessageCount: canExport ? Number(job.draftCount || 0) : 0,
+    recoveryTabAvailable: Boolean(
+      ['error', 'cancelled'].includes(job.status) &&
+      job.captureTabId != null
+    ),
+    recoveryTabId: job.captureTabId ?? null,
+    recoveryCaptureTarget: job.captureTarget || '',
+    technicalPassCount: 1
+  };
+}
+
+async function deleteUnfinishedGroup(logicalGroupId = '', passIds = []) {
+  const drafts = await listDrafts();
+  const ids = new Set((passIds || []).filter(Boolean));
+  for (const item of drafts) {
+    if (logicalGroupId && unfinishedGroupKey(item) === logicalGroupId) ids.add(item.id);
+  }
+  if (!ids.size) return { ok: true, removed: 0 };
+
+  let removed = 0;
+  for (const id of ids) {
+    const result = await deleteDraftAndRecoveryTab(id);
+    if (result?.removed) removed++;
+  }
+  return { ok: true, removed };
+}
+
+async function refreshCaptureJobHealth() {
+  let job = await getJob();
+  if (!job || !['starting', 'running'].includes(job.status)) return job;
+
+  if (Date.now() - Number(job.updatedAt || job.startedAt || Date.now()) <= 300000) {
+    return job;
+  }
+
+  const health = await probeLiveCapture(job);
+  const alive = Boolean(
+    health?.ok &&
+    health.running &&
+    health.jobId === job.jobId
+  );
+
+  if (alive) {
+    return setJob({
+      lastHeartbeatAt: Date.now(),
+      contentScriptVersion: health.version || job.contentScriptVersion || '',
+      lastScrollDirection: health.lastScrollDirection || job.lastScrollDirection || ''
+    });
+  }
+
+  const draft = job.draftId ? await getDraft(job.draftId) : null;
+  const failed = await finishJobWithError(
+    job.jobId,
+    job.sourceTabId ?? job.tabId,
+    draft?.messages?.length
+      ? 'Сбор перестал отвечать. Контрольная точка сохранена.'
+      : 'Сбор перестал отвечать до создания контрольной точки.',
+    draft?.id || job.draftId || '',
+    draft?.messages?.length || Number(job.draftCount || 0),
+    'error'
+  );
+  return failed?.job || await getJob();
+}
+
 async function listLinkedArchives() {
   const keys = typeof chrome.storage.local.getKeys === 'function'
     ? await chrome.storage.local.getKeys() : null;
@@ -157,6 +356,11 @@ async function listLinkedArchives() {
   for (const archive of archives) {
     if (seen.has(archive.id)) continue;
     seen.add(archive.id);
+
+    // Partial snapshots are implementation details of unfinished captures.
+    // They are surfaced through the single unfinished-capture card instead of
+    // appearing as a second "saved chat" for the same conversation.
+    if (archive.partial) continue;
 
     const key = conversationKey(archive.sourceUrl || '');
     if (!archive.isFragment && key && repairedIndex[key] !== archive.id) {
@@ -290,7 +494,7 @@ async function checkForUpdate() {
         REMOTE_MANIFEST_URL + '?check=' + Date.now(),
         { cache: 'no-store' }
       );
-      if (!response.ok) throw new Error(firstError + '; Raw GitHub: HTTP ' + response.status);
+      if (!response.ok) throw new Error(firstError + '; запасной запрос GitHub: HTTP ' + response.status);
       remote = await response.json();
     }
     const remoteVersion = String(remote?.version || '');
@@ -622,7 +826,7 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
   }
 
   const result = await chrome.tabs.sendMessage(tabId, payload);
-  if (!result?.ok) throw new Error(result?.error || 'Content script не запустил сбор.');
+  if (!result?.ok) throw new Error(result?.error || 'Скрипт сбора во вкладке не запустился.');
   if (result.jobId && result.jobId !== jobId) {
     throw new Error('Предыдущий сбор в этой вкладке ещё завершает работу; новая попытка пока не запущена.');
   }
@@ -762,7 +966,7 @@ async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
   const archive = {
     id: archiveId,
     kind: 'google-doc-baseline',
-    title: baseline.title || 'Google Doc archive',
+    title: baseline.title || 'Архив Google Docs',
     sourceUrl: chatUrl,
     capturedAt: new Date().toISOString(),
     messages,
@@ -881,7 +1085,7 @@ async function startCapture({
   }
 
   if ((mode === 'continue' || mode === 'compare' || mode === 'images') && !existingArchive?.messages?.length) {
-    throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по Google Doc.');
+    throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по документу Google Docs.');
   }
   if (mode === 'resume-draft' && !existingDraft?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
@@ -932,7 +1136,7 @@ async function startCapture({
     const modeLabel = mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'compare'
       ? 'сверка с локальным архивом'
       : mode === 'sync'
-        ? 'восстановление по Google Doc'
+        ? 'восстановление по документу Google Docs'
         : mode === 'continue'
           ? 'продолжение'
           : mode === 'images'
@@ -1602,7 +1806,7 @@ function partialArchiveIdForSource(sourceUrl = '') {
 
 async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
   if (!draft?.id || !draft?.messages?.length) {
-    throw new Error('Незавершённый проход не найден.');
+    throw new Error('Незавершённый сбор не найден.');
   }
 
   const id = draft.partialArchiveId || partialArchiveIdForSource(draft.sourceUrl);
@@ -1610,6 +1814,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
 
   const existing = await getArchive(id);
   const messages = draft.messages.slice();
+  const saveEnabled = Boolean(enable || draft.partialSaveEnabled);
   const archive = {
     ...(existing || {}),
     ...draft,
@@ -1623,7 +1828,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
     complete: false,
     isFragment: false,
     partialSourceDraftId: draft.id,
-    partialSaveEnabled: true,
+    partialSaveEnabled: saveEnabled,
     capturePhase: draft.capturePhase || 'walk',
     lastCaptureMode: 'partial-draft'
   };
@@ -1634,7 +1839,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
   // preserves these fields across later checkpoints.
   const boundDraft = {
     ...draft,
-    partialSaveEnabled: true,
+    partialSaveEnabled: saveEnabled,
     partialArchiveId: id,
     partialSavedAt: new Date().toISOString()
   };
@@ -1655,7 +1860,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
   const job = await getJob();
   if (job && (job.draftId === draft.id || job.recoveryDraftId === draft.id)) {
     await setJob({
-      partialSaveEnabled: true,
+      partialSaveEnabled: saveEnabled,
       partialArchiveId: id
     });
   }
@@ -1666,8 +1871,8 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
     messageCount: messages.length,
     updated: Boolean(existing?.id),
     resumable: true,
-    partialSaveEnabled: true,
-    enabled: enable || Boolean(draft.partialSaveEnabled)
+    partialSaveEnabled: saveEnabled,
+    enabled: saveEnabled
   };
 }
 
@@ -1679,7 +1884,7 @@ async function saveUnfinishedAsPartial(passId = '') {
 async function exportUnfinishedPassToNewDoc(passId = '') {
   const draft = await getDraft(passId);
   if (!draft?.id || !draft?.messages?.length) {
-    throw new Error('Незавершённый проход не найден.');
+    throw new Error('Незавершённый сбор не найден.');
   }
 
   if (!['walk', 'finalizing'].includes(draft.capturePhase || '')) {
@@ -1692,12 +1897,12 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
   // Materialize and verify the current chronological prefix locally first.
   // This gives Google Docs export the exact same object shape as a completed
   // archive, while the draft itself remains available for later resume.
-  const partial = await syncPartialArchiveFromDraft(draft, { enable: true });
+  const partial = await syncPartialArchiveFromDraft(draft, { enable: false });
   const snapshot = await getArchive(partial.archiveId);
   if (!snapshot?.messages?.length ||
       snapshot.messages.length < draft.messages.length ||
       !snapshot.partial) {
-    throw new Error('Не удалось зафиксировать текущий checkpoint перед экспортом.');
+    throw new Error('Не удалось зафиксировать текущую контрольную точку перед экспортом.');
   }
 
   const result = await exportConversation({
@@ -2065,21 +2270,21 @@ async function handleCaptureComplete(message) {
   }
 
   let finalMessage = isDraftRecovery
-    ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений; архив собран до исходной нижней метки.')
+    ? ('Незавершённый сбор восстановлен: +' + addedCount + ' сообщений; архив собран до исходной нижней метки.')
     : isContinuation
       ? ('Архив продолжен: +' + addedCount + ' сообщений.')
       : 'Переписка собрана.';
 
   if (shouldAutoAppend) {
-    if (docError) finalMessage += ' Google Doc не обновлен: ' + docError;
+    if (docError) finalMessage += ' Документ Google Docs не обновлён: ' + docError;
     else if (docResult?.addedCount) {
-      finalMessage += ' В Google Doc добавлено ' + docResult.addedCount + ' сообщений';
+      finalMessage += ' В документ Google Docs добавлено ' + docResult.addedCount + ' сообщений';
       if (docResult.imageInsertedCount || docResult.imageFailedCount) {
         finalMessage += ' и ' + Number(docResult.imageInsertedCount || 0) + ' изображений';
         if (docResult.imageFailedCount) finalMessage += ' (' + Number(docResult.imageFailedCount) + ' не вставлено)';
       }
       finalMessage += '.';
-    } else finalMessage += ' В Google Doc новых сообщений для вставки нет.';
+    } else finalMessage += ' В документе Google Docs новых сообщений для вставки нет.';
   }
 
   const next = await appendRunLog({
@@ -2261,14 +2466,14 @@ async function cdp(tabId, method, params = {}) {
 
 async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   let attached = false;
-  const count = Math.max(1, Math.min(16, Number(bursts) || 7));
+  const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
 
   try {
     const targets = await chrome.debugger.getTargets();
     const target = targets.find(item => item.tabId === tabId);
     if (target?.attached) {
-      throw new Error('Фоновая вкладка уже занята Chrome debugger.');
+      throw new Error('Фоновая вкладка уже занята средством отладки Chrome.');
     }
 
     await chrome.debugger.attach({ tabId }, '1.3');
@@ -2299,7 +2504,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
         deltaX: 0,
         deltaY: sign * 860
       });
-      await sleep(90);
+      await sleep(70);
     }
 
     return { ok: true, direction, bursts: count };
@@ -2313,7 +2518,7 @@ async function withChatDebugger(tabId, fn) {
   try {
     const targets = await chrome.debugger.getTargets();
     const target = targets.find(item => item.tabId === tabId);
-    if (target?.attached) throw new Error('Вкладка уже занята Chrome debugger.');
+    if (target?.attached) throw new Error('Вкладка уже занята средством отладки Chrome.');
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
     return await fn();
@@ -2745,13 +2950,13 @@ async function knownBaselineDecorations(docUrl) {
 
 async function readGoogleDocBaseline(docUrl, sourceTabId) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
-  if (!normalizedUrl) throw new Error('Нужна ссылка на Google Doc вида docs.google.com/document/d/...');
+  if (!normalizedUrl) throw new Error('Нужна ссылка на документ Google Docs вида docs.google.com/document/d/...');
 
   let tab = null;
   let attached = false;
   try {
     tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть Google Doc для сверки.');
+    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для сверки.');
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
@@ -2804,7 +3009,7 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
       ignoredStandaloneLines
     });
     if (baseline.meaningfulCount < 2) {
-      throw new Error('В Google Doc не удалось найти достаточно реплик для надежной сверки.');
+      throw new Error('В документе Google Docs не удалось найти достаточно реплик для надёжной сверки.');
     }
 
     return {
@@ -3108,7 +3313,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
   if (!archive) throw new Error('Нет локального архива.');
   const linked = await getLinkedDoc(archive.sourceUrl || '');
   const docUrl = normalizeGoogleDocUrl(linked?.url || '');
-  if (!docUrl) throw new Error('Для этого архива не найден связанный Google Doc.');
+  if (!docUrl) throw new Error('Для этого архива не найден связанный документ Google Docs.');
 
   const allItems = recoveredImageItems(archive);
   if (!allItems.length) {
@@ -3136,7 +3341,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
 
   try {
     tab = await chrome.tabs.create({ url: docUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть связанный Google Doc.');
+    if (!tab?.id) throw new Error('Не удалось открыть связанный документ Google Docs.');
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
@@ -3157,7 +3362,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
       const anchor = uniqueMessageAnchor(docText, message);
       if (!anchor) {
         for (const item of group) {
-          failures.push({ src: item.image.src || '', error: 'Не найден уникальный текстовый якорь сообщения в Google Doc.' });
+          failures.push({ src: item.image.src || '', error: 'Не найден уникальный текстовый якорь сообщения в документе Google Docs.' });
         }
         continue;
       }
@@ -3208,7 +3413,7 @@ async function appendMessagesToGoogleDocUrl(
   { linkTarget = true } = {}
 ) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
-  if (!normalizedUrl) throw new Error('Некорректная ссылка на Google Doc.');
+  if (!normalizedUrl) throw new Error('Некорректная ссылка на документ Google Docs.');
 
   if (!messages?.length) {
     const linkedDoc = await recordDocExport(conversation, normalizedUrl, { link: linkTarget });
@@ -3219,7 +3424,7 @@ async function appendMessagesToGoogleDocUrl(
   let tab = null;
   try {
     tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть Google Doc для продолжения.');
+    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для продолжения.');
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
@@ -3255,11 +3460,11 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
   const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
-  if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый Google Doc.');
+  if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый документ Google Docs.');
   if (!activeDoc) {
     const autoParts = planGoogleDocParts(conversation.messages || [], []);
     if (autoParts.length > 1) {
-      if (conversation.isFragment) throw new Error('Этот фрагмент превышает лимит одного Google Doc. Скопируйте его или разбейте на части.');
+      if (conversation.isFragment) throw new Error('Этот фрагмент превышает лимит одного документа Google Docs. Скопируйте его или разбейте на части.');
       return exportTabbedConversation('', conversation.id);
     }
   }
@@ -3273,10 +3478,10 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
 
   if (activeDoc) {
     tab = await getActiveTab();
-    if (!tab?.id || !isGoogleDocUrl(tab.url)) throw new Error('Откройте нужный Google Doc в активной вкладке.');
+    if (!tab?.id || !isGoogleDocUrl(tab.url)) throw new Error('Откройте нужный документ Google Docs в активной вкладке.');
 
     const docKey = googleDocKey(tab.url);
-    if (!docKey) throw new Error('Не удалось определить ID открытого Google Doc.');
+    if (!docKey) throw new Error('Не удалось определить идентификатор открытого документа Google Docs.');
 
     const previous = await getDocExport(docKey);
     const currentConversationKey = conversationKey(conversation.sourceUrl);
@@ -3486,7 +3691,7 @@ async function inspectSingleNewGoogleDoc(tabId) {
 
   if (initialTabCount !== 1) {
     throw new Error(
-      'Новый Google Doc должен начинаться с одной первой вкладки, но найдено: ' +
+      'Новый документ Google Docs должен начинаться с одной первой вкладки, но найдено: ' +
       initialTabCount + '. Экспорт не начат.'
     );
   }
@@ -3546,7 +3751,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
     }
 
     const browserTab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
-    if (!browserTab?.id) throw new Error('Не удалось открыть новый Google Doc.');
+    if (!browserTab?.id) throw new Error('Не удалось открыть новый документ Google Docs.');
     await waitForTabComplete(browserTab.id);
     await sleep(2200);
 
@@ -3715,42 +3920,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.docUrl || '',
           message.captureTarget || 'copy'
         );
+      case 'ARCHIVER_GET_LIVE_STATE': {
+        const job = await refreshCaptureJobHealth();
+        return { ok: true, job, unfinishedPass: liveUnfinishedSummary(job) };
+      }
       case 'ARCHIVER_GET_STATE': {
-        let job = await getJob();
-        // A killed MV3 worker can leave an indefinitely "running" job behind,
-        // but a long navigation-only pass may legitimately keep the message
-        // count unchanged. Before declaring the run dead, ask the concrete
-        // capture tab whether the same job is still executing.
-        if (job && ['starting', 'running'].includes(job.status) &&
-            Date.now() - Number(job.updatedAt || job.startedAt || Date.now()) > 300000) {
-          const health = await probeLiveCapture(job);
-          const alive = Boolean(
-            health?.ok &&
-            health.running &&
-            health.jobId === job.jobId
-          );
-
-          if (alive) {
-            job = await setJob({
-              lastHeartbeatAt: Date.now(),
-              contentScriptVersion: health.version || job.contentScriptVersion || '',
-              lastScrollDirection: health.lastScrollDirection || job.lastScrollDirection || ''
-            });
-          } else {
-            const draft = job.draftId ? await getDraft(job.draftId) : null;
-            const failed = await finishJobWithError(
-              job.jobId,
-              job.sourceTabId ?? job.tabId,
-              draft?.messages?.length
-                ? 'Сбор перестал отвечать. Контрольная точка сохранена.'
-                : 'Сбор перестал отвечать до создания контрольной точки.',
-              draft?.id || job.draftId || '',
-              draft?.messages?.length || Number(job.draftCount || 0),
-              'error'
-            );
-            job = failed?.job || await getJob();
-          }
-        }
+        let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
         let currentArchive = null;
         let linkedDoc = null;
@@ -3762,33 +3937,62 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
-        const draft = job?.draftId ? await getDraft(job.draftId) : null;
         const drafts = await listDrafts();
-        const unfinishedPasses = [];
-        for (const item of drafts) {
-          const recoveryTab = await resolveDraftRecoveryTab(item.id, item.sourceUrl || '');
-          unfinishedPasses.push({
-            ...summarize(item),
-            complete: Boolean(item.complete),
-            error: item.error || '',
-            captureMode: item.captureMode || '',
-            capturePhase: item.capturePhase || '',
-            partialSaveEnabled: Boolean(item.partialSaveEnabled),
-            partialArchiveId: item.partialArchiveId || '',
-            partialSavedAt: item.partialSavedAt || '',
-            navigationHighWater: Number(item.navigationHighWater || 0),
-            chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
-            hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key),
-            recoveryTabAvailable: recoveryTab.available,
-            recoveryTabId: recoveryTab.available ? recoveryTab.record.tabId : null,
-            recoveryCaptureTarget: recoveryTab.available ? recoveryTab.record.captureTarget : ''
-          });
+        const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
+
+        let activeUnfinished = unfinishedPasses.find(item =>
+          (item.passIds || []).includes(job?.draftId || '') ||
+          (item.passIds || []).includes(job?.recoveryDraftId || '')
+        ) || null;
+
+        // A huge chat may fail while still travelling to the beginning, before
+        // the first chronological draft exists. Surface that as the same single
+        // unfinished capture card so the preserved tab remains recoverable.
+        if (!activeUnfinished &&
+            job &&
+            ['error', 'cancelled'].includes(job.status) &&
+            job.captureTabId != null &&
+            job.captureBoundary?.kind &&
+            job.captureBoundary?.key &&
+            job.sourceUrl) {
+          const linked = await getLinkedDoc(job.sourceUrl);
+          const pseudo = {
+            id: 'job:' + String(job.jobId || ''),
+            logicalGroupId: unfinishedGroupKey({
+              id: job.jobId || '',
+              sourceUrl: job.sourceUrl || ''
+            }),
+            resumePassId: '',
+            exportPassId: '',
+            copyPassId: '',
+            viewPassId: '',
+            passIds: [],
+            title: job.title || 'Незавершённый сбор',
+            sourceUrl: job.sourceUrl || '',
+            capturedAt: new Date(Number(job.updatedAt || job.finishedAt || Date.now())).toISOString(),
+            messageCount: Number(job.count || 0),
+            imageCount: 0,
+            captureMode: job.captureMode || 'full',
+            capturePhase: job.phase || 'top',
+            hasBoundary: true,
+            canExportCurrent: false,
+            exportMessageCount: 0,
+            recoveryTabAvailable: true,
+            recoveryTabId: job.captureTabId,
+            recoveryCaptureTarget: job.captureTarget || '',
+            resumeFromJob: true,
+            linkedDocUrl: linked?.url || '',
+            technicalPassCount: 0
+          };
+          unfinishedPasses.unshift(pseudo);
+          activeUnfinished = pseudo;
         }
+
         return {
           ok: true,
           job,
           archive: summarize(archive),
-          unfinishedPass: summarize(draft),
+          unfinishedPass: activeUnfinished,
           unfinishedPasses,
           linkedDoc,
           savedArchives: await listLinkedArchives(),
@@ -3836,6 +4040,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_DELETE_DRAFT':
       case 'ARCHIVER_DELETE_UNFINISHED_PASS':
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
+      case 'ARCHIVER_DELETE_UNFINISHED_GROUP':
+        return await deleteUnfinishedGroup(
+          message.logicalGroupId || '',
+          Array.isArray(message.passIds) ? message.passIds : []
+        );
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
       case 'ARCHIVER_SET_ARCHIVE_DESTINATION':
@@ -3877,21 +4086,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             captureTarget: job.captureTarget || '',
             jobId: job.jobId
           });
-        }
-
-        const checkpointDraft = await getDraft(draftId);
-        if (checkpointDraft?.partialSaveEnabled) {
-          try {
-            await syncPartialArchiveFromDraft(checkpointDraft);
-          } catch (error) {
-            await appendRunLog({}, {
-              level: 'warn',
-              code: 'PARTIAL_AUTOSAVE_FAILED',
-              message: error?.message || String(error),
-              phase: checkpointDraft.capturePhase || job.phase || '',
-              count: checkpointDraft.messages?.length || 0
-            });
-          }
         }
 
         return { ok: true };
@@ -3942,13 +4136,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
         }
 
-        // A successful physical-scroll request is itself proof that the
-        // collector is alive, even if the navigation-only phase has not changed
-        // the message count for several minutes.
-        await setJob({
-          lastHeartbeatAt: Date.now(),
-          lastPhysicalActivity: 'scroll'
-        });
+        // A successful physical-scroll request proves that the collector is
+        // alive, but persisting that proof on every wheel step is expensive on
+        // very long chats. Store a heartbeat at most once every 15 seconds.
+        const now = Date.now();
+        if (now - Number(job.lastHeartbeatAt || job.updatedAt || 0) >= 15000) {
+          await setJob({
+            lastHeartbeatAt: now,
+            lastPhysicalActivity: 'scroll'
+          });
+        }
         return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
@@ -4103,7 +4300,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
       job.sourceTabId ?? job.tabId,
       job.captureTarget === 'current'
         ? 'Текущая вкладка с перепиской была закрыта.'
-        : 'Рабочая копия с перепиской была закрыта. Незавершённый проход можно продолжить.',
+        : 'Рабочая копия с перепиской была закрыта. Незавершённый сбор можно продолжить.',
       job.draftId || '',
       Number(job.draftCount || 0)
     );

@@ -1594,7 +1594,7 @@
 
   async function progress(message, count, extra) {
     const now = Date.now();
-    if (now - lastProgressAt < 500 && !(extra && extra.force)) return;
+    if (now - lastProgressAt < 1500 && !(extra && extra.force)) return;
     lastProgressAt = now;
     const patch = Object.assign({ status: 'running', message, count }, extra || {});
     try {
@@ -1915,8 +1915,8 @@
       // chronologically from top to the already fixed lower boundary.
       await physicalScroll(
         'up',
-        16,
-        { settleTimeout: 5000, quietWindow: 550 }
+        24,
+        { settleTimeout: 4500, quietWindow: 450 }
       );
 
       let nextSignature = visibleTurnSignature();
@@ -2405,7 +2405,16 @@
 
     const now = Date.now();
     const last = state.recoveryCheckpoint || { at: 0, count: 0 };
-    if (!force && (now - last.at < 30000 || order.length - last.count < 35)) return;
+    const checkpointSize = order.length;
+    const minInterval =
+      checkpointSize >= 4000 ? 90000 :
+      checkpointSize >= 2000 ? 60000 :
+      checkpointSize >= 500 ? 45000 : 30000;
+    const minDelta =
+      checkpointSize >= 4000 ? 240 :
+      checkpointSize >= 2000 ? 140 :
+      checkpointSize >= 500 ? 70 : 35;
+    if (!force && (now - last.at < minInterval || order.length - last.count < minDelta)) return;
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
@@ -2414,8 +2423,6 @@
     if (!messages.length) return;
 
     const draftId = current.draftId || ('draft-' + jobId);
-    const previousDraftRecord =
-      (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId] || null;
     // In the upward phase the next checkpoint is cumulative. The older saved
     // slice is retained even when Chrome virtualizes it out of the DOM.
     if (current.recoveryDraftId && current.phase === 'top') {
@@ -2428,7 +2435,7 @@
     const draft = {
       id: draftId,
       kind: 'capture-draft',
-      title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
+      title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'Переписка ChatGPT',
       sourceUrl: location.href,
       capturedAt: new Date().toISOString(),
       captureMode: current.captureMode || 'full',
@@ -2444,9 +2451,9 @@
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       complete: false,
       error: '',
-      partialSaveEnabled: Boolean(previousDraftRecord?.partialSaveEnabled || current.partialSaveEnabled),
-      partialArchiveId: previousDraftRecord?.partialArchiveId || current.partialArchiveId || '',
-      partialSavedAt: previousDraftRecord?.partialSavedAt || ''
+      partialSaveEnabled: Boolean(current.partialSaveEnabled),
+      partialArchiveId: current.partialArchiveId || '',
+      partialSavedAt: current.partialSavedAt || ''
     };
 
     // Persist the large checkpoint independently. The background worker is
@@ -2580,7 +2587,7 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts);
+      await physicalScroll('down', bursts, { settleTimeout: 5000, quietWindow: 850 });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
