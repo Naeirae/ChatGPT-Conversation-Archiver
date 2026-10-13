@@ -210,6 +210,61 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
   return result;
 }
 
+function liveUnfinishedSummary(job) {
+  if (!job?.draftId || !Number(job.draftCount || 0)) return null;
+  const boundary = job.captureBoundary || null;
+  const groupKey = unfinishedGroupKey({
+    id: job.draftId,
+    sourceUrl: job.sourceUrl || '',
+    captureBoundary: boundary
+  });
+  const canExport = ['walk', 'finalizing'].includes(job.phase || '');
+  return {
+    id: job.draftId,
+    logicalGroupId: groupKey,
+    resumePassId: job.draftId,
+    exportPassId: canExport ? job.draftId : '',
+    copyPassId: job.draftId,
+    viewPassId: job.draftId,
+    passIds: [job.draftId],
+    title: job.title || 'Незавершённый сбор',
+    sourceUrl: job.sourceUrl || '',
+    capturedAt: new Date(Number(job.updatedAt || Date.now())).toISOString(),
+    messageCount: Number(job.draftCount || 0),
+    imageCount: 0,
+    captureMode: job.captureMode || '',
+    capturePhase: job.phase || '',
+    hasBoundary: Boolean(boundary?.kind && boundary?.key),
+    boundaryKind: boundary?.kind || '',
+    boundaryKey: boundary?.key || '',
+    canExportCurrent: canExport,
+    exportMessageCount: canExport ? Number(job.draftCount || 0) : 0,
+    recoveryTabAvailable: Boolean(
+      ['error', 'cancelled'].includes(job.status) &&
+      job.captureTabId != null
+    ),
+    recoveryTabId: job.captureTabId ?? null,
+    recoveryCaptureTarget: job.captureTarget || '',
+    technicalPassCount: 1
+  };
+}
+
+async function deleteUnfinishedGroup(logicalGroupId = '', passIds = []) {
+  const drafts = await listDrafts();
+  const ids = new Set((passIds || []).filter(Boolean));
+  for (const item of drafts) {
+    if (logicalGroupId && unfinishedGroupKey(item) === logicalGroupId) ids.add(item.id);
+  }
+  if (!ids.size) return { ok: true, removed: 0 };
+
+  let removed = 0;
+  for (const id of ids) {
+    const result = await deleteDraftAndRecoveryTab(id);
+    if (result?.removed) removed++;
+  }
+  return { ok: true, removed };
+}
+
 async function refreshCaptureJobHealth() {
   let job = await getJob();
   if (!job || !['starting', 'running'].includes(job.status)) return job;
@@ -3837,8 +3892,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.docUrl || '',
           message.captureTarget || 'copy'
         );
-      case 'ARCHIVER_GET_LIVE_STATE':
-        return { ok: true, job: await refreshCaptureJobHealth() };
+      case 'ARCHIVER_GET_LIVE_STATE': {
+        const job = await refreshCaptureJobHealth();
+        return { ok: true, job, unfinishedPass: liveUnfinishedSummary(job) };
+      }
       case 'ARCHIVER_GET_STATE': {
         let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
@@ -3910,6 +3967,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_DELETE_DRAFT':
       case 'ARCHIVER_DELETE_UNFINISHED_PASS':
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
+      case 'ARCHIVER_DELETE_UNFINISHED_GROUP':
+        return await deleteUnfinishedGroup(
+          message.logicalGroupId || '',
+          Array.isArray(message.passIds) ? message.passIds : []
+        );
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
       case 'ARCHIVER_SET_ARCHIVE_DESTINATION':
