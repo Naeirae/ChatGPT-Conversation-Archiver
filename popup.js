@@ -244,7 +244,7 @@ function renderUnfinishedPasses(items = []) {
           }
           await getState();
           setStatus(
-            'В Google Docss сохранено ' +
+            'В Google Docs сохранено ' +
             Number(result.exportedMessageCount || result.addedCount || 0) +
             ' сообщений. Позже документ можно сверить с продолжением чата.'
           );
@@ -432,7 +432,7 @@ function renderSavedArchives(items = []) {
       destinationLink.href = destinationUrl;
       destinationLink.target = '_blank';
       destinationLink.rel = 'noopener noreferrer';
-      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть Google Doc ↗' : 'Открыть ↗';
+      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть документ Google Docs ↗' : 'Открыть ↗';
       destination.appendChild(destinationLink);
     }
 
@@ -507,17 +507,17 @@ function renderSavedArchives(items = []) {
       open.href = item.docUrl || item.destination.url;
       open.target = '_blank';
       open.rel = 'noopener noreferrer';
-      open.textContent = 'Google Doc ↗';
+      open.textContent = 'Документ Google Docs ↗';
       actions.appendChild(open);
     } else {
       const exportButton = document.createElement('button');
       exportButton.className = 'archive-link-open';
       exportButton.type = 'button';
-      exportButton.textContent = 'В Google Docss';
+      exportButton.textContent = 'В Google Docs';
       exportButton.disabled = busy;
       exportButton.onclick = async () => {
         exportButton.disabled = true;
-        setStatus('Создаю Google Doc…');
+        setStatus('Создаю документ Google Docs…');
         try {
           const sameTitle = rows.filter(record => record.id !== item.id &&
             normalizedTitle(record.title) === normalizedTitle(item.title));
@@ -527,9 +527,9 @@ function renderSavedArchives(items = []) {
             const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
               record.docUrl);
             const explanation = existingDoc
-              ? 'Для этой переписки уже найден сохранённый Google Doc.'
+              ? 'Для этой переписки уже найден сохранённый документ Google Docs.'
               : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
-            if (!confirm(explanation + '\n\nСоздать ещё один Google Doc? Нажмите «Отмена», чтобы избежать дубля.')) {
+            if (!confirm(explanation + '\n\nСоздать ещё один документ Google Docs? Нажмите «Отмена», чтобы избежать дубля.')) {
               setStatus('Создание документа отменено. Сохранённые данные не изменены.');
               return;
             }
@@ -972,8 +972,12 @@ function render(data) {
   renderUnfinishedPasses(state.unfinishedPasses || []);
   renderSavedArchives(state.savedArchives || []);
   const hasUnfinished = Boolean((state.unfinishedPasses || []).length);
-  $('unfinishedPassesPanel')?.classList.toggle('hidden', !hasUnfinished);
-  $('unfinishedPassesPanel')?.classList.toggle('has-items', hasUnfinished);
+  const unfinishedPanel = $('unfinishedPassesPanel');
+  unfinishedPanel?.classList.toggle('hidden', !hasUnfinished);
+  unfinishedPanel?.classList.toggle('has-items', hasUnfinished);
+  if (hasUnfinished && ['error', 'cancelled'].includes(job?.status)) {
+    unfinishedPanel.open = true;
+  }
 
   const isFragmentRun = job?.captureMode === 'fragment' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
@@ -1001,14 +1005,6 @@ function render(data) {
   $('linkedDocHint').textContent = state.linkedDoc?.url
     ? 'Связанный документ найден. Его ссылку можно заменить на другую только для этого запуска.'
     : 'Связанного документа Google Docs для этого чата сейчас нет.';
-  const latestUnfinished = (state.unfinishedPasses || []).find(item => {
-    try {
-      const expected = state.job?.sourceUrl;
-      return expected && item.sourceUrl &&
-        new URL(item.sourceUrl).origin === new URL(expected).origin &&
-        new URL(item.sourceUrl).pathname === new URL(expected).pathname;
-    } catch (_) { return false; }
-  }) || null;
   const canRetryCurrent = Boolean(
     !running &&
     !hasUnfinished &&
@@ -1139,6 +1135,7 @@ function mergeLiveUnfinished(rows = [], live = null) {
   next[index] = {
     ...current,
     ...live,
+    title: current.title || live.title,
     passIds: [...new Set([...(current.passIds || []), ...(live.passIds || [])])],
     messageCount: Math.max(Number(current.messageCount || 0), Number(live.messageCount || 0)),
     exportPassId: live.exportPassId || current.exportPassId || '',
@@ -1555,12 +1552,12 @@ $('patchRecoveredImages').onclick = async () => {
     return;
   }
   if (!state?.linkedDoc?.url) {
-    setStatus('У этого чата нет связанного Google Doc.', true);
+    setStatus('У этого чата нет связанного документа Google Docs.', true);
     return;
   }
 
   $('patchRecoveredImages').disabled = true;
-  setStatus('Ищу сообщения в связанном Google Doc и довставляю только добранные картинки…');
+  setStatus('Ищу сообщения в связанном документе Google Docs и довставляю только добранные картинки…');
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PATCH_RECOVERED_IMAGES',
@@ -1568,7 +1565,7 @@ $('patchRecoveredImages').onclick = async () => {
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось довставить изображения.');
     if (result.noChanges) {
-      setStatus('Новых добранных картинок для этого Google Doc нет.');
+      setStatus('Новых добранных картинок для этого документа Google Docs нет.');
     } else {
       setStatus(
         `Довставка завершена: ${result.inserted || 0} изображений вставлено` +
@@ -1651,7 +1648,7 @@ $('deleteDraft').onclick = async () => {
 $('deleteArchive').onclick = async () => {
   const archive = state?.archive;
   if (!archive) return;
-  if (!confirm('Удалить этот локальный архив? Связанный Google Doc удалён не будет.')) return;
+  if (!confirm('Удалить этот локальный архив? Связанный документ Google Docs удалён не будет.')) return;
 
   $('deleteArchive').disabled = true;
   try {
@@ -1661,7 +1658,7 @@ $('deleteArchive').onclick = async () => {
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить локальный архив.');
     await getState();
-    setStatus('Локальный архив удалён. Связанный Google Doc, если он был, не изменён.');
+    setStatus('Локальный архив удалён. Связанный документ Google Docs, если он был, не изменён.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
