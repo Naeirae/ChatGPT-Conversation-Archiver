@@ -126,12 +126,15 @@ async function resolveDraftRecoveryTab(draftId, sourceUrl = '') {
 }
 
 function unfinishedGroupKey(item) {
-  const chat = conversationKey(item?.sourceUrl || '') || String(item?.sourceUrl || '') || String(item?.id || '');
-  const boundary = item?.captureBoundary;
-  const boundaryKey = boundary?.kind && boundary?.key
-    ? String(boundary.kind) + ':' + String(boundary.key)
-    : 'legacy';
-  return chat + '|' + boundaryKey;
+  return conversationKey(item?.sourceUrl || '') ||
+    String(item?.sourceUrl || '') ||
+    String(item?.id || '');
+}
+
+function unfinishedBoundaryKey(item) {
+  const kind = item?.boundaryKind || item?.captureBoundary?.kind || '';
+  const key = item?.boundaryKey || item?.captureBoundary?.key || '';
+  return kind && key ? String(kind) + ':' + String(key) : 'legacy';
 }
 
 async function buildUnfinishedCaptureGroups(drafts = []) {
@@ -169,27 +172,35 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
   for (const [groupKey, members] of groups.entries()) {
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
-    const byCount = [...members].sort((a, b) =>
-      Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
-      String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
-    );
-    const exportCandidate = byCount.find(item => item.canExportPrefix) || null;
+
+    // One user-facing card per chat. Internally there may be several recovery
+    // attempts, sometimes even from older snapshot boundaries. Choose one
+    // current chain for resume/export and keep the rest hidden as technical
+    // history instead of rendering competing cards.
     const resumeCandidate = [...members]
       .filter(item => item.recoveryTabAvailable)
       .sort((a, b) =>
         Number(b.recoveryTabUpdatedAt || 0) - Number(a.recoveryTabUpdatedAt || 0) ||
         String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
       )[0] || null;
-    const contentCandidate = exportCandidate || byCount[0] || latest;
+    const primary = resumeCandidate || latest;
+    const primaryBoundary = unfinishedBoundaryKey(primary);
+    const chain = members.filter(item => unfinishedBoundaryKey(item) === primaryBoundary);
+    const byCount = [...chain].sort((a, b) =>
+      Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
+      String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+    );
+    const exportCandidate = byCount.find(item => item.canExportPrefix) || null;
+    const contentCandidate = exportCandidate || byCount[0] || primary;
 
     result.push({
-      ...latest,
-      id: resumeCandidate?.id || contentCandidate?.id || latest.id,
+      ...primary,
+      id: resumeCandidate?.id || contentCandidate?.id || primary.id,
       logicalGroupId: groupKey,
-      resumePassId: resumeCandidate?.id || contentCandidate?.id || latest.id,
+      resumePassId: resumeCandidate?.id || contentCandidate?.id || primary.id,
       exportPassId: exportCandidate?.id || '',
-      copyPassId: contentCandidate?.id || latest.id,
-      viewPassId: contentCandidate?.id || latest.id,
+      copyPassId: contentCandidate?.id || primary.id,
+      viewPassId: contentCandidate?.id || primary.id,
       passIds: members.map(item => item.id),
       technicalPassCount: members.length,
       messageCount: Number(contentCandidate?.messageCount || 0),
@@ -200,9 +211,9 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       recoveryTabAvailable: Boolean(resumeCandidate?.recoveryTabAvailable),
       recoveryTabId: resumeCandidate?.recoveryTabId ?? null,
       recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
-      capturePhase: contentCandidate?.capturePhase || latest.capturePhase || '',
-      capturedAt: contentCandidate?.capturedAt || latest.capturedAt || '',
-      hasBoundary: members.some(item => item.hasBoundary)
+      capturePhase: contentCandidate?.capturePhase || primary.capturePhase || '',
+      capturedAt: contentCandidate?.capturedAt || primary.capturedAt || '',
+      hasBoundary: chain.some(item => item.hasBoundary)
     });
   }
 
