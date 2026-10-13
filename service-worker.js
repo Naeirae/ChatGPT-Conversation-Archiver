@@ -1676,6 +1676,45 @@ async function saveUnfinishedAsPartial(passId = '') {
   return syncPartialArchiveFromDraft(draft, { enable: true });
 }
 
+async function exportUnfinishedPassToNewDoc(passId = '') {
+  const draft = await getDraft(passId);
+  if (!draft?.id || !draft?.messages?.length) {
+    throw new Error('Незавершённый проход не найден.');
+  }
+
+  if (!['walk', 'finalizing'].includes(draft.capturePhase || '')) {
+    throw new Error(
+      'Текущая часть ещё не является непрерывным архивом от начала чата. ' +
+      'Дождитесь этапа сохранения сверху вниз.'
+    );
+  }
+
+  // Materialize and verify the current chronological prefix locally first.
+  // This gives Google Docs export the exact same object shape as a completed
+  // archive, while the draft itself remains available for later resume.
+  const partial = await syncPartialArchiveFromDraft(draft, { enable: true });
+  const snapshot = await getArchive(partial.archiveId);
+  if (!snapshot?.messages?.length ||
+      snapshot.messages.length < draft.messages.length ||
+      !snapshot.partial) {
+    throw new Error('Не удалось зафиксировать текущий checkpoint перед экспортом.');
+  }
+
+  const result = await exportConversation({
+    activeDoc: false,
+    archiveId: snapshot.id
+  });
+
+  return {
+    ...result,
+    ok: true,
+    partial: true,
+    partialArchiveId: snapshot.id,
+    partialSourceDraftId: draft.id,
+    exportedMessageCount: snapshot.messages.length
+  };
+}
+
 async function resumeUnfinishedInSavedTab(passId = '') {
   const draft = await getDraft(passId);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
@@ -3792,6 +3831,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await resumeUnfinishedInSavedTab(message.passId || message.draftId || '');
       case 'ARCHIVER_SAVE_UNFINISHED_PARTIAL':
         return await saveUnfinishedAsPartial(message.passId || message.draftId || '');
+      case 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC':
+        return await exportUnfinishedPassToNewDoc(message.passId || message.draftId || '');
       case 'ARCHIVER_DELETE_DRAFT':
       case 'ARCHIVER_DELETE_UNFINISHED_PASS':
         return await deleteDraftAndRecoveryTab(message.draftId || message.passId || '');
