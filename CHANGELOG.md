@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.90
+
+- Replace the unfinished-pass “Сохранить частичный архив” action with “Текущую часть → Google Doc”.
+- Allow direct Google Docs export only after the chronological top-to-bottom pass has started (walk/finalizing), when the draft is a continuous prefix from the beginning of the chat.
+- Before exporting, materialize and verify the current checkpoint as a local partial snapshot, then reuse the normal completed-archive Google Docs export path.
+- Link the resulting Google Doc to the source conversation so later sync/compare can find its saved tail and continue from there.
+- Add the same unfinished-prefix export action to the dedicated unfinished-pass viewer.
+
 ## 0.3.89
 
 - Never close an unsuccessful ChatGPT working tab automatically. A capture copy is now closed only after handleCaptureComplete() has verified a successful pass.
