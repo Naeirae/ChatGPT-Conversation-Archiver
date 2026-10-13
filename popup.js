@@ -1018,15 +1018,15 @@ function render(data) {
   renderRunLog(job);
   renderDraft(running ? null : draft);
 
-  const recoverableDraft = Boolean(
-    draft &&
+  const recoverableCapture = Boolean(
     ['error', 'cancelled'].includes(job?.status) &&
     job?.recoveryAvailable &&
     job?.captureTabId != null
   );
-  $('openFailedCapture').classList.toggle('hidden', !recoverableDraft);
-  $('resumeFailedCapture').classList.toggle('hidden', !recoverableDraft);
-  $('resumeFailedCapture').disabled = Boolean(running || !recoverableDraft);
+  $('openFailedCapture').classList.toggle('hidden', !recoverableCapture);
+  $('resumeFailedCapture').classList.toggle('hidden', !recoverableCapture);
+  $('resumeFailedCapture').disabled = Boolean(running || !recoverableCapture);
+  $('resumeFailedCapture').textContent = 'Продолжить в той же вкладке';
   $('draftRecoveryHint').classList.toggle('hidden', !draft);
   $('deleteDraft').disabled = Boolean(running || !draft);
 
@@ -1536,7 +1536,7 @@ $('openFailedCapture').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_FOCUS_FAILED_CAPTURE_TAB' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть вкладку сбора.');
-    setStatus('Рабочая вкладка открыта. При необходимости домотайте её ближе к месту обрыва, затем нажмите «Найти стык и продолжить».');
+    setStatus('Рабочая вкладка открыта. Её можно вручную довести до нужного места и затем продолжить именно в ней.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1547,9 +1547,9 @@ $('openFailedCapture').onclick = async () => {
 $('resumeFailedCapture').onclick = async () => {
   $('resumeFailedCapture').disabled = true;
   try {
-    setStatus('Ищу последнее сохранённое сообщение и продолжаю сбор без повторного полного прохода…');
+    setStatus('Продолжаю сбор в сохранённой рабочей вкладке…');
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESUME_FAILED_CAPTURE' });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось повторить хронологический проход.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сбор в сохранённой вкладке.');
     await getState();
     startPolling();
   } catch (error) {
@@ -1562,7 +1562,7 @@ $('resumeFailedCapture').onclick = async () => {
 $('deleteDraft').onclick = async () => {
   const draft = state?.draft;
   if (!draft) return;
-  if (!confirm('Удалить этот незавершённый проход? Сохранённая рабочая вкладка этого прохода тоже будет закрыта.')) return;
+  if (!confirm('Удалить этот незавершённый проход? Рабочая вкладка останется открытой.')) return;
 
   $('deleteDraft').disabled = true;
   try {

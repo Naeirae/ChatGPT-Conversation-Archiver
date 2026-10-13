@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.89
+
+- Never close an unsuccessful ChatGPT working tab automatically. A capture copy is now closed only after handleCaptureComplete() has verified a successful pass.
+- On programmatic errors, watchdog resets, and extension-code resets, keep the exact working tab and try to recover in that same tab automatically.
+- Limit automatic recovery to two attempts per recovery chain; after that, leave the tab open and expose manual same-tab continuation instead of looping forever.
+- If a chronological draft exists, automatic recovery finds the saved join and resumes from it. If the failure happened during the navigation-only trip to the top before the first draft, recovery continues upward from the preserved physical tab position and original lower boundary.
+- Preserve the previous recovery draft when a resumed attempt fails before writing a new checkpoint.
+- Allow “Продолжить в той же вкладке” even when a top-navigation failure happened before the first draft was created.
+- Deleting failed-run metadata or a draft no longer closes the preserved working tab.
+
 ## 0.3.88
 
 - Treat every accepted physical scroll from the capture tab as a live heartbeat, so long navigation-only passes do not become stale merely because the message count is unchanged.

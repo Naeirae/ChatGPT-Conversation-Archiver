@@ -3224,9 +3224,19 @@
         }
       }
 
-      if (!draftId && current.draftId) {
-        const saved = (await chrome.storage.local.get('draft:' + current.draftId))['draft:' + current.draftId];
-        if (saved?.messages?.length) { draftId = current.draftId; draftCount = saved.messages.length; }
+      if (!draftId) {
+        const fallbackDraftIds = [
+          current.draftId || '',
+          current.recoveryDraftId || '',
+          existingDraftId || ''
+        ].filter(Boolean);
+        for (const candidateId of [...new Set(fallbackDraftIds)]) {
+          const saved = (await chrome.storage.local.get('draft:' + candidateId))['draft:' + candidateId];
+          if (!saved?.messages?.length) continue;
+          draftId = candidateId;
+          draftCount = saved.messages.length;
+          break;
+        }
       }
       // Failure reporting is routed to the worker; a lost connection does
       // not overwrite other jobs, and saved drafts remain on disk.
