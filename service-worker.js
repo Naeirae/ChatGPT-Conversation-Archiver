@@ -939,7 +939,7 @@ async function createBaselineArchiveFromGoogleDoc(chatUrl, baseline) {
   const archive = {
     id: archiveId,
     kind: 'google-doc-baseline',
-    title: baseline.title || 'Google Doc archive',
+    title: baseline.title || 'Архив Google Docs',
     sourceUrl: chatUrl,
     capturedAt: new Date().toISOString(),
     messages,
@@ -1058,7 +1058,7 @@ async function startCapture({
   }
 
   if ((mode === 'continue' || mode === 'compare' || mode === 'images') && !existingArchive?.messages?.length) {
-    throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по Google Doc.');
+    throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по документу Google Docs.');
   }
   if (mode === 'resume-draft' && !existingDraft?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
