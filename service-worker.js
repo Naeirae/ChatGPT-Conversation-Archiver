@@ -1576,8 +1576,8 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     } catch (_) {}
   }
 
-  // Never close an unsuccessful working tab. The only automatic tab close is
-  // in handleCaptureComplete(), after a verified successful pass.
+  // Never close a ChatGPT capture working tab automatically. Keeping the
+  // physical tab is the cheapest recovery point for very large conversations.
   await cleanupTemporaryBaseline(job);
 
   const recoveryAvailable = Boolean(
@@ -1921,8 +1921,25 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
 }
 
 async function resumeUnfinishedInSavedTab(passId = '') {
-  const draft = await getDraft(passId);
+  let draft = await getDraft(passId);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+
+  // 0.3.91 could relabel a chronological walk draft as "top" when a fresh
+  // recovery attempt failed while it was only searching for the saved frontier.
+  // Such a draft is still a continuous saved prefix and must resume at its
+  // frontier, not travel back to the beginning again.
+  if (
+    draft.capturePhase === 'top' &&
+    ['resume-draft', 'retry-walk'].includes(draft.captureMode || '') &&
+    draft.messages.length
+  ) {
+    draft = {
+      ...draft,
+      capturePhase: 'walk',
+      lastScrollDirection: 'down'
+    };
+    await chrome.storage.local.set({ ['draft:' + draft.id]: draft });
+  }
 
   const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
   if (!recovery.available) {
@@ -2185,10 +2202,11 @@ async function handleCaptureComplete(message) {
     await removeDraftRecoveryTab(draftId).catch(() => {});
   }
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null && job.captureTabId !== job.sourceTabId) {
-    await chrome.tabs.remove(job.captureTabId).catch(() => {});
-
-  }
+  // Keep the working ChatGPT tab open even after a verified successful pass.
+  // Large captures can take hours; an automatic close destroys the physical
+  // recovery position and can race with tabs.onRemoved before the job is marked
+  // done. The user may close the working tab explicitly when it is no longer
+  // needed.
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
 
