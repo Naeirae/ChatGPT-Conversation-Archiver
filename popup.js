@@ -142,10 +142,10 @@ function renderDraft(draft) {
 
 function unfinishedPhaseLabel(phase = '') {
   return {
-    top: 'путь к началу',
-    walk: 'сохранение сверху вниз',
-    finalizing: 'завершение сохранения',
-    paused: 'пауза'
+    top: 'идёт к началу',
+    walk: 'сохраняется сверху вниз',
+    finalizing: 'готовится итоговый архив',
+    paused: 'приостановлен'
   }[phase] || 'не завершён';
 }
 
@@ -181,18 +181,18 @@ function renderUnfinishedPasses(items = []) {
 
     const meta = document.createElement('div');
     meta.className = 'history-item-meta';
-    const parts = [];
-    if (item.capturedAt) {
-      try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
-    }
-    parts.push((item.messageCount || 0) + ' сообщений');
-    if (item.imageCount) parts.push(item.imageCount + ' изображений');
-    if (item.hasBoundary) parts.push('конец исходного чата зафиксирован');
+    const when = item.capturedAt ? new Date(item.capturedAt).toLocaleString('ru-RU') : '—';
+    const parts = [
+      when,
+      Number(item.messageCount || 0) + ' сообщений',
+      Number(item.imageCount || 0) + ' изображений'
+    ];
+    if (item.hasBoundary) parts.push('конец чата зафиксирован');
     if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
     meta.textContent = parts.join(' · ');
 
-    const actions = document.createElement('div');
-    actions.className = 'unfinished-primary-actions';
+    const primaryActions = document.createElement('div');
+    primaryActions.className = 'unfinished-primary-actions';
 
     const resume = document.createElement('button');
     resume.className = 'primary';
@@ -200,40 +200,46 @@ function renderUnfinishedPasses(items = []) {
     resume.disabled = busy;
     resume.onclick = async () => {
       resume.disabled = true;
+      if (saveCurrent) saveCurrent.disabled = true;
       setStatus(
         item.recoveryTabAvailable
-          ? 'Продолжаю в сохранённой рабочей вкладке…'
-          : 'Открываю исходный чат и ищу место остановки…'
+          ? 'Продолжаю сбор в сохранённой рабочей вкладке…'
+          : 'Открываю исходный чат и восстанавливаю место продолжения…'
       );
       try {
+        const passId = item.resumePassId || item.id;
         const result = item.recoveryTabAvailable
           ? await chrome.runtime.sendMessage({
               type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB',
-              passId: item.resumePassId || item.id
+              passId
             })
           : await chrome.runtime.sendMessage({
               type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
-              passId: item.resumePassId || item.id,
+              passId,
               captureTarget: $('captureTarget').value,
               resumeStrategy: 'fresh'
             });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить незавершённый сбор.');
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сбор.');
         render({ ...state, job: result.job });
         startPolling();
       } catch (error) {
         setStatus(error.message || String(error), true);
         resume.disabled = false;
+        if (saveCurrent) saveCurrent.disabled = false;
       }
     };
-    actions.appendChild(resume);
+    primaryActions.appendChild(resume);
 
+    let saveCurrent = null;
     if (item.canExportCurrent && item.exportPassId) {
-      const exportCurrent = document.createElement('button');
-      exportCurrent.className = 'unfinished-save';
-      exportCurrent.textContent = 'Сохранить текущую часть в Google Docs';
-      exportCurrent.onclick = async () => {
-        exportCurrent.disabled = true;
-        setStatus('Фиксирую текущую сохранённую часть и создаю документ Google Docs…');
+      saveCurrent = document.createElement('button');
+      saveCurrent.className = 'unfinished-save';
+      saveCurrent.textContent = 'Сохранить текущую часть в Google Docs';
+      saveCurrent.disabled = busy;
+      saveCurrent.onclick = async () => {
+        saveCurrent.disabled = true;
+        resume.disabled = true;
+        setStatus('Сохраняю текущую собранную часть в Google Docs…');
         try {
           const result = await chrome.runtime.sendMessage({
             type: 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC',
@@ -242,49 +248,53 @@ function renderUnfinishedPasses(items = []) {
           if (!result?.ok) {
             throw new Error(result?.error || 'Не удалось сохранить текущую часть в Google Docs.');
           }
-          await getState();
           setStatus(
-            'В Google Docs сохранено ' +
-            Number(result.exportedMessageCount || result.addedCount || 0) +
-            ' сообщений. Позже документ можно сверить с продолжением чата.'
+            'Текущая часть сохранена в Google Docs: ' +
+            Number(result.exportedMessageCount || result.addedCount || item.exportMessageCount || 0) +
+            ' сообщений.'
           );
+          await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
         } finally {
-          exportCurrent.disabled = false;
+          saveCurrent.disabled = false;
+          resume.disabled = false;
         }
       };
-      actions.appendChild(exportCurrent);
+      primaryActions.appendChild(saveCurrent);
     }
 
     const more = document.createElement('details');
     more.className = 'unfinished-more';
+
     const moreSummary = document.createElement('summary');
     moreSummary.textContent = 'Ещё';
-    const moreActions = document.createElement('div');
-    moreActions.className = 'unfinished-more-actions';
+    more.appendChild(moreSummary);
+
+    const secondary = document.createElement('div');
+    secondary.className = 'unfinished-secondary-actions';
 
     if (item.recoveryTabAvailable) {
-      const openTab = document.createElement('button');
-      openTab.textContent = 'Открыть рабочую вкладку';
-      openTab.onclick = async () => {
+      const openCapture = document.createElement('button');
+      openCapture.textContent = 'Открыть рабочую вкладку';
+      openCapture.onclick = async () => {
         const result = await chrome.runtime.sendMessage({
           type: 'ARCHIVER_FOCUS_UNFINISHED_RECOVERY_TAB',
           passId: item.resumePassId || item.id
         });
         if (!result?.ok) setStatus(result?.error || 'Не удалось открыть рабочую вкладку.', true);
       };
-      moreActions.appendChild(openTab);
+      secondary.appendChild(openCapture);
     }
 
     const view = document.createElement('button');
     view.textContent = 'Просмотреть сохранённую часть';
     view.onclick = async () => {
-      const passId = item.viewPassId || item.copyPassId || item.id;
+      const passId = item.viewPassId || item.id;
       const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(passId));
       await chrome.tabs.create({ url });
     };
-    moreActions.appendChild(view);
+    secondary.appendChild(view);
 
     const copy = document.createElement('button');
     copy.textContent = 'Скопировать сохранённую часть';
@@ -297,17 +307,15 @@ function renderUnfinishedPasses(items = []) {
         setStatus(result?.error || 'Не удалось скопировать сохранённую часть.', true);
         return;
       }
-      setStatus('Скопировано: ' + (result.count || 0) + ' сообщений.');
+      setStatus('Скопировано сообщений: ' + Number(result.count || 0) + '.');
     };
-    moreActions.appendChild(copy);
+    secondary.appendChild(copy);
 
     const remove = document.createElement('button');
     remove.className = 'danger-outline';
-    remove.textContent = 'Удалить сохранённые данные';
+    remove.textContent = 'Удалить незавершённый сбор';
     remove.onclick = async () => {
-      if (!confirm(
-        'Удалить сохранённые данные этого незавершённого сбора? Рабочая вкладка останется открытой.'
-      )) return;
+      if (!confirm('Удалить сохранённые данные этого незавершённого сбора? Рабочая вкладка останется открытой.')) return;
       remove.disabled = true;
       setStatus('Удаляю сохранённые данные незавершённого сбора…');
       try {
@@ -317,22 +325,22 @@ function renderUnfinishedPasses(items = []) {
           passIds: item.passIds || [item.id]
         });
         if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый сбор.');
-        await getState();
+        row.remove();
+        count.textContent = String(list.children.length);
         setStatus('Сохранённые данные незавершённого сбора удалены. Рабочая вкладка не закрыта.');
+        void getState().catch(error => setStatus(error.message || String(error), true));
       } catch (error) {
         remove.disabled = false;
         setStatus(error.message || String(error), true);
       }
     };
-    moreActions.appendChild(remove);
+    secondary.appendChild(remove);
 
-    more.append(moreSummary, moreActions);
-
-    row.append(head, meta, actions, more);
+    more.appendChild(secondary);
+    row.append(head, meta, primaryActions, more);
     list.appendChild(row);
   }
 }
-
 
 function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
