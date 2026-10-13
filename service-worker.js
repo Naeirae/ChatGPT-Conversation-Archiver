@@ -125,6 +125,128 @@ async function resolveDraftRecoveryTab(draftId, sourceUrl = '') {
   return { available: true, record, tab };
 }
 
+function unfinishedGroupKey(item) {
+  const chat = conversationKey(item?.sourceUrl || '') || String(item?.sourceUrl || '') || String(item?.id || '');
+  const boundary = item?.captureBoundary;
+  const boundaryKey = boundary?.kind && boundary?.key
+    ? String(boundary.kind) + ':' + String(boundary.key)
+    : 'legacy';
+  return chat + '|' + boundaryKey;
+}
+
+async function buildUnfinishedCaptureGroups(drafts = []) {
+  const groups = new Map();
+
+  for (const item of drafts || []) {
+    if (!item?.id) continue;
+    const recoveryTab = await resolveDraftRecoveryTab(item.id, item.sourceUrl || '');
+    const row = {
+      ...summarize(item),
+      complete: Boolean(item.complete),
+      error: item.error || '',
+      captureMode: item.captureMode || '',
+      capturePhase: item.capturePhase || '',
+      partialSaveEnabled: Boolean(item.partialSaveEnabled),
+      partialArchiveId: item.partialArchiveId || '',
+      partialSavedAt: item.partialSavedAt || '',
+      navigationHighWater: Number(item.navigationHighWater || 0),
+      chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
+      hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key),
+      boundaryKind: item.captureBoundary?.kind || '',
+      boundaryKey: item.captureBoundary?.key || '',
+      recoveryTabAvailable: recoveryTab.available,
+      recoveryTabId: recoveryTab.available ? recoveryTab.record.tabId : null,
+      recoveryCaptureTarget: recoveryTab.available ? recoveryTab.record.captureTarget : '',
+      recoveryTabUpdatedAt: Number(recoveryTab.record?.updatedAt || 0),
+      canExportPrefix: ['walk', 'finalizing'].includes(item.capturePhase || '')
+    };
+    const key = unfinishedGroupKey(item);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+
+  const result = [];
+  for (const [groupKey, members] of groups.entries()) {
+    members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
+    const latest = members[0];
+    const byCount = [...members].sort((a, b) =>
+      Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
+      String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+    );
+    const exportCandidate = byCount.find(item => item.canExportPrefix) || null;
+    const resumeCandidate = [...members]
+      .filter(item => item.recoveryTabAvailable)
+      .sort((a, b) =>
+        Number(b.recoveryTabUpdatedAt || 0) - Number(a.recoveryTabUpdatedAt || 0) ||
+        String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+      )[0] || null;
+    const contentCandidate = exportCandidate || byCount[0] || latest;
+
+    result.push({
+      ...latest,
+      id: resumeCandidate?.id || contentCandidate?.id || latest.id,
+      logicalGroupId: groupKey,
+      resumePassId: resumeCandidate?.id || contentCandidate?.id || latest.id,
+      exportPassId: exportCandidate?.id || '',
+      copyPassId: contentCandidate?.id || latest.id,
+      viewPassId: contentCandidate?.id || latest.id,
+      passIds: members.map(item => item.id),
+      technicalPassCount: members.length,
+      messageCount: Number(contentCandidate?.messageCount || 0),
+      imageCount: Number(contentCandidate?.imageCount || 0),
+      chronologicalCount: Number(contentCandidate?.chronologicalCount || 0),
+      canExportCurrent: Boolean(exportCandidate?.id),
+      exportMessageCount: Number(exportCandidate?.messageCount || 0),
+      recoveryTabAvailable: Boolean(resumeCandidate?.recoveryTabAvailable),
+      recoveryTabId: resumeCandidate?.recoveryTabId ?? null,
+      recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
+      capturePhase: contentCandidate?.capturePhase || latest.capturePhase || '',
+      capturedAt: contentCandidate?.capturedAt || latest.capturedAt || '',
+      hasBoundary: members.some(item => item.hasBoundary)
+    });
+  }
+
+  result.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
+  return result;
+}
+
+async function refreshCaptureJobHealth() {
+  let job = await getJob();
+  if (!job || !['starting', 'running'].includes(job.status)) return job;
+
+  if (Date.now() - Number(job.updatedAt || job.startedAt || Date.now()) <= 300000) {
+    return job;
+  }
+
+  const health = await probeLiveCapture(job);
+  const alive = Boolean(
+    health?.ok &&
+    health.running &&
+    health.jobId === job.jobId
+  );
+
+  if (alive) {
+    return setJob({
+      lastHeartbeatAt: Date.now(),
+      contentScriptVersion: health.version || job.contentScriptVersion || '',
+      lastScrollDirection: health.lastScrollDirection || job.lastScrollDirection || ''
+    });
+  }
+
+  const draft = job.draftId ? await getDraft(job.draftId) : null;
+  const failed = await finishJobWithError(
+    job.jobId,
+    job.sourceTabId ?? job.tabId,
+    draft?.messages?.length
+      ? 'Сбор перестал отвечать. Контрольная точка сохранена.'
+      : 'Сбор перестал отвечать до создания контрольной точки.',
+    draft?.id || job.draftId || '',
+    draft?.messages?.length || Number(job.draftCount || 0),
+    'error'
+  );
+  return failed?.job || await getJob();
+}
+
 async function listLinkedArchives() {
   const keys = typeof chrome.storage.local.getKeys === 'function'
     ? await chrome.storage.local.getKeys() : null;
@@ -3715,42 +3837,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.docUrl || '',
           message.captureTarget || 'copy'
         );
+      case 'ARCHIVER_GET_LIVE_STATE':
+        return { ok: true, job: await refreshCaptureJobHealth() };
       case 'ARCHIVER_GET_STATE': {
-        let job = await getJob();
-        // A killed MV3 worker can leave an indefinitely "running" job behind,
-        // but a long navigation-only pass may legitimately keep the message
-        // count unchanged. Before declaring the run dead, ask the concrete
-        // capture tab whether the same job is still executing.
-        if (job && ['starting', 'running'].includes(job.status) &&
-            Date.now() - Number(job.updatedAt || job.startedAt || Date.now()) > 300000) {
-          const health = await probeLiveCapture(job);
-          const alive = Boolean(
-            health?.ok &&
-            health.running &&
-            health.jobId === job.jobId
-          );
-
-          if (alive) {
-            job = await setJob({
-              lastHeartbeatAt: Date.now(),
-              contentScriptVersion: health.version || job.contentScriptVersion || '',
-              lastScrollDirection: health.lastScrollDirection || job.lastScrollDirection || ''
-            });
-          } else {
-            const draft = job.draftId ? await getDraft(job.draftId) : null;
-            const failed = await finishJobWithError(
-              job.jobId,
-              job.sourceTabId ?? job.tabId,
-              draft?.messages?.length
-                ? 'Сбор перестал отвечать. Контрольная точка сохранена.'
-                : 'Сбор перестал отвечать до создания контрольной точки.',
-              draft?.id || job.draftId || '',
-              draft?.messages?.length || Number(job.draftCount || 0),
-              'error'
-            );
-            job = failed?.job || await getJob();
-          }
-        }
+        let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
         let currentArchive = null;
         let linkedDoc = null;
@@ -3762,33 +3852,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
-        const draft = job?.draftId ? await getDraft(job.draftId) : null;
         const drafts = await listDrafts();
-        const unfinishedPasses = [];
-        for (const item of drafts) {
-          const recoveryTab = await resolveDraftRecoveryTab(item.id, item.sourceUrl || '');
-          unfinishedPasses.push({
-            ...summarize(item),
-            complete: Boolean(item.complete),
-            error: item.error || '',
-            captureMode: item.captureMode || '',
-            capturePhase: item.capturePhase || '',
-            partialSaveEnabled: Boolean(item.partialSaveEnabled),
-            partialArchiveId: item.partialArchiveId || '',
-            partialSavedAt: item.partialSavedAt || '',
-            navigationHighWater: Number(item.navigationHighWater || 0),
-            chronologicalCount: Number(item.chronologicalCount || item.messages?.length || 0),
-            hasBoundary: Boolean(item.captureBoundary?.kind && item.captureBoundary?.key),
-            recoveryTabAvailable: recoveryTab.available,
-            recoveryTabId: recoveryTab.available ? recoveryTab.record.tabId : null,
-            recoveryCaptureTarget: recoveryTab.available ? recoveryTab.record.captureTarget : ''
-          });
-        }
+        const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
+        const activeUnfinished = unfinishedPasses.find(item =>
+          (item.passIds || []).includes(job?.draftId || '') ||
+          (item.passIds || []).includes(job?.recoveryDraftId || '')
+        ) || null;
         return {
           ok: true,
           job,
           archive: summarize(archive),
-          unfinishedPass: summarize(draft),
+          unfinishedPass: activeUnfinished,
           unfinishedPasses,
           linkedDoc,
           savedArchives: await listLinkedArchives(),
@@ -3879,18 +3953,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
         }
 
-        const checkpointDraft = await getDraft(draftId);
-        if (checkpointDraft?.partialSaveEnabled) {
-          try {
-            await syncPartialArchiveFromDraft(checkpointDraft);
-          } catch (error) {
-            await appendRunLog({}, {
-              level: 'warn',
-              code: 'PARTIAL_AUTOSAVE_FAILED',
-              message: error?.message || String(error),
-              phase: checkpointDraft.capturePhase || job.phase || '',
-              count: checkpointDraft.messages?.length || 0
-            });
+        if (job.partialSaveEnabled) {
+          const checkpointDraft = await getDraft(draftId);
+          if (checkpointDraft?.messages?.length) {
+            try {
+              await syncPartialArchiveFromDraft(checkpointDraft);
+            } catch (error) {
+              await appendRunLog({}, {
+                level: 'warn',
+                code: 'PARTIAL_AUTOSAVE_FAILED',
+                message: error?.message || String(error),
+                phase: checkpointDraft.capturePhase || job.phase || '',
+                count: checkpointDraft.messages?.length || 0
+              });
+            }
           }
         }
 
