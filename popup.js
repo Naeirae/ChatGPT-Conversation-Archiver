@@ -1318,7 +1318,7 @@ $('continue').onclick = async () => {
 $('syncDoc').onclick = async () => {
   const docUrl = $('docUrl').value.trim();
   if (!docUrl) {
-    setStatus('Для восстановления точки продолжения вставьте ссылку на Google Doc.', true);
+    setStatus('Для восстановления точки продолжения вставьте ссылку на документ Google Docs.', true);
     return;
   }
 
@@ -1637,7 +1637,7 @@ $('deleteDraft').onclick = async () => {
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый проход.');
     await getState();
-    setStatus('Незавершённый проход удалён.');
+    setStatus('Незавершённый сбор удалён.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1681,7 +1681,7 @@ $('copyDraft').onclick = async () => {
       passId: (state?.unfinishedPass || state?.draft)?.id
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось скопировать незавершённый проход.');
-    setStatus('Незавершённый проход скопирован: ' + (result.count || 0) + ' сообщений.');
+    setStatus('Незавершённый сбор скопирован: ' + (result.count || 0) + ' сообщений.');
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
@@ -1726,7 +1726,7 @@ $('newDoc').onclick = async () => {
     const imagePart = (result.imageInsertedCount || result.imageFailedCount)
       ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
       : '';
-    setStatus(`Готово. В новый Google Doc вставлено ${result.addedCount || 0} сообщений.` + imagePart);
+    setStatus(`Готово. В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` + imagePart);
     await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
@@ -1737,11 +1737,11 @@ $('newDoc').onclick = async () => {
 
 $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
-  setStatus('Проверяю, что уже вставлено в этот Google Doc…');
+  setStatus('Проверяю, что уже вставлено в этот документ Google Docs…');
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC', { archiveId: state?.archive?.id || '' });
     if (result.noChanges) {
-      setStatus('В этом Google Doc уже есть все сообщения из локального архива.');
+      setStatus('В этом документе Google Docs уже есть все сообщения из локального архива.');
     } else if (result.exportMode === 'delta') {
       const imagePart = (result.imageInsertedCount || result.imageFailedCount)
         ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
@@ -1952,7 +1952,7 @@ const WHATS_NEW_COPY = {
     'Во время знакомства нет затемняющей подложки вокруг интерфейса.'
   ],
   '0.3.48': [
-    'Незавершённый проход теперь сохраняется по ходу хронологического сбора, поэтому закрытие рабочей вкладки не должно терять точку продолжения.',
+    'Незавершённый сбор теперь сохраняется по ходу хронологического прохода, поэтому закрытие рабочей вкладки не должно терять точку продолжения.',
     'Знакомство автоматически сворачивает открытую справку или настройки перед первым шагом.',
     'Индикатор доступного обновления в popup теперь всегда зелёный.'
   ],
