@@ -46,7 +46,7 @@ function renderMessage(message, index) {
   const parts = [];
   if ((message.images || []).length) parts.push('изображений: ' + message.images.length);
   if (message.reasoningHtml) parts.push('есть служебное рассуждение');
-  if (message.id) parts.push('идентификатор: ' + message.id);
+  if (message.id) parts.push('служебный номер: ' + message.id);
   extra.textContent = parts.join(' · ');
 
   card.append(head, body);
@@ -64,7 +64,7 @@ function renderMessage(message, index) {
 
 async function load() {
   const passId = passIdFromUrl();
-  if (!passId) throw new Error('Не указан ID незавершённого прохода.');
+  if (!passId) throw new Error('Не указан незавершённый сбор.');
 
   const result = await chrome.runtime.sendMessage({
     type: 'ARCHIVER_GET_UNFINISHED_PASS',
@@ -102,7 +102,7 @@ async function load() {
   const hasSavedRecoveryTab = Boolean(passState?.recoveryTabAvailable);
   const canResume = Boolean(pass.captureBoundary?.kind && pass.captureBoundary?.key && pass.sourceUrl);
   $('resume').classList.toggle('hidden', !canResume);
-  $('resume').textContent = hasSavedRecoveryTab ? 'Продолжить в сохранённой вкладке' : 'Продолжить';
+  $('resume').textContent = 'Продолжить';
   $('openCapture').classList.toggle('hidden', !hasSavedRecoveryTab);
   $('exportDoc').classList.toggle(
     'hidden',
