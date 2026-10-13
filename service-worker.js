@@ -4075,13 +4075,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
         }
 
-        // A successful physical-scroll request is itself proof that the
-        // collector is alive, even if the navigation-only phase has not changed
-        // the message count for several minutes.
-        await setJob({
-          lastHeartbeatAt: Date.now(),
-          lastPhysicalActivity: 'scroll'
-        });
+        // A successful physical-scroll request proves that the collector is
+        // alive, but persisting that proof on every wheel step is expensive on
+        // very long chats. Store a heartbeat at most once every 15 seconds.
+        const now = Date.now();
+        if (now - Number(job.lastHeartbeatAt || job.updatedAt || 0) >= 15000) {
+          await setJob({
+            lastHeartbeatAt: now,
+            lastPhysicalActivity: 'scroll'
+          });
+        }
         return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
