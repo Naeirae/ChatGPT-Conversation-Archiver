@@ -1909,7 +1909,14 @@ async function handleCaptureComplete(message) {
 
   const archive = await getArchive(message.archiveId);
   if (!archive) {
-    return finishJobWithError(message.jobId, job.sourceTabId ?? job.tabId, 'Архив не найден после завершения сбора.');
+    return finishJobWithError(
+      message.jobId,
+      job.sourceTabId ?? job.tabId,
+      'Архив не найден после завершения сбора.',
+      job.draftId || job.recoveryDraftId || '',
+      Number(job.draftCount || 0),
+      'error'
+    );
   }
 
   const partialSourceId = job.recoveryDraftId || job.draftId || '';
