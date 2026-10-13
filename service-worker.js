@@ -1165,13 +1165,184 @@ async function cancelCapture() {
   return { ok: true, job: next };
 }
 
+async function scheduleAutomaticRecovery(jobId, delayMs = AUTO_RECOVERY_TRIGGER_DELAY_MS) {
+  if (!jobId) return;
+  await chrome.alarms.create(AUTO_RECOVERY_ALARM_PREFIX + jobId, {
+    when: Date.now() + Math.max(500, Number(delayMs) || AUTO_RECOVERY_TRIGGER_DELAY_MS)
+  });
+}
+
+async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
+  failedJob = failedJob || await getJob();
+  if (
+    !failedJob ||
+    !['error', 'cancelled'].includes(failedJob.status) ||
+    failedJob.captureTabId == null
+  ) {
+    throw new Error('Нет сохранённой рабочей вкладки для продолжения.');
+  }
+
+  const boundary = failedJob.captureBoundary || null;
+  if (!boundary?.kind || !boundary?.key) {
+    throw new Error('Не сохранена нижняя метка снимка; безопасно продолжить этот проход нельзя.');
+  }
+
+  if (!['full', 'fragment'].includes(failedJob.captureMode)) {
+    throw new Error('Этот этап нельзя безопасно продолжить без сохранённого черновика.');
+  }
+
+  const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
+  if (!captureTab?.id ||
+      conversationKey(captureTab.url || '') !== conversationKey(failedJob.sourceUrl || '')) {
+    throw new Error('Рабочая вкладка уже недоступна или содержит другой чат.');
+  }
+
+  const jobId = makeJobId();
+  await setJob({
+    jobId,
+    status: 'starting',
+    phase: 'top',
+    captureMode: failedJob.captureMode,
+    captureTarget: failedJob.captureTarget === 'current' ? 'current' : 'copy',
+    recoveryAvailable: false,
+    recoveryDraftId: '',
+    draftId: '',
+    draftCount: 0,
+    captureTabId: captureTab.id,
+    captureBoundary: boundary,
+    autoRecoveryPending: false,
+    message: 'Продолжаю путь к началу в той же рабочей вкладке…',
+    startedAt: Date.now(),
+    finishedAt: null
+  });
+
+  try {
+    await ensureChatGptContentScript(captureTab.id, jobId, {
+      mode: failedJob.captureMode,
+      fixedCaptureBoundary: boundary
+    });
+  } catch (error) {
+    await setJob({
+      status: 'error',
+      recoveryAvailable: true,
+      autoRecoveryPending: false,
+      message: error?.message || String(error),
+      finishedAt: Date.now()
+    });
+    throw error;
+  }
+
+  const next = await appendRunLog({
+    status: 'running',
+    phase: 'top',
+    message: 'Продолжаю путь к началу в той же вкладке…',
+    autoRecoveryPending: false
+  }, {
+    level: 'info',
+    code: 'SAME_TAB_TOP_NAVIGATION_RESUMED',
+    message: 'Проход к началу продолжен с физической позиции сохранённой рабочей вкладки.',
+    phase: 'top',
+    count: Number(failedJob.count || 0)
+  });
+  return { ok: true, job: next };
+}
+
+async function attemptAutomaticRecovery(failedJobId = '') {
+  const failedJob = await getJob();
+  if (
+    !failedJob ||
+    failedJob.jobId !== failedJobId ||
+    failedJob.status !== 'error' ||
+    !failedJob.autoRecoveryPending
+  ) {
+    return { ok: false, skipped: true };
+  }
+
+  const attempts = Number(failedJob.autoRecoveryAttempts || 0);
+  const maxAttempts = Number(failedJob.autoRecoveryMaxAttempts || AUTO_RECOVERY_MAX_ATTEMPTS);
+  if (attempts >= maxAttempts) {
+    await setJob({
+      autoRecoveryPending: false,
+      message: (failedJob.message || 'Сбор остановился.') +
+        ' Автоматические попытки исчерпаны; можно продолжить вручную в той же вкладке.'
+    });
+    return { ok: false, exhausted: true };
+  }
+
+  const tab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
+  if (!tab?.id ||
+      conversationKey(tab.url || '') !== conversationKey(failedJob.sourceUrl || '')) {
+    await setJob({
+      autoRecoveryPending: false,
+      recoveryAvailable: false,
+      message: (failedJob.message || 'Сбор остановился.') +
+        ' Сохранённая рабочая вкладка больше недоступна.'
+    });
+    return { ok: false, unavailable: true };
+  }
+
+  const attemptNumber = attempts + 1;
+  await appendRunLog({
+    autoRecoveryAttempts: attemptNumber,
+    autoRecoveryPending: false,
+    message: 'Автоматически восстанавливаю сбор в той же вкладке: попытка ' +
+      attemptNumber + ' из ' + maxAttempts + '…'
+  }, {
+    level: 'warn',
+    code: 'AUTO_RECOVERY_ATTEMPT',
+    message: 'Запускаю ограниченную автоматическую попытку продолжения в той же вкладке.',
+    phase: failedJob.phase || '',
+    count: Number(failedJob.count || 0)
+  });
+
+  try {
+    const current = await getJob();
+    if (current?.draftId) {
+      return await resumeFailedCaptureFromWorkingTab();
+    }
+    return await resumeNavigationOnlyFromWorkingTab(current);
+  } catch (error) {
+    const current = await getJob();
+    const currentAttempts = Number(current?.autoRecoveryAttempts || attemptNumber);
+    const canRetry = Boolean(
+      current?.status === 'error' &&
+      current?.captureTabId != null &&
+      currentAttempts < maxAttempts
+    );
+
+    const next = await appendRunLog({
+      status: 'error',
+      recoveryAvailable: Boolean(current?.captureTabId != null),
+      autoRecoveryPending: canRetry,
+      autoRecoveryAttempts: currentAttempts,
+      autoRecoveryMaxAttempts: maxAttempts,
+      message: 'Автовосстановление не удалось: ' + (error?.message || String(error)) +
+        (canRetry
+          ? ' Попробую ещё раз.'
+          : ' Автоматические попытки закончились; вкладка оставлена для ручного продолжения.'),
+      finishedAt: Date.now()
+    }, {
+      level: 'warn',
+      code: canRetry ? 'AUTO_RECOVERY_RETRY_PENDING' : 'AUTO_RECOVERY_EXHAUSTED',
+      message: error?.message || String(error),
+      phase: current?.phase || failedJob.phase || '',
+      count: Number(current?.count || failedJob.count || 0)
+    });
+
+    if (canRetry) {
+      await scheduleAutomaticRecovery(next.jobId, AUTO_RECOVERY_TRIGGER_DELAY_MS * 2);
+    }
+    return { ok: false, error: error?.message || String(error), job: next };
+  }
+}
+
 async function finishJobWithError(jobId, sourceTabId, message, draftId = '', draftCount = 0, status = 'error') {
   const job = await getJob();
   if (job?.jobId !== jobId) return { job, autoRecoveryEligible: false };
 
   const boundary = job.captureBoundary || null;
   const navigationOnlyRecoverable = Boolean(
-    status === 'error' &&
+    ['error', 'cancelled'].includes(status) &&
     job.phase === 'top' &&
     boundary?.kind &&
     boundary?.key &&
@@ -1278,6 +1449,9 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     count: Number(job.count || 0)
   });
   await recordRunHistory(next);
+  if (autoRecoveryEligible) {
+    await scheduleAutomaticRecovery(next.jobId);
+  }
   return { job: next, autoRecoveryEligible };
 }
 
@@ -1302,10 +1476,13 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (
     !failedJob ||
     !['error', 'cancelled'].includes(failedJob.status) ||
-    !failedJob.draftId ||
     failedJob.captureTabId == null
   ) {
     throw new Error('Нет незавершённого прохода с сохранённой рабочей вкладкой.');
+  }
+
+  if (!failedJob.draftId) {
+    return resumeNavigationOnlyFromWorkingTab(failedJob);
   }
 
   const draft = await getDraft(failedJob.draftId);
@@ -1352,6 +1529,7 @@ async function resumeFailedCaptureFromWorkingTab() {
     partialSaveEnabled: Boolean(draft.partialSaveEnabled),
     partialArchiveId: draft.partialArchiveId || '',
     recoveryAvailable: false,
+    autoRecoveryPending: false,
     captureTabId: captureTab.id,
     message: resumeNavigation
       ? 'Продолжаю навигацию вверх от сохранённого места…'
