@@ -85,6 +85,10 @@ async function load() {
   $('resume').classList.toggle('hidden', !canResume);
   $('resume').textContent = hasSavedRecoveryTab ? 'Продолжить в сохранённой вкладке' : 'Продолжить';
   $('openCapture').classList.toggle('hidden', !hasSavedRecoveryTab);
+  $('exportDoc').classList.toggle(
+    'hidden',
+    !['walk', 'finalizing'].includes(pass.capturePhase || '')
+  );
 
   const compared = await chrome.runtime.sendMessage({
     type: 'ARCHIVER_COMPARE_UNFINISHED_PASS',
@@ -178,4 +182,26 @@ $('resume').onclick = async () => {
       ? 'Архиватор продолжает сбор в той же сохранённой вкладке.'
       : 'Архиватор восстанавливает сохранённый участок и продолжает сбор.'
   );
+};
+
+
+$('exportDoc').onclick = async () => {
+  const passId = passIdFromUrl();
+  $('exportDoc').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC',
+      passId
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить текущую часть в Google Doc.');
+    alert(
+      'Текущая часть сохранена в Google Doc: ' +
+      Number(result.exportedMessageCount || result.addedCount || 0) +
+      ' сообщений. Позже документ можно сверить с продолжением чата.'
+    );
+  } catch (error) {
+    alert(error.message || String(error));
+  } finally {
+    $('exportDoc').disabled = false;
+  }
 };
