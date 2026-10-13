@@ -250,9 +250,6 @@ function renderUnfinishedPasses(items = []) {
             'Сохранено в Google Doc: ' + Number(result.exportedMessageCount || result.addedCount || 0) +
             ' сообщений. Позже этот документ можно сверить с продолжением чата.'
           );
-          if (result.docUrl) {
-            await chrome.tabs.create({ url: result.docUrl });
-          }
         } catch (error) {
           setStatus(error.message || String(error), true);
         } finally {
