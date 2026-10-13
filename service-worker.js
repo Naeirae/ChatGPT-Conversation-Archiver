@@ -1171,12 +1171,21 @@ async function cancelCapture() {
 
 async function finishJobWithError(jobId, sourceTabId, message, draftId = '', draftCount = 0, status = 'error') {
   const job = await getJob();
-  if (job?.jobId !== jobId) return;
+  if (job?.jobId !== jobId) return { job, autoRecoveryEligible: false };
+
+  const boundary = job.captureBoundary || null;
+  const navigationOnlyRecoverable = Boolean(
+    status === 'error' &&
+    job.phase === 'top' &&
+    boundary?.kind &&
+    boundary?.key &&
+    ['full', 'fragment'].includes(job.captureMode)
+  );
 
   let preservedCaptureTabId = null;
   if (
     ['error', 'cancelled'].includes(status) &&
-    draftId &&
+    (draftId || navigationOnlyRecoverable) &&
     ['full', 'fragment', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
     job.captureTabId != null
   ) {
@@ -1199,9 +1208,12 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   }
   await cleanupTemporaryBaseline(job);
 
-  const recoveryAvailable = Boolean(preservedCaptureTabId != null && draftId);
+  const recoveryAvailable = Boolean(
+    preservedCaptureTabId != null &&
+    (draftId || navigationOnlyRecoverable)
+  );
 
-  if (recoveryAvailable) {
+  if (recoveryAvailable && draftId) {
     await setDraftRecoveryTab(draftId, {
       tabId: preservedCaptureTabId,
       sourceUrl: job.sourceUrl || '',
@@ -1228,46 +1240,57 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     }
   }
 
+  const attempts = Number(job.autoRecoveryAttempts || 0);
+  const maxAttempts = Number(job.autoRecoveryMaxAttempts || AUTO_RECOVERY_MAX_ATTEMPTS);
+  const autoRecoveryEligible = Boolean(
+    status === 'error' &&
+    recoveryAvailable &&
+    attempts < maxAttempts
+  );
+
   const next = await appendRunLog({
     status,
-    message,
+    message: autoRecoveryEligible
+      ? message + ' Попробую автоматически продолжить в этой же вкладке.'
+      : message,
     draftId,
     draftCount,
     recoveryAvailable,
+    autoRecoveryPending: autoRecoveryEligible,
+    autoRecoveryAttempts: attempts,
+    autoRecoveryMaxAttempts: maxAttempts,
+    autoRecoveryRootId: job.autoRecoveryRootId || job.jobId,
     finishedAt: Date.now(),
     tabId: sourceTabId ?? job.sourceTabId ?? job.tabId,
     captureTabId: preservedCaptureTabId
   }, {
     level: status === 'cancelled' ? 'warn' : 'error',
-    code: recoveryAvailable
-      ? 'RUN_FAILED_RECOVERABLE'
-      : (draftId ? 'RUN_FAILED_WITH_DRAFT' : 'RUN_FAILED'),
-    message: recoveryAvailable
-      ? ('Сбор оборвался; сохранён незавершённый проход на ' + Number(draftCount || 0) +
-          ' сообщений и оставлена рабочая вкладка для продолжения.')
-      : draftId
-        ? ('Сбор завершился ошибкой; сохранён незавершённый проход на ' + Number(draftCount || 0) + ' сообщений.')
-        : message,
+    code: autoRecoveryEligible
+      ? 'RUN_FAILED_AUTO_RECOVERY_PENDING'
+      : recoveryAvailable
+        ? 'RUN_FAILED_RECOVERABLE'
+        : (draftId ? 'RUN_FAILED_WITH_DRAFT' : 'RUN_FAILED'),
+    message: autoRecoveryEligible
+      ? (
+          'Сбор оборвался программно; рабочая вкладка сохранена. ' +
+          'Автоматическая попытка восстановления ' + (attempts + 1) + ' из ' + maxAttempts + ' запланирована.'
+        )
+      : recoveryAvailable
+        ? (
+            'Сбор оборвался; ' +
+            (draftId
+              ? 'сохранён незавершённый проход на ' + Number(draftCount || 0) + ' сообщений'
+              : 'сохранена текущая позиция прохода к началу') +
+            ' и оставлена рабочая вкладка для продолжения.'
+          )
+        : draftId
+          ? ('Сбор завершился ошибкой; сохранён незавершённый проход на ' + Number(draftCount || 0) + ' сообщений.')
+          : message,
     phase: job.phase || '',
     count: Number(job.count || 0)
   });
   await recordRunHistory(next);
-}
-
-async function focusUnfinishedRecoveryTab(passId = '') {
-  const draft = await getDraft(passId);
-  if (!draft?.id) throw new Error('Сохранённый незавершённый проход не найден.');
-
-  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
-  if (!recovery.available) {
-    throw new Error('Сохранённая рабочая вкладка этого прохода уже недоступна.');
-  }
-
-  await chrome.tabs.update(recovery.tab.id, { active: true });
-  if (recovery.tab.windowId != null) {
-    await chrome.windows.update(recovery.tab.windowId, { focused: true }).catch(() => {});
-  }
-  return { ok: true, tabId: recovery.tab.id };
+  return { job: next, autoRecoveryEligible };
 }
 
 async function focusRecoverableCaptureTab() {
