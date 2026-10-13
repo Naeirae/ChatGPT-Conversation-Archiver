@@ -1,5 +1,22 @@
 const $ = id => document.getElementById(id);
 
+const PHASE_NAMES = {
+  top: 'путь к началу',
+  walk: 'сохранение сверху вниз',
+  finalizing: 'завершение сохранения',
+  paused: 'пауза'
+};
+
+const MODE_NAMES = {
+  full: 'полный сбор',
+  fragment: 'фрагмент',
+  continue: 'продолжение архива',
+  sync: 'восстановление по документу Google Docs',
+  images: 'добор изображений',
+  'resume-draft': 'продолжение незавершённого сбора',
+  'retry-walk': 'повтор прохода сверху вниз'
+};
+
 function passIdFromUrl() {
   return new URL(location.href).searchParams.get('passId') || '';
 }
@@ -28,8 +45,8 @@ function renderMessage(message, index) {
   extra.className = 'message-extra';
   const parts = [];
   if ((message.images || []).length) parts.push('изображений: ' + message.images.length);
-  if (message.reasoningHtml) parts.push('есть reasoning');
-  if (message.id) parts.push('id: ' + message.id);
+  if (message.reasoningHtml) parts.push('есть служебное рассуждение');
+  if (message.id) parts.push('идентификатор: ' + message.id);
   extra.textContent = parts.join(' · ');
 
   card.append(head, body);
@@ -58,16 +75,16 @@ async function load() {
   }
 
   const pass = result.unfinishedPass;
-  $('title').textContent = pass.title || 'Незавершённый проход';
+  $('title').textContent = pass.title || 'Незавершённый сбор';
 
   const meta = [
     'Сохранено: ' + formatDate(pass.capturedAt),
     'Сообщений: ' + ((pass.messages || []).length),
     'Изображений: ' + (pass.imageCount || 0),
-    'Этап сбора: ' + (pass.capturePhase || '—'),
-    'Режим: ' + (pass.captureMode || '—'),
-    'Контрольный минимум первого этапа: ' + (pass.navigationHighWater || 0),
-    'Нижняя snapshot-метка: ' + (pass.captureBoundary?.key ? 'есть' : 'нет')
+    'Этап сбора: ' + (PHASE_NAMES[pass.capturePhase] || '—'),
+    'Режим: ' + (MODE_NAMES[pass.captureMode] || 'обычный сбор'),
+    'Найдено на первом этапе: ' + (pass.navigationHighWater || 0),
+    'Нижняя граница снимка: ' + (pass.captureBoundary?.key ? 'есть' : 'нет')
   ];
   $('meta').textContent = meta.join(' · ');
   $('error').textContent = pass.error || '';
@@ -79,7 +96,9 @@ async function load() {
   (pass.messages || []).forEach((message, index) => list.appendChild(renderMessage(message, index)));
 
   const state = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' }).catch(() => null);
-  const passState = (state?.unfinishedPasses || []).find(item => item.id === passId) || null;
+  const passState = (state?.unfinishedPasses || []).find(item =>
+    item.id === passId || (item.passIds || []).includes(passId)
+  ) || null;
   const hasSavedRecoveryTab = Boolean(passState?.recoveryTabAvailable);
   const canResume = Boolean(pass.captureBoundary?.kind && pass.captureBoundary?.key && pass.sourceUrl);
   $('resume').classList.toggle('hidden', !canResume);
@@ -103,7 +122,7 @@ async function load() {
       $('compare').textContent = [
         'Завершённый архив: ' + (compared.archive.messageCount || 0),
         'незавершённый проход: ' + (compared.unfinishedPass?.messageCount || 0),
-        'общий префикс: ' + (compared.commonPrefixCount || 0),
+        'общая начальная часть: ' + (compared.commonPrefixCount || 0),
         'совпадающих сообщений: ' + (compared.sharedCount || 0),
         'только в незавершённом проходе: ' + (compared.onlyInUnfinishedPassCount || 0),
         'только в завершённом архиве: ' + (compared.onlyInArchiveCount || 0)
@@ -134,7 +153,7 @@ $('delete').onclick = async () => {
     alert(result?.error || 'Не удалось удалить незавершённый проход.');
     return;
   }
-  document.body.innerHTML = '<main><section class="card"><h1>Незавершённый проход удалён</h1></section></main>';
+  document.body.innerHTML = '<main><section class="card"><h1>Незавершённый сбор удалён</h1></section></main>';
 };
 
 load().catch(error => {
@@ -193,9 +212,9 @@ $('exportDoc').onclick = async () => {
       type: 'ARCHIVER_EXPORT_UNFINISHED_NEW_DOC',
       passId
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить текущую часть в Google Doc.');
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить текущую часть в Google Docs.');
     alert(
-      'Текущая часть сохранена в Google Doc: ' +
+      'В Google Docs сохранена текущая часть: ' +
       Number(result.exportedMessageCount || result.addedCount || 0) +
       ' сообщений. Позже документ можно сверить с продолжением чата.'
     );
