@@ -494,7 +494,7 @@ async function checkForUpdate() {
         REMOTE_MANIFEST_URL + '?check=' + Date.now(),
         { cache: 'no-store' }
       );
-      if (!response.ok) throw new Error(firstError + '; Raw GitHub: HTTP ' + response.status);
+      if (!response.ok) throw new Error(firstError + '; запасной запрос GitHub: HTTP ' + response.status);
       remote = await response.json();
     }
     const remoteVersion = String(remote?.version || '');
