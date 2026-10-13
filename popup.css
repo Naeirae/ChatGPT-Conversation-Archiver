@@ -1121,3 +1121,48 @@ body.tour-open .header-popover {
   line-height:1.4;
 }
 .whats-new li + li { margin-top:4px; }
+
+
+/* Unified unfinished-capture card */
+.unfinished-capture-row { padding:10px 0; }
+.unfinished-primary-actions {
+  display:grid;
+  grid-template-columns:1fr;
+  gap:6px;
+  margin-top:8px;
+}
+.unfinished-primary-actions button {
+  width:100%;
+  margin:0;
+}
+.unfinished-save {
+  border-color:color-mix(in srgb,var(--accent) 32%,var(--border));
+  background:color-mix(in srgb,var(--soft) 72%,var(--panel));
+  color:var(--accent);
+  font-weight:700;
+}
+.unfinished-more {
+  margin-top:6px;
+}
+.unfinished-more > summary {
+  width:max-content;
+  cursor:pointer;
+  list-style:none;
+  color:var(--muted);
+  font-size:10.5px;
+  font-weight:650;
+}
+.unfinished-more > summary::-webkit-details-marker { display:none; }
+.unfinished-more > summary::after { content:' · дополнительные действия'; font-weight:400; }
+.unfinished-more-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:5px;
+  padding-top:6px;
+}
+.unfinished-more-actions button {
+  width:auto;
+  margin:0;
+  padding:6px 8px;
+  font-size:10px;
+}
