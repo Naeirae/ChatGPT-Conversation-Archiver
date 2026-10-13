@@ -362,17 +362,6 @@ async function listLinkedArchives() {
     // appearing as a second "saved chat" for the same conversation.
     if (archive.partial) continue;
 
-    const key = conversationKey(archive.sourceUrl || '');
-    if (!archive.isFragment && key && repairedIndex[key] !== archive.id) {
-      const indexedArchiveId = repairedIndex[key] || '';
-      const indexedArchive = indexedArchiveId ? await getArchive(indexedArchiveId) : null;
-      const canRepair = !archive.partial || !indexedArchive?.id || Boolean(indexedArchive.partial);
-      if (canRepair) {
-        repairedIndex[key] = archive.id;
-        indexChanged = true;
-      }
-    }
-
     const linked = archive.isFragment ? null : await getLinkedDoc(archive.sourceUrl);
     let destination = await getArchiveDestination(archive.id);
     if (!destination && linked?.url) {
@@ -401,12 +390,66 @@ async function listLinkedArchives() {
     });
   }
 
+  // Present one logical saved chat per source conversation. Older local
+  // snapshots remain in storage for safety/compatibility but do not become
+  // separate UX rows.
+  const grouped = new Map();
+  for (const row of rows) {
+    const key = row.isFragment
+      ? 'fragment:' + row.id
+      : 'chat:' + (conversationKey(row.sourceUrl || '') || row.sourceUrl || row.id);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(row);
+  }
+
+  const displayRows = [];
+  for (const members of grouped.values()) {
+    members.sort((a, b) =>
+      Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
+      String(b.updatedAt || b.capturedAt || '').localeCompare(String(a.updatedAt || a.capturedAt || ''))
+    );
+
+    const representative = { ...members[0] };
+    const documentRow = [...members]
+      .filter(item => item.docUrl || item.destination?.url || item.destination?.saved)
+      .sort((a, b) =>
+        String(b.updatedAt || b.capturedAt || '').localeCompare(String(a.updatedAt || a.capturedAt || ''))
+      )[0] || null;
+    const newestRow = [...members].sort((a, b) =>
+      String(b.updatedAt || b.capturedAt || '').localeCompare(String(a.updatedAt || a.capturedAt || ''))
+    )[0] || representative;
+
+    representative.title = newestRow.title || representative.title;
+    representative.archiveIds = members.map(item => item.id);
+    representative.localVersionCount = members.length;
+
+    if (documentRow) {
+      representative.docUrl = documentRow.docUrl || representative.docUrl || '';
+      if (documentRow.destination?.saved) {
+        representative.destination = documentRow.destination;
+      }
+      representative.updatedAt = documentRow.updatedAt || representative.updatedAt;
+    }
+
+    if (!representative.isFragment) {
+      const key = conversationKey(representative.sourceUrl || '');
+      if (key && repairedIndex[key] !== representative.id) {
+        repairedIndex[key] = representative.id;
+        indexChanged = true;
+      }
+    }
+
+    displayRows.push(representative);
+  }
+
   if (indexChanged) {
     await chrome.storage.local.set({ [STORAGE_KEYS.archiveIndex]: repairedIndex });
   }
 
-  rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-  return rows;
+  displayRows.sort((a, b) =>
+    String(b.updatedAt || b.capturedAt || '').localeCompare(String(a.updatedAt || a.capturedAt || ''))
+  );
+  return displayRows;
 }
 
 async function setArchiveSavedDestination(archiveId = '', { saved = true, url = '', label = '' } = {}) {
@@ -2059,6 +2102,26 @@ async function deleteLocalArchive(archiveId = '') {
   }
 
   return { ok: true, removed: true, archiveId: archive.id };
+}
+
+async function deleteLocalArchiveGroup(archiveIds = []) {
+  const ids = [...new Set((archiveIds || []).map(String).filter(Boolean))];
+  if (!ids.length) return { ok: true, removed: 0 };
+
+  const job = await getJob();
+  let removed = 0;
+  for (const id of ids) {
+    const archive = await getArchive(id);
+    if (!archive?.id) continue;
+    await deleteArchive(id);
+    removed++;
+  }
+
+  if (job?.archiveId && ids.includes(job.archiveId)) {
+    await setJob({ archiveId: '' });
+  }
+
+  return { ok: true, removed };
 }
 
 async function compareUnfinishedPass(passId = '') {
@@ -4047,6 +4110,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
+      case 'ARCHIVER_DELETE_ARCHIVE_GROUP':
+        return await deleteLocalArchiveGroup(
+          Array.isArray(message.archiveIds) ? message.archiveIds : []
+        );
       case 'ARCHIVER_SET_ARCHIVE_DESTINATION':
         return await setArchiveSavedDestination(
           message.archiveId || '',
