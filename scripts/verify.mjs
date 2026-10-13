@@ -183,12 +183,13 @@ try {
   }
   if (!popupHtml.includes('settings-menu') ||
       !popupHtml.includes('id="savedArchivesList"') ||
-      !popupHtml.includes('id="viewDraft"') ||
+      !popupHtml.includes('id="unfinishedPassesList"') ||
+      popupHtml.includes('id="viewDraft"') ||
       popupHtml.includes('id="includeReasoning"') ||
       popupHtml.includes('\\n\\n    <section')) {
-    fail('popup.html: compact settings/archive/draft structure regression');
+    fail('popup.html: compact settings/archive/unfinished-capture structure regression');
   }
-  if (!popupHtml.includes('id="continue"') ||
+    if (!popupHtml.includes('id="continue"') ||
       !popupHtml.includes('id="savedArchivesList"') ||
       !popupHtml.includes('id="captureInfoToggle"') ||
       !popupHtml.includes('id="updateNotice"') ||
