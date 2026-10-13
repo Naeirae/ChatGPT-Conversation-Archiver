@@ -130,7 +130,10 @@ function renderRunLog(job) {
   $('runLogMessage').textContent = job.message || '';
 }
 
-function unfinishedPhaseLabel(phase = '') {
+function unfinishedPhaseLabel(phase = '', mode = '') {
+  if (phase === 'top' && ['resume-draft', 'retry-walk'].includes(mode)) {
+    return 'восстанавливает место продолжения';
+  }
   return {
     top: 'идёт к началу',
     walk: 'сохраняется сверху вниз',
@@ -165,7 +168,7 @@ function renderUnfinishedPasses(items = []) {
 
     const status = document.createElement('div');
     status.className = 'history-item-status';
-    status.textContent = unfinishedPhaseLabel(item.capturePhase);
+    status.textContent = unfinishedPhaseLabel(item.capturePhase, item.captureMode);
 
     head.append(title, status);
 
@@ -1053,7 +1056,7 @@ function render(data) {
     job?.status === 'error' &&
     job?.captureTarget === 'copy'
   );
-  $('retryCurrent').textContent = 'Повторить в текущей вкладке';
+  $('retryCurrent').textContent = 'Начать заново в текущей вкладке';
   $('retryCurrent').classList.toggle('hidden', !canRetryCurrent);
   $('dismissFailedRun').classList.toggle(
     'hidden',
