@@ -71,7 +71,7 @@ async function load() {
     passId
   });
   if (!result?.ok || !result.unfinishedPass) {
-    throw new Error(result?.error || 'Сохранённый незавершённый проход не найден.');
+    throw new Error(result?.error || 'Сохранённый незавершённый сбор не найден.');
   }
 
   const pass = result.unfinishedPass;
@@ -121,7 +121,7 @@ async function load() {
     } else {
       $('compare').textContent = [
         'Завершённый архив: ' + (compared.archive.messageCount || 0),
-        'незавершённый проход: ' + (compared.unfinishedPass?.messageCount || 0),
+        'незавершённый сбор: ' + (compared.unfinishedPass?.messageCount || 0),
         'общая начальная часть: ' + (compared.commonPrefixCount || 0),
         'совпадающих сообщений: ' + (compared.sharedCount || 0),
         'только в незавершённом проходе: ' + (compared.onlyInUnfinishedPassCount || 0),
@@ -139,18 +139,18 @@ $('copy').onclick = async () => {
     type: 'ARCHIVER_COPY_UNFINISHED_PASS',
     passId
   });
-  if (!result?.ok) alert(result?.error || 'Не удалось скопировать незавершённый проход.');
+  if (!result?.ok) alert(result?.error || 'Не удалось скопировать незавершённый сбор.');
 };
 
 $('delete').onclick = async () => {
   const passId = passIdFromUrl();
-  if (!confirm('Удалить этот сохранённый незавершённый проход?')) return;
+  if (!confirm('Удалить этот сохранённый незавершённый сбор?')) return;
   const result = await chrome.runtime.sendMessage({
     type: 'ARCHIVER_DELETE_UNFINISHED_PASS',
     passId
   });
   if (!result?.ok) {
-    alert(result?.error || 'Не удалось удалить незавершённый проход.');
+    alert(result?.error || 'Не удалось удалить незавершённый сбор.');
     return;
   }
   document.body.innerHTML = '<main><section class="card"><h1>Незавершённый сбор удалён</h1></section></main>';
@@ -193,7 +193,7 @@ $('resume').onclick = async () => {
         }
   );
   if (!result?.ok) {
-    alert(result?.error || 'Не удалось продолжить незавершённый проход.');
+    alert(result?.error || 'Не удалось продолжить незавершённый сбор.');
     return;
   }
   alert(
