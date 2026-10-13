@@ -2405,7 +2405,10 @@
 
     const now = Date.now();
     const last = state.recoveryCheckpoint || { at: 0, count: 0 };
-    if (!force && (now - last.at < 30000 || order.length - last.count < 35)) return;
+    const checkpointSize = order.length;
+    const minInterval = checkpointSize >= 2000 ? 60000 : checkpointSize >= 500 ? 45000 : 30000;
+    const minDelta = checkpointSize >= 2000 ? 140 : checkpointSize >= 500 ? 70 : 35;
+    if (!force && (now - last.at < minInterval || order.length - last.count < minDelta)) return;
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
@@ -2414,8 +2417,6 @@
     if (!messages.length) return;
 
     const draftId = current.draftId || ('draft-' + jobId);
-    const previousDraftRecord =
-      (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId] || null;
     // In the upward phase the next checkpoint is cumulative. The older saved
     // slice is retained even when Chrome virtualizes it out of the DOM.
     if (current.recoveryDraftId && current.phase === 'top') {
@@ -2444,9 +2445,9 @@
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       complete: false,
       error: '',
-      partialSaveEnabled: Boolean(previousDraftRecord?.partialSaveEnabled || current.partialSaveEnabled),
-      partialArchiveId: previousDraftRecord?.partialArchiveId || current.partialArchiveId || '',
-      partialSavedAt: previousDraftRecord?.partialSavedAt || ''
+      partialSaveEnabled: Boolean(current.partialSaveEnabled),
+      partialArchiveId: current.partialArchiveId || '',
+      partialSavedAt: current.partialSavedAt || ''
     };
 
     // Persist the large checkpoint independently. The background worker is
