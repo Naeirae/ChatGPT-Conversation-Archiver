@@ -1798,6 +1798,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
 
   const existing = await getArchive(id);
   const messages = draft.messages.slice();
+  const saveEnabled = Boolean(enable || draft.partialSaveEnabled);
   const archive = {
     ...(existing || {}),
     ...draft,
@@ -1811,7 +1812,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
     complete: false,
     isFragment: false,
     partialSourceDraftId: draft.id,
-    partialSaveEnabled: true,
+    partialSaveEnabled: saveEnabled,
     capturePhase: draft.capturePhase || 'walk',
     lastCaptureMode: 'partial-draft'
   };
@@ -1822,7 +1823,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
   // preserves these fields across later checkpoints.
   const boundDraft = {
     ...draft,
-    partialSaveEnabled: true,
+    partialSaveEnabled: saveEnabled,
     partialArchiveId: id,
     partialSavedAt: new Date().toISOString()
   };
@@ -1843,7 +1844,7 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
   const job = await getJob();
   if (job && (job.draftId === draft.id || job.recoveryDraftId === draft.id)) {
     await setJob({
-      partialSaveEnabled: true,
+      partialSaveEnabled: saveEnabled,
       partialArchiveId: id
     });
   }
@@ -1854,8 +1855,8 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
     messageCount: messages.length,
     updated: Boolean(existing?.id),
     resumable: true,
-    partialSaveEnabled: true,
-    enabled: enable || Boolean(draft.partialSaveEnabled)
+    partialSaveEnabled: saveEnabled,
+    enabled: saveEnabled
   };
 }
 
@@ -1880,7 +1881,7 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
   // Materialize and verify the current chronological prefix locally first.
   // This gives Google Docs export the exact same object shape as a completed
   // archive, while the draft itself remains available for later resume.
-  const partial = await syncPartialArchiveFromDraft(draft, { enable: true });
+  const partial = await syncPartialArchiveFromDraft(draft, { enable: false });
   const snapshot = await getArchive(partial.archiveId);
   if (!snapshot?.messages?.length ||
       snapshot.messages.length < draft.messages.length ||
@@ -4024,23 +4025,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             captureTarget: job.captureTarget || '',
             jobId: job.jobId
           });
-        }
-
-        if (job.partialSaveEnabled) {
-          const checkpointDraft = await getDraft(draftId);
-          if (checkpointDraft?.messages?.length) {
-            try {
-              await syncPartialArchiveFromDraft(checkpointDraft);
-            } catch (error) {
-              await appendRunLog({}, {
-                level: 'warn',
-                code: 'PARTIAL_AUTOSAVE_FAILED',
-                message: error?.message || String(error),
-                phase: checkpointDraft.capturePhase || job.phase || '',
-                count: checkpointDraft.messages?.length || 0
-              });
-            }
-          }
         }
 
         return { ok: true };
