@@ -1594,7 +1594,7 @@
 
   async function progress(message, count, extra) {
     const now = Date.now();
-    if (now - lastProgressAt < 500 && !(extra && extra.force)) return;
+    if (now - lastProgressAt < 1500 && !(extra && extra.force)) return;
     lastProgressAt = now;
     const patch = Object.assign({ status: 'running', message, count }, extra || {});
     try {
@@ -2581,7 +2581,7 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts);
+      await physicalScroll('down', bursts, { settleTimeout: 5000, quietWindow: 850 });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
