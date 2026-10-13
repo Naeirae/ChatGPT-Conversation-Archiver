@@ -623,6 +623,9 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
 
   const result = await chrome.tabs.sendMessage(tabId, payload);
   if (!result?.ok) throw new Error(result?.error || 'Content script не запустил сбор.');
+  if (result.jobId && result.jobId !== jobId) {
+    throw new Error('Предыдущий сбор в этой вкладке ещё завершает работу; новая попытка пока не запущена.');
+  }
   return result;
 }
 
@@ -1129,9 +1132,15 @@ async function cancelCapture() {
   }
 
   const preservedDraft = job.draftId ? await getDraft(job.draftId) : null;
+  const hasTopBoundary = Boolean(
+    job.phase === 'top' &&
+    job.captureBoundary?.kind &&
+    job.captureBoundary?.key &&
+    ['full', 'fragment'].includes(job.captureMode)
+  );
   const canRecover = Boolean(
-    preservedDraft?.messages?.length &&
-    job.captureTabId != null
+    job.captureTabId != null &&
+    (preservedDraft?.messages?.length || hasTopBoundary)
   );
   if (canRecover && job.draftId) {
     await setDraftRecoveryTab(job.draftId, {
@@ -3689,14 +3698,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
           } else {
             const draft = job.draftId ? await getDraft(job.draftId) : null;
-            job = await setJob({
-              status: 'error',
-              message: draft?.messages?.length
-                ? 'Сбор перестал отвечать. Контрольная точка сохранена — можно продолжить.'
+            const failed = await finishJobWithError(
+              job.jobId,
+              job.sourceTabId ?? job.tabId,
+              draft?.messages?.length
+                ? 'Сбор перестал отвечать. Контрольная точка сохранена.'
                 : 'Сбор перестал отвечать до создания контрольной точки.',
-              draftCount: draft?.messages?.length || 0,
-              finishedAt: Date.now()
-            });
+              draft?.id || job.draftId || '',
+              draft?.messages?.length || Number(job.draftCount || 0),
+              'error'
+            );
+            job = failed?.job || await getJob();
           }
         }
         const tab = await getActiveTab();
@@ -4146,6 +4158,14 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
-  if (alarm?.name !== UPDATE_ALARM) return;
-  checkForUpdate().catch(() => {});
+  if (alarm?.name === UPDATE_ALARM) {
+    checkForUpdate().catch(() => {});
+    return;
+  }
+  if (String(alarm?.name || '').startsWith(AUTO_RECOVERY_ALARM_PREFIX)) {
+    const failedJobId = String(alarm.name).slice(AUTO_RECOVERY_ALARM_PREFIX.length);
+    attemptAutomaticRecovery(failedJobId).catch(error =>
+      logTabListenerError('auto-recovery', error)
+    );
+  }
 });
