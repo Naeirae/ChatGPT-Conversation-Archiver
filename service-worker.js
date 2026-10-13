@@ -1788,21 +1788,15 @@ async function deleteDraftAndRecoveryTab(draftId = '') {
   await removeDraft(targetId);
   await removeDraftRecoveryTab(targetId).catch(() => {});
 
-  if (job?.draftId === targetId) {
-    if (
-      job.captureTarget === 'copy' &&
-      job.captureTabId != null &&
-      job.captureTabId !== job.sourceTabId
-    ) {
-      await chrome.tabs.remove(job.captureTabId).catch(() => {});
-    }
-
+  if (job?.draftId === targetId || job?.recoveryDraftId === targetId) {
+    // Deleting draft data must not close or discard the physical working tab.
+    // A failed tab is kept until the user closes it manually or a later pass
+    // succeeds and handleCaptureComplete() closes the working copy.
     await setJob({
-      draftId: '',
-      draftCount: 0,
-      recoveryDraftId: '',
-      recoveryAvailable: false,
-      captureTabId: null
+      draftId: job?.draftId === targetId ? '' : (job?.draftId || ''),
+      draftCount: job?.draftId === targetId ? 0 : Number(job?.draftCount || 0),
+      recoveryDraftId: job?.recoveryDraftId === targetId ? '' : (job?.recoveryDraftId || ''),
+      recoveryAvailable: Boolean(job?.captureTabId != null && job?.captureBoundary?.kind && job?.captureBoundary?.key)
     });
   }
 
