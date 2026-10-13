@@ -1109,7 +1109,7 @@ async function startCapture({
     const modeLabel = mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'compare'
       ? 'сверка с локальным архивом'
       : mode === 'sync'
-        ? 'восстановление по Google Doc'
+        ? 'восстановление по документу Google Docs'
         : mode === 'continue'
           ? 'продолжение'
           : mode === 'images'
@@ -1779,7 +1779,7 @@ function partialArchiveIdForSource(sourceUrl = '') {
 
 async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
   if (!draft?.id || !draft?.messages?.length) {
-    throw new Error('Незавершённый проход не найден.');
+    throw new Error('Незавершённый сбор не найден.');
   }
 
   const id = draft.partialArchiveId || partialArchiveIdForSource(draft.sourceUrl);
@@ -1856,7 +1856,7 @@ async function saveUnfinishedAsPartial(passId = '') {
 async function exportUnfinishedPassToNewDoc(passId = '') {
   const draft = await getDraft(passId);
   if (!draft?.id || !draft?.messages?.length) {
-    throw new Error('Незавершённый проход не найден.');
+    throw new Error('Незавершённый сбор не найден.');
   }
 
   if (!['walk', 'finalizing'].includes(draft.capturePhase || '')) {
@@ -1874,7 +1874,7 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
   if (!snapshot?.messages?.length ||
       snapshot.messages.length < draft.messages.length ||
       !snapshot.partial) {
-    throw new Error('Не удалось зафиксировать текущий checkpoint перед экспортом.');
+    throw new Error('Не удалось зафиксировать текущую контрольную точку перед экспортом.');
   }
 
   const result = await exportConversation({
@@ -2242,21 +2242,21 @@ async function handleCaptureComplete(message) {
   }
 
   let finalMessage = isDraftRecovery
-    ? ('Незавершённый проход восстановлен: +' + addedCount + ' сообщений; архив собран до исходной нижней метки.')
+    ? ('Незавершённый сбор восстановлен: +' + addedCount + ' сообщений; архив собран до исходной нижней метки.')
     : isContinuation
       ? ('Архив продолжен: +' + addedCount + ' сообщений.')
       : 'Переписка собрана.';
 
   if (shouldAutoAppend) {
-    if (docError) finalMessage += ' Google Doc не обновлен: ' + docError;
+    if (docError) finalMessage += ' Документ Google Docs не обновлён: ' + docError;
     else if (docResult?.addedCount) {
-      finalMessage += ' В Google Doc добавлено ' + docResult.addedCount + ' сообщений';
+      finalMessage += ' В документ Google Docs добавлено ' + docResult.addedCount + ' сообщений';
       if (docResult.imageInsertedCount || docResult.imageFailedCount) {
         finalMessage += ' и ' + Number(docResult.imageInsertedCount || 0) + ' изображений';
         if (docResult.imageFailedCount) finalMessage += ' (' + Number(docResult.imageFailedCount) + ' не вставлено)';
       }
       finalMessage += '.';
-    } else finalMessage += ' В Google Doc новых сообщений для вставки нет.';
+    } else finalMessage += ' В документе Google Docs новых сообщений для вставки нет.';
   }
 
   const next = await appendRunLog({
@@ -2922,13 +2922,13 @@ async function knownBaselineDecorations(docUrl) {
 
 async function readGoogleDocBaseline(docUrl, sourceTabId) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
-  if (!normalizedUrl) throw new Error('Нужна ссылка на Google Doc вида docs.google.com/document/d/...');
+  if (!normalizedUrl) throw new Error('Нужна ссылка на документ Google Docs вида docs.google.com/document/d/...');
 
   let tab = null;
   let attached = false;
   try {
     tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть Google Doc для сверки.');
+    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для сверки.');
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
@@ -2981,7 +2981,7 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
       ignoredStandaloneLines
     });
     if (baseline.meaningfulCount < 2) {
-      throw new Error('В Google Doc не удалось найти достаточно реплик для надежной сверки.');
+      throw new Error('В документе Google Docs не удалось найти достаточно реплик для надёжной сверки.');
     }
 
     return {
@@ -3285,7 +3285,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
   if (!archive) throw new Error('Нет локального архива.');
   const linked = await getLinkedDoc(archive.sourceUrl || '');
   const docUrl = normalizeGoogleDocUrl(linked?.url || '');
-  if (!docUrl) throw new Error('Для этого архива не найден связанный Google Doc.');
+  if (!docUrl) throw new Error('Для этого архива не найден связанный документ Google Docs.');
 
   const allItems = recoveredImageItems(archive);
   if (!allItems.length) {
@@ -3313,7 +3313,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
 
   try {
     tab = await chrome.tabs.create({ url: docUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть связанный Google Doc.');
+    if (!tab?.id) throw new Error('Не удалось открыть связанный документ Google Docs.');
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
@@ -3334,7 +3334,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
       const anchor = uniqueMessageAnchor(docText, message);
       if (!anchor) {
         for (const item of group) {
-          failures.push({ src: item.image.src || '', error: 'Не найден уникальный текстовый якорь сообщения в Google Doc.' });
+          failures.push({ src: item.image.src || '', error: 'Не найден уникальный текстовый якорь сообщения в документе Google Docs.' });
         }
         continue;
       }
@@ -3385,7 +3385,7 @@ async function appendMessagesToGoogleDocUrl(
   { linkTarget = true } = {}
 ) {
   const normalizedUrl = normalizeGoogleDocUrl(docUrl);
-  if (!normalizedUrl) throw new Error('Некорректная ссылка на Google Doc.');
+  if (!normalizedUrl) throw new Error('Некорректная ссылка на документ Google Docs.');
 
   if (!messages?.length) {
     const linkedDoc = await recordDocExport(conversation, normalizedUrl, { link: linkTarget });
@@ -3396,7 +3396,7 @@ async function appendMessagesToGoogleDocUrl(
   let tab = null;
   try {
     tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть Google Doc для продолжения.');
+    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для продолжения.');
     await waitForTabComplete(tab.id);
     await sleep(1800);
 
@@ -3432,11 +3432,11 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
   const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
-  if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый Google Doc.');
+  if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый документ Google Docs.');
   if (!activeDoc) {
     const autoParts = planGoogleDocParts(conversation.messages || [], []);
     if (autoParts.length > 1) {
-      if (conversation.isFragment) throw new Error('Этот фрагмент превышает лимит одного Google Doc. Скопируйте его или разбейте на части.');
+      if (conversation.isFragment) throw new Error('Этот фрагмент превышает лимит одного документа Google Docs. Скопируйте его или разбейте на части.');
       return exportTabbedConversation('', conversation.id);
     }
   }
@@ -3450,10 +3450,10 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
 
   if (activeDoc) {
     tab = await getActiveTab();
-    if (!tab?.id || !isGoogleDocUrl(tab.url)) throw new Error('Откройте нужный Google Doc в активной вкладке.');
+    if (!tab?.id || !isGoogleDocUrl(tab.url)) throw new Error('Откройте нужный документ Google Docs в активной вкладке.');
 
     const docKey = googleDocKey(tab.url);
-    if (!docKey) throw new Error('Не удалось определить ID открытого Google Doc.');
+    if (!docKey) throw new Error('Не удалось определить идентификатор открытого документа Google Docs.');
 
     const previous = await getDocExport(docKey);
     const currentConversationKey = conversationKey(conversation.sourceUrl);
@@ -3663,7 +3663,7 @@ async function inspectSingleNewGoogleDoc(tabId) {
 
   if (initialTabCount !== 1) {
     throw new Error(
-      'Новый Google Doc должен начинаться с одной первой вкладки, но найдено: ' +
+      'Новый документ Google Docs должен начинаться с одной первой вкладки, но найдено: ' +
       initialTabCount + '. Экспорт не начат.'
     );
   }
@@ -3723,7 +3723,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
     }
 
     const browserTab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
-    if (!browserTab?.id) throw new Error('Не удалось открыть новый Google Doc.');
+    if (!browserTab?.id) throw new Error('Не удалось открыть новый документ Google Docs.');
     await waitForTabComplete(browserTab.id);
     await sleep(2200);
 
@@ -4241,7 +4241,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
       job.sourceTabId ?? job.tabId,
       job.captureTarget === 'current'
         ? 'Текущая вкладка с перепиской была закрыта.'
-        : 'Рабочая копия с перепиской была закрыта. Незавершённый проход можно продолжить.',
+        : 'Рабочая копия с перепиской была закрыта. Незавершённый сбор можно продолжить.',
       job.draftId || '',
       Number(job.draftCount || 0)
     );
