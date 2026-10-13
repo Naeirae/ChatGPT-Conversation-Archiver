@@ -47,6 +47,7 @@ const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 const DRAFT_RECOVERY_TAB_PREFIX = 'draftRecoveryTab:';
 const AUTO_RECOVERY_MAX_ATTEMPTS = 2;
 const AUTO_RECOVERY_TRIGGER_DELAY_MS = 900;
+const AUTO_RECOVERY_ALARM_PREFIX = 'archiver-auto-recovery:';
 
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
@@ -531,14 +532,9 @@ async function resetCaptureState() {
   if (job && ['starting', 'running', 'paused'].includes(job.status)) {
     throw new Error('Сначала остановите текущий сбор.');
   }
-  // Resetting a failed run must not erase the preserved draft.
-  if (
-    job?.captureTarget === 'copy' &&
-    job?.captureTabId != null &&
-    job.captureTabId !== job.sourceTabId
-  ) {
-    await chrome.tabs.remove(job.captureTabId).catch(() => {});
-  }
+  // Resetting UI/job metadata must never close a failed working tab.
+  // The tab is a valuable physical recovery checkpoint and is closed only
+  // after a verified successful capture.
   if (job?.tabId != null) {
     await chrome.action.setBadgeText({ tabId: job.tabId, text: '' }).catch(() => {});
     await chrome.action.setTitle({ tabId: job.tabId, title: 'Архиватор ChatGPT' }).catch(() => {});
@@ -1067,9 +1063,9 @@ async function startCapture({
       linkedDoc: await getLinkedDoc(inspection.href)
     };
   } catch (error) {
-    if (captureTarget === 'copy' && captureTab?.id && captureTab.id !== sourceTab.id) {
-      await chrome.tabs.remove(captureTab.id).catch(() => {});
-    }
+    // Never close a working copy on failure. Even a partially initialized tab
+    // may preserve a useful physical position for diagnosis/recovery.
+    const failedCaptureTabId = captureTab?.id || null;
 
     if (mode === 'sync' && existingArchive?.id) {
       await removeArchive(existingArchive.id).catch(() => {});
@@ -1085,7 +1081,7 @@ async function startCapture({
       jobId,
       tabId: sourceTab.id,
       sourceTabId: sourceTab.id,
-      captureTabId: null,
+      captureTabId: failedCaptureTabId,
       sourceUrl: inspection.href,
       status: 'error',
       phase: 'starting',
@@ -1185,8 +1181,6 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   let preservedCaptureTabId = null;
   if (
     ['error', 'cancelled'].includes(status) &&
-    (draftId || navigationOnlyRecoverable) &&
-    ['full', 'fragment', 'resume-draft', 'retry-walk'].includes(job.captureMode) &&
     job.captureTabId != null
   ) {
     try {
@@ -1198,14 +1192,8 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     } catch (_) {}
   }
 
-  if (
-    job.captureTarget === 'copy' &&
-    job.captureTabId != null &&
-    job.captureTabId !== job.sourceTabId &&
-    preservedCaptureTabId == null
-  ) {
-    await chrome.tabs.remove(job.captureTabId).catch(() => {});
-  }
+  // Never close an unsuccessful working tab. The only automatic tab close is
+  // in handleCaptureComplete(), after a verified successful pass.
   await cleanupTemporaryBaseline(job);
 
   const recoveryAvailable = Boolean(
@@ -1295,7 +1283,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
 
 async function focusRecoverableCaptureTab() {
   const job = await getJob();
-  if (!job?.captureTabId || !job?.draftId) {
+  if (!job?.captureTabId) {
     throw new Error('Нет сохранённой рабочей вкладки незавершённого прохода.');
   }
 
