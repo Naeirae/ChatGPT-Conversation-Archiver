@@ -3939,10 +3939,55 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         const drafts = await listDrafts();
         const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
-        const activeUnfinished = unfinishedPasses.find(item =>
+
+        let activeUnfinished = unfinishedPasses.find(item =>
           (item.passIds || []).includes(job?.draftId || '') ||
           (item.passIds || []).includes(job?.recoveryDraftId || '')
         ) || null;
+
+        // A huge chat may fail while still travelling to the beginning, before
+        // the first chronological draft exists. Surface that as the same single
+        // unfinished capture card so the preserved tab remains recoverable.
+        if (!activeUnfinished &&
+            job &&
+            ['error', 'cancelled'].includes(job.status) &&
+            job.captureTabId != null &&
+            job.captureBoundary?.kind &&
+            job.captureBoundary?.key &&
+            job.sourceUrl) {
+          const linked = await getLinkedDoc(job.sourceUrl);
+          const pseudo = {
+            id: 'job:' + String(job.jobId || ''),
+            logicalGroupId: unfinishedGroupKey({
+              id: job.jobId || '',
+              sourceUrl: job.sourceUrl || ''
+            }),
+            resumePassId: '',
+            exportPassId: '',
+            copyPassId: '',
+            viewPassId: '',
+            passIds: [],
+            title: job.title || 'Незавершённый сбор',
+            sourceUrl: job.sourceUrl || '',
+            capturedAt: new Date(Number(job.updatedAt || job.finishedAt || Date.now())).toISOString(),
+            messageCount: Number(job.count || 0),
+            imageCount: 0,
+            captureMode: job.captureMode || 'full',
+            capturePhase: job.phase || 'top',
+            hasBoundary: true,
+            canExportCurrent: false,
+            exportMessageCount: 0,
+            recoveryTabAvailable: true,
+            recoveryTabId: job.captureTabId,
+            recoveryCaptureTarget: job.captureTarget || '',
+            resumeFromJob: true,
+            linkedDocUrl: linked?.url || '',
+            technicalPassCount: 0
+          };
+          unfinishedPasses.unshift(pseudo);
+          activeUnfinished = pseudo;
+        }
+
         return {
           ok: true,
           job,
