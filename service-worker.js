@@ -2466,14 +2466,14 @@ async function cdp(tabId, method, params = {}) {
 
 async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   let attached = false;
-  const count = Math.max(1, Math.min(16, Number(bursts) || 7));
+  const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
 
   try {
     const targets = await chrome.debugger.getTargets();
     const target = targets.find(item => item.tabId === tabId);
     if (target?.attached) {
-      throw new Error('Фоновая вкладка уже занята Chrome debugger.');
+      throw new Error('Фоновая вкладка уже занята средством отладки Chrome.');
     }
 
     await chrome.debugger.attach({ tabId }, '1.3');
@@ -2504,7 +2504,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
         deltaX: 0,
         deltaY: sign * 860
       });
-      await sleep(90);
+      await sleep(70);
     }
 
     return { ok: true, direction, bursts: count };
@@ -2518,7 +2518,7 @@ async function withChatDebugger(tabId, fn) {
   try {
     const targets = await chrome.debugger.getTargets();
     const target = targets.find(item => item.tabId === tabId);
-    if (target?.attached) throw new Error('Вкладка уже занята Chrome debugger.');
+    if (target?.attached) throw new Error('Вкладка уже занята средством отладки Chrome.');
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
     return await fn();
