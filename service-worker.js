@@ -45,6 +45,8 @@ const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/Naeirae/ChatGPT-C
 const UPDATE_ALARM = 'archiver-update-check';
 const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 const DRAFT_RECOVERY_TAB_PREFIX = 'draftRecoveryTab:';
+const AUTO_RECOVERY_MAX_ATTEMPTS = 2;
+const AUTO_RECOVERY_TRIGGER_DELAY_MS = 900;
 
 const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false, captureTarget: 'copy' };
 async function getSettings() {
