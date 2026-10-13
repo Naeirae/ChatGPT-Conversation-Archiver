@@ -1154,13 +1154,13 @@ body.tour-open .header-popover {
 }
 .unfinished-more > summary::-webkit-details-marker { display:none; }
 .unfinished-more > summary::after { content:' · дополнительные действия'; font-weight:400; }
-.unfinished-more-actions {
+.unfinished-secondary-actions {
   display:flex;
   flex-wrap:wrap;
   gap:5px;
   padding-top:6px;
 }
-.unfinished-more-actions button {
+.unfinished-secondary-actions button {
   width:auto;
   margin:0;
   padding:6px 8px;
