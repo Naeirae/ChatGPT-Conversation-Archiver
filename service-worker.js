@@ -4124,12 +4124,15 @@ async function retireCaptureAfterVersionChange() {
   if (stored[CAPTURE_RUNTIME_VERSION_KEY] === version) return;
   const job = await getJob();
   if (job && ['starting', 'running', 'paused'].includes(job.status)) {
-    await setJob({
-      status: 'error',
-      recoveryAvailable: false,
-      finishedAt: Date.now(),
-      message: 'Расширение обновлено: прежний сбор остановлен. Сохранённый черновик доступен для ручного продолжения.'
-    });
+    const draft = job.draftId ? await getDraft(job.draftId).catch(() => null) : null;
+    await finishJobWithError(
+      job.jobId,
+      job.sourceTabId ?? job.tabId,
+      'Расширение обновлено во время сбора.',
+      draft?.id || job.draftId || '',
+      draft?.messages?.length || Number(job.draftCount || 0),
+      'error'
+    );
   }
   await chrome.storage.local.set({ [CAPTURE_RUNTIME_VERSION_KEY]: version });
 }
