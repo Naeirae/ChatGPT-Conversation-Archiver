@@ -550,7 +550,7 @@ function renderSavedArchives(items = []) {
       open.href = item.docUrl || item.destination.url;
       open.target = '_blank';
       open.rel = 'noopener noreferrer';
-      open.textContent = 'Документ документ Google Docs ↗';
+      open.textContent = 'Документ Google Docs ↗';
       actions.appendChild(open);
     } else {
       const exportButton = document.createElement('button');
@@ -1076,7 +1076,7 @@ function render(data) {
   $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
   $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
   $('archiveDocStatus').textContent = linkedUrl
-    ? 'Документ документ Google Docs связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
+    ? 'Документ Google Docs связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
     : 'Архив пока хранится только локально.';
   $('archiveDocLink').classList.toggle('hidden', !linkedUrl);
   $('archiveDocLink').href = linkedUrl || '#';
