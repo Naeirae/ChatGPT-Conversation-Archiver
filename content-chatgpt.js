@@ -1915,8 +1915,8 @@
       // chronologically from top to the already fixed lower boundary.
       await physicalScroll(
         'up',
-        16,
-        { settleTimeout: 5000, quietWindow: 550 }
+        24,
+        { settleTimeout: 4500, quietWindow: 450 }
       );
 
       let nextSignature = visibleTurnSignature();
@@ -2406,8 +2406,14 @@
     const now = Date.now();
     const last = state.recoveryCheckpoint || { at: 0, count: 0 };
     const checkpointSize = order.length;
-    const minInterval = checkpointSize >= 2000 ? 60000 : checkpointSize >= 500 ? 45000 : 30000;
-    const minDelta = checkpointSize >= 2000 ? 140 : checkpointSize >= 500 ? 70 : 35;
+    const minInterval =
+      checkpointSize >= 4000 ? 90000 :
+      checkpointSize >= 2000 ? 60000 :
+      checkpointSize >= 500 ? 45000 : 30000;
+    const minDelta =
+      checkpointSize >= 4000 ? 240 :
+      checkpointSize >= 2000 ? 140 :
+      checkpointSize >= 500 ? 70 : 35;
     if (!force && (now - last.at < minInterval || order.length - last.count < minDelta)) return;
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
@@ -2429,7 +2435,7 @@
     const draft = {
       id: draftId,
       kind: 'capture-draft',
-      title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
+      title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'Переписка ChatGPT',
       sourceUrl: location.href,
       capturedAt: new Date().toISOString(),
       captureMode: current.captureMode || 'full',
