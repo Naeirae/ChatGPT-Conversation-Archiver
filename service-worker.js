@@ -221,8 +221,8 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       recoveryTabAvailable: Boolean(resumeCandidate?.recoveryTabAvailable),
       recoveryTabId: resumeCandidate?.recoveryTabId ?? null,
       recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
-      capturePhase: contentCandidate?.capturePhase || primary.capturePhase || '',
-      capturedAt: contentCandidate?.capturedAt || primary.capturedAt || '',
+      capturePhase: primary.capturePhase || contentCandidate?.capturePhase || '',
+      capturedAt: primary.capturedAt || contentCandidate?.capturedAt || '',
       hasBoundary: chain.some(item => item.hasBoundary),
       linkedDocUrl: linkedDoc?.url || ''
     });
@@ -826,7 +826,7 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
   }
 
   const result = await chrome.tabs.sendMessage(tabId, payload);
-  if (!result?.ok) throw new Error(result?.error || 'Content script не запустил сбор.');
+  if (!result?.ok) throw new Error(result?.error || 'Скрипт сбора во вкладке не запустился.');
   if (result.jobId && result.jobId !== jobId) {
     throw new Error('Предыдущий сбор в этой вкладке ещё завершает работу; новая попытка пока не запущена.');
   }
