@@ -3201,20 +3201,24 @@
         if (draftMessages.length) {
           draftId = 'draft-' + jobId;
           draftCount = draftMessages.length;
+          const recoveryCapturePhase = chronologicalStarted
+            ? 'walk'
+            : (existingRecoveryDraft?.capturePhase || current.phase || 'top');
           const draft = {
             id: draftId,
             kind: 'capture-draft',
             title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
             sourceUrl: location.href,
             capturedAt: new Date().toISOString(),
-            captureMode: mode,
-            capturePhase: chronologicalStarted ? 'walk' : 'top',
+            captureMode: existingRecoveryDraft?.captureMode || mode,
+            capturePhase: recoveryCapturePhase,
             captureBoundary: current.captureBoundary || fixedCaptureBoundary || null,
-            navigationHighWater: Number(current.navigationHighWater || 0),
+            navigationHighWater: Number(current.navigationHighWater || existingRecoveryDraft?.navigationHighWater || 0),
             chronologicalCount: draftMessages.length,
             lastScrollDirection:
               state.lastScrollDirection ||
-              (chronologicalStarted ? 'down' : 'up'),
+              existingRecoveryDraft?.lastScrollDirection ||
+              (recoveryCapturePhase === 'walk' ? 'down' : 'up'),
             resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
