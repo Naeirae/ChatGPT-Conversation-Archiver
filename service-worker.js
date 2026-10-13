@@ -190,8 +190,18 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
       String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
     );
-    const exportCandidate = byCount.find(item => item.canExportPrefix) || null;
+
+    // Export is independent from the current recovery attempt: if an older
+    // technical attempt already contains a valid top-to-bottom prefix, keep
+    // offering it even when the newest attempt is travelling back to the top.
+    const exportCandidate = [...members]
+      .filter(item => item.canExportPrefix)
+      .sort((a, b) =>
+        Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
+        String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+      )[0] || null;
     const contentCandidate = exportCandidate || byCount[0] || primary;
+    const linkedDoc = await getLinkedDoc(primary.sourceUrl || contentCandidate.sourceUrl || '');
 
     result.push({
       ...primary,
@@ -213,7 +223,8 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
       capturePhase: contentCandidate?.capturePhase || primary.capturePhase || '',
       capturedAt: contentCandidate?.capturedAt || primary.capturedAt || '',
-      hasBoundary: chain.some(item => item.hasBoundary)
+      hasBoundary: chain.some(item => item.hasBoundary),
+      linkedDocUrl: linkedDoc?.url || ''
     });
   }
 
@@ -345,6 +356,11 @@ async function listLinkedArchives() {
   for (const archive of archives) {
     if (seen.has(archive.id)) continue;
     seen.add(archive.id);
+
+    // Partial snapshots are implementation details of unfinished captures.
+    // They are surfaced through the single unfinished-capture card instead of
+    // appearing as a second "saved chat" for the same conversation.
+    if (archive.partial) continue;
 
     const key = conversationKey(archive.sourceUrl || '');
     if (!archive.isFragment && key && repairedIndex[key] !== archive.id) {
