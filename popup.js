@@ -191,6 +191,20 @@ function renderUnfinishedPasses(items = []) {
     if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
     meta.textContent = parts.join(' · ');
 
+    let documentStatus = null;
+    if (item.linkedDocUrl) {
+      documentStatus = document.createElement('div');
+      documentStatus.className = 'unfinished-document-status';
+      const text = document.createElement('span');
+      text.textContent = 'Текущая часть уже связана с Google Docs.';
+      const link = document.createElement('a');
+      link.href = item.linkedDocUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = 'Открыть документ ↗';
+      documentStatus.append(text, link);
+    }
+
     const primaryActions = document.createElement('div');
     primaryActions.className = 'unfinished-primary-actions';
 
@@ -337,7 +351,9 @@ function renderUnfinishedPasses(items = []) {
     secondary.appendChild(remove);
 
     more.appendChild(secondary);
-    row.append(head, meta, primaryActions, more);
+    row.append(head, meta);
+    if (documentStatus) row.appendChild(documentStatus);
+    row.append(primaryActions, more);
     list.appendChild(row);
   }
 }
@@ -458,7 +474,7 @@ function renderSavedArchives(items = []) {
     resume.onclick = async () => {
       resume.disabled = true;
       setStatus(item.partial
-        ? 'Открываю чат и восстанавливаю контрольную точку частичного архива…'
+        ? 'Открываю чат и восстанавливаю сохранённое место продолжения…'
         : 'Открываю чат и ищу место продолжения…');
       try {
         const result = item.partial && item.partialSourceDraftId
