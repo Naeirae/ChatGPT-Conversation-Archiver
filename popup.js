@@ -222,17 +222,21 @@ function renderUnfinishedPasses(items = []) {
       );
       try {
         const passId = item.resumePassId || item.id;
-        const result = item.recoveryTabAvailable
+        const result = item.resumeFromJob
           ? await chrome.runtime.sendMessage({
-              type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB',
-              passId
+              type: 'ARCHIVER_RESUME_FAILED_CAPTURE'
             })
-          : await chrome.runtime.sendMessage({
-              type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
-              passId,
-              captureTarget: $('captureTarget').value,
-              resumeStrategy: 'fresh'
-            });
+          : item.recoveryTabAvailable
+            ? await chrome.runtime.sendMessage({
+                type: 'ARCHIVER_RESUME_UNFINISHED_IN_SAVED_TAB',
+                passId
+              })
+            : await chrome.runtime.sendMessage({
+                type: 'ARCHIVER_RESUME_UNFINISHED_PASS',
+                passId,
+                captureTarget: $('captureTarget').value,
+                resumeStrategy: 'fresh'
+              });
         if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сбор.');
         render({ ...state, job: result.job });
         startPolling();
@@ -301,44 +305,53 @@ function renderUnfinishedPasses(items = []) {
       secondary.appendChild(openCapture);
     }
 
-    const view = document.createElement('button');
-    view.textContent = 'Просмотреть сохранённую часть';
-    view.onclick = async () => {
-      const passId = item.viewPassId || item.id;
-      const url = chrome.runtime.getURL('unfinished.html?passId=' + encodeURIComponent(passId));
-      await chrome.tabs.create({ url });
-    };
-    secondary.appendChild(view);
+    if (item.viewPassId) {
+      const view = document.createElement('button');
+      view.textContent = 'Просмотреть сохранённую часть';
+      view.onclick = async () => {
+        const url = chrome.runtime.getURL(
+          'unfinished.html?passId=' + encodeURIComponent(item.viewPassId)
+        );
+        await chrome.tabs.create({ url });
+      };
+      secondary.appendChild(view);
+    }
 
-    const copy = document.createElement('button');
-    copy.textContent = 'Скопировать сохранённую часть';
-    copy.onclick = async () => {
-      const result = await chrome.runtime.sendMessage({
-        type: 'ARCHIVER_COPY_UNFINISHED_PASS',
-        passId: item.copyPassId || item.id
-      });
-      if (!result?.ok) {
-        setStatus(result?.error || 'Не удалось скопировать сохранённую часть.', true);
-        return;
-      }
-      setStatus('Скопировано сообщений: ' + Number(result.count || 0) + '.');
-    };
-    secondary.appendChild(copy);
+    if (item.copyPassId) {
+      const copy = document.createElement('button');
+      copy.textContent = 'Скопировать сохранённую часть';
+      copy.onclick = async () => {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_COPY_UNFINISHED_PASS',
+          passId: item.copyPassId
+        });
+        if (!result?.ok) {
+          setStatus(result?.error || 'Не удалось скопировать сохранённую часть.', true);
+          return;
+        }
+        setStatus('Скопировано сообщений: ' + Number(result.count || 0) + '.');
+      };
+      secondary.appendChild(copy);
+    }
 
     const remove = document.createElement('button');
     remove.className = 'danger-outline';
-    remove.textContent = 'Удалить незавершённый сбор';
+    remove.textContent = item.resumeFromJob
+      ? 'Убрать остановленный запуск из списка'
+      : 'Удалить незавершённый сбор';
     remove.onclick = async () => {
       if (!confirm('Удалить сохранённые данные этого незавершённого сбора? Рабочая вкладка останется открытой.')) return;
       remove.disabled = true;
       setStatus('Удаляю сохранённые данные незавершённого сбора…');
       try {
-        const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_DELETE_UNFINISHED_GROUP',
-          logicalGroupId: item.logicalGroupId || '',
-          passIds: item.passIds || [item.id]
-        });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить незавершённый сбор.');
+        const result = item.resumeFromJob
+          ? await chrome.runtime.sendMessage({ type: 'ARCHIVER_RESET_CAPTURE_STATE' })
+          : await chrome.runtime.sendMessage({
+              type: 'ARCHIVER_DELETE_UNFINISHED_GROUP',
+              logicalGroupId: item.logicalGroupId || '',
+              passIds: item.passIds || [item.id]
+            });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось убрать незавершённый сбор.');
         row.remove();
         count.textContent = String(list.children.length);
         setStatus('Сохранённые данные незавершённого сбора удалены. Рабочая вкладка не закрыта.');
