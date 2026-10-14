@@ -69,6 +69,7 @@ const {
   indexArchive,
   getLinkedDoc,
   setLinkedDoc,
+  clearLinkedDoc,
   getArchiveDestination,
   setArchiveDestination,
   getDocExport,
@@ -2982,9 +2983,38 @@ async function handleCaptureComplete(message) {
 
   if (message.mode === 'images') {
     const recovered = Number(message.imageRecoveredCount || archive.lastImageRecoveredCount || 0);
-    const finalMessage = recovered
+    let linkedPatch = null;
+    let linkedPatchError = '';
+
+    if (recovered > 0) {
+      const linked = await getLinkedDoc(archive.sourceUrl || '');
+      if (linked?.url) {
+        try {
+          linkedPatch = await patchRecoveredImagesToLinkedDoc(archive.id);
+        } catch (error) {
+          linkedPatchError = error?.message || String(error);
+        }
+      }
+    }
+
+    let finalMessage = recovered
       ? ('Добор изображений завершён: +' + recovered + '. Локальный архив обновлён; текст не пересобирался.')
       : 'Добор изображений завершён: новых изображений не найдено.';
+
+    if (linkedPatch) {
+      if (linkedPatch.noChanges) {
+        finalMessage += ' Для связанного документа новых изображений для вставки нет.';
+      } else {
+        finalMessage += ' В связанный документ Google Docs вставлено ' +
+          Number(linkedPatch.inserted || 0) + ' изображений';
+        if (linkedPatch.failed) {
+          finalMessage += ', ' + Number(linkedPatch.failed || 0) + ' не вставлено';
+        }
+        finalMessage += '.';
+      }
+    } else if (linkedPatchError) {
+      finalMessage += ' Изображения в связанный документ не вставлены: ' + linkedPatchError;
+    }
 
     const next = await appendRunLog({
       status: 'done',
@@ -2996,6 +3026,8 @@ async function handleCaptureComplete(message) {
       imageRecoveredCount: recovered,
       imageCount: archive.imageCount || 0,
       archiveId: archive.id,
+      docUrl: linkedPatch?.docUrl || '',
+      docExportError: linkedPatchError,
       finishedAt: Date.now(),
       captureTabId: null
     }, {
@@ -3213,6 +3245,183 @@ async function readClipboardText() {
   const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OFFSCREEN_READ', target: 'offscreen' });
   if (!result?.ok) throw new Error(result?.error || 'Не удалось прочитать текст из буфера обмена.');
   return String(result.text || '');
+}
+
+async function clearLinkedDocumentState(sourceUrl = '', docUrl = '') {
+  const sourceKey = conversationKey(sourceUrl || '');
+  const targetDocId = googleDocKey(docUrl || '');
+  if (!sourceKey) return { cleared: false };
+
+  const rows = await listLinkedArchives().catch(() => []);
+  const matchingArchiveIds = rows
+    .filter(item =>
+      conversationKey(item?.sourceUrl || '') === sourceKey &&
+      (!targetDocId || googleDocKey(item?.docUrl || item?.destination?.url || '') === targetDocId)
+    )
+    .map(item => item.id)
+    .filter(Boolean);
+
+  const result = await clearLinkedDoc(sourceUrl, docUrl);
+
+  for (const archiveId of matchingArchiveIds) {
+    await setArchiveDestination(archiveId, null).catch(() => {});
+  }
+
+  if (targetDocId) {
+    const stored = await chrome.storage.local.get(DOC_IMAGE_PATCHES_KEY);
+    const patches = { ...(stored[DOC_IMAGE_PATCHES_KEY] || {}) };
+    if (Object.prototype.hasOwnProperty.call(patches, targetDocId)) {
+      delete patches[targetDocId];
+      await chrome.storage.local.set({ [DOC_IMAGE_PATCHES_KEY]: patches });
+    }
+  }
+
+  return result;
+}
+
+async function waitForTabLoadComplete(tabId, timeout = 30000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) throw new Error('Вкладка была закрыта до завершения загрузки.');
+    if (tab.status === 'complete') return tab;
+    await sleep(250);
+  }
+  throw new Error('Страница не загрузилась за 30 секунд.');
+}
+
+async function inspectGoogleDocAvailability(tabId) {
+  const started = Date.now();
+  let last = null;
+
+  while (Date.now() - started < 9000) {
+    const execution = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => {
+        const bodyText = String(document.body?.innerText || '')
+          .replace(/\s+/g, ' ')
+          .slice(0, 12000);
+        const editor = Boolean(document.querySelector(
+          '.kix-appview-editor,.docs-editor-container,.kix-page,[role="textbox"]'
+        ));
+        return {
+          href: location.href,
+          title: document.title || '',
+          readyState: document.readyState || '',
+          bodyText,
+          editor
+        };
+      }
+    }).catch(() => []);
+    last = execution?.[0]?.result || null;
+
+    if (last?.editor) {
+      return { status: 'available', ...last };
+    }
+
+    const text = ((last?.title || '') + ' ' + (last?.bodyText || '')).toLowerCase();
+    const missing = [
+      'file you have requested does not exist',
+      'the file you have requested does not exist',
+      'document does not exist',
+      'this file has been deleted',
+      'this document has been deleted',
+      'файл, который вы запросили, не существует',
+      'запрошенный файл не существует',
+      'документ не существует',
+      'файл удален',
+      'файл удалён',
+      'документ удален',
+      'документ удалён'
+    ].some(pattern => text.includes(pattern));
+    if (missing) return { status: 'missing', ...last };
+
+    const forbidden = [
+      'you need access',
+      'request access',
+      'access denied',
+      'you do not have permission',
+      'вам нужен доступ',
+      'запросить доступ',
+      'нет доступа',
+      'у вас нет доступа'
+    ].some(pattern => text.includes(pattern));
+    if (forbidden) return { status: 'forbidden', ...last };
+
+    const login = /accounts\.google\.com/i.test(last?.href || '') ||
+      text.includes('sign in') ||
+      text.includes('войти');
+    if (login) return { status: 'login', ...last };
+
+    await sleep(500);
+  }
+
+  return { status: 'unknown', ...(last || {}) };
+}
+
+async function openExistingGoogleDocTab(
+  docUrl,
+  { sourceUrl = '', active = true, clearMissingLink = true } = {}
+) {
+  const normalized = normalizeGoogleDocUrl(docUrl);
+  if (!normalized) throw new Error('Некорректная ссылка на документ Google Docs.');
+
+  const tab = await chrome.tabs.create({ url: normalized, active });
+  if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs.');
+
+  try {
+    await waitForTabLoadComplete(tab.id, 30000);
+    await sleep(900);
+    const availability = await inspectGoogleDocAvailability(tab.id);
+
+    if (availability.status === 'available') return tab;
+
+    if (availability.status === 'missing') {
+      if (clearMissingLink && sourceUrl) {
+        await clearLinkedDocumentState(sourceUrl, normalized);
+      }
+      await chrome.tabs.remove(tab.id).catch(() => {});
+      throw new Error(
+        'Связанный документ Google Docs удалён или больше не существует. ' +
+        (clearMissingLink && sourceUrl
+          ? 'Архиватор снял устаревшую связь; можно создать новый документ.'
+          : 'Операция остановлена.')
+      );
+    }
+
+    if (availability.status === 'forbidden') {
+      throw new Error(
+        'Документ Google Docs существует, но текущему аккаунту не хватает доступа. Связь сохранена.'
+      );
+    }
+
+    if (availability.status === 'login') {
+      throw new Error('Google Docs просит войти в аккаунт. Связь сохранена.');
+    }
+
+    throw new Error(
+      'Страница открылась, но Архиватор не смог подтвердить редактор Google Docs. Связь не изменена.'
+    );
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function openLinkedGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
+  const archive = archiveId ? await getArchive(archiveId) : null;
+  const source = sourceUrl || archive?.sourceUrl || '';
+  if (!source) throw new Error('Не удалось определить исходный чат для связанного документа.');
+
+  const linked = await getLinkedDoc(source);
+  const docUrl = normalizeGoogleDocUrl(linked?.url || '');
+  if (!docUrl) throw new Error('Для этого чата нет связанного документа Google Docs.');
+
+  const tab = await openExistingGoogleDocTab(docUrl, {
+    sourceUrl: source,
+    active: true,
+    clearMissingLink: true
+  });
+  return { ok: true, docUrl, tabId: tab.id, linkedDoc: linked };
 }
 
 async function waitForTabComplete(tabId, timeout = 30000) {
@@ -3720,10 +3929,12 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
   let tab = null;
   let attached = false;
   try {
-    tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для сверки.');
-    await waitForTabComplete(tab.id);
-    await sleep(1800);
+    tab = await openExistingGoogleDocTab(normalizedUrl, {
+      sourceUrl: '',
+      active: true,
+      clearMissingLink: false
+    });
+    await sleep(900);
 
     await chrome.debugger.attach({ tabId: tab.id }, '1.3');
     attached = true;
@@ -4105,10 +4316,12 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
   const failures = [];
 
   try {
-    tab = await chrome.tabs.create({ url: docUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть связанный документ Google Docs.');
-    await waitForTabComplete(tab.id);
-    await sleep(1800);
+    tab = await openExistingGoogleDocTab(docUrl, {
+      sourceUrl: archive.sourceUrl || '',
+      active: true,
+      clearMissingLink: true
+    });
+    await sleep(900);
 
     await chrome.debugger.attach({ tabId: tab.id }, '1.3');
     attached = true;
@@ -4188,10 +4401,12 @@ async function appendMessagesToGoogleDocUrl(
   const settings = await getSettings();
   let tab = null;
   try {
-    tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для продолжения.');
-    await waitForTabComplete(tab.id);
-    await sleep(1800);
+    tab = await openExistingGoogleDocTab(normalizedUrl, {
+      sourceUrl: conversation.sourceUrl || '',
+      active: true,
+      clearMissingLink: linkTarget
+    });
+    await sleep(900);
 
     const pasted = await pasteArchiveIntoGoogleDoc(
       tab.id,
@@ -4219,6 +4434,78 @@ async function appendMessagesToGoogleDocUrl(
   } finally {
     if (sourceTabId != null) await chrome.tabs.update(sourceTabId, { active: true }).catch(() => {});
   }
+}
+
+async function exportConversationToLinkedDoc(archiveId = '') {
+  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
+  if (!conversation) throw new Error('Сначала соберите переписку.');
+  if (conversation.isFragment) {
+    throw new Error('Для фрагмента нет канонического связанного документа.');
+  }
+
+  const linked = await getLinkedDoc(conversation.sourceUrl || '');
+  const docUrl = normalizeGoogleDocUrl(linked?.url || '');
+  if (!docUrl) throw new Error('Для этого чата нет связанного документа Google Docs.');
+
+  const docId = googleDocKey(docUrl);
+  const previous = await getDocExport(docId);
+  const messages = conversation.messages || [];
+  const currentConversationKey = conversationKey(conversation.sourceUrl);
+  let anchorIndex = -1;
+
+  if (previous?.conversationKey === currentConversationKey) {
+    if (previous.lastMessageId) {
+      anchorIndex = messages.findIndex(item => item.id === previous.lastMessageId);
+    }
+    if (anchorIndex < 0 &&
+        Array.isArray(previous.tailSignatures) &&
+        previous.tailSignatures.length >= 2) {
+      anchorIndex = findExportTailAnchor(messages, previous.tailSignatures);
+    }
+  }
+
+  if (anchorIndex < 0) {
+    throw new Error(
+      'Связанный документ найден, но точку продолжения подтвердить не удалось. ' +
+      'Полный архив повторно не вставлен.'
+    );
+  }
+
+  const delta = messages.slice(anchorIndex + 1);
+  if (delta.length) {
+    return appendMessagesToGoogleDocUrl(
+      conversation,
+      delta,
+      docUrl,
+      null,
+      { linkTarget: true }
+    );
+  }
+
+  const pendingImages = recoveredImageItems(conversation);
+  if (pendingImages.length) {
+    const patched = await patchRecoveredImagesToLinkedDoc(conversation.id);
+    return {
+      docUrl,
+      addedCount: 0,
+      noChanges: Boolean(patched.noChanges),
+      linkedDoc: await getLinkedDoc(conversation.sourceUrl || ''),
+      imageInsertedCount: Number(patched.inserted || 0),
+      imageFailedCount: Number(patched.failed || 0),
+      failedImages: patched.failures || []
+    };
+  }
+
+  const opened = await openLinkedGoogleDoc({ archiveId: conversation.id });
+  return {
+    docUrl: opened.docUrl,
+    addedCount: 0,
+    noChanges: true,
+    linkedDoc: opened.linkedDoc,
+    imageInsertedCount: 0,
+    imageFailedCount: 0,
+    failedImages: []
+  };
 }
 
 async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
@@ -4726,8 +5013,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           currentArchive = await getArchiveForUrl(tab.url);
           linkedDoc = await getLinkedDoc(tab.url);
         }
-        const archive = currentArchive || await getLastArchive();
-        if (!linkedDoc && archive?.sourceUrl) {
+        const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
+        const archive = activeIsConversation
+          ? currentArchive
+          : (currentArchive || await getLastArchive());
+        if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
         const drafts = await listDrafts();
@@ -5042,6 +5332,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           activeDoc: true,
           archiveId: message.archiveId || ''
         })) };
+      case 'ARCHIVER_EXPORT_LINKED_DOC':
+        return { ok: true, ...(await exportConversationToLinkedDoc(message.archiveId || '')) };
+      case 'ARCHIVER_OPEN_LINKED_DOC':
+        return await openLinkedGoogleDoc({
+          archiveId: message.archiveId || '',
+          sourceUrl: message.sourceUrl || ''
+        });
       case 'ARCHIVER_PATCH_RECOVERED_IMAGES':
         return { ok: true, ...(await patchRecoveredImagesToLinkedDoc(message.archiveId || '')) };
       default:
