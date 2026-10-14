@@ -44,6 +44,7 @@ const INTERFACE_FONT_STACKS = {
 };
 
 const PHASE_LABELS = {
+  boundary: 'Подготовка · Ищу нижнюю границу',
   top: 'Этап 1/3 · Загружаю начало',
   walk: 'Этап 2/3 · Собираю к зафиксированному концу',
   finalizing: 'Этап 3/3 · Сохраняю локальный архив',
@@ -1199,6 +1200,7 @@ function render(data) {
   const canConfirmTop = Boolean(
     ['starting', 'running'].includes(job?.status || '') &&
     job?.phase === 'top' &&
+    !job?.boundarySearchActive &&
     job?.captureTabId != null &&
     ['full', 'images', 'images-draft', 'reconcile', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
   );
