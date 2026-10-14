@@ -1304,13 +1304,6 @@ function render(data) {
   $('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue);
   $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
   $('deleteArchive').disabled = Boolean(running || !archive);
-  $('patchRecoveredImages').disabled = Boolean(
-    running ||
-    !archive ||
-    !state.linkedDoc?.url ||
-    !(archive.recoveredImagePendingPatchCount || archive.lastImageRecoveredCount)
-  );
-
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
   } else if (job?.status === 'error' && job?.captureMode === 'images-draft') {
@@ -1935,40 +1928,6 @@ $('archiveDocLink').onclick = async event => {
   }
 };
 
-$('patchRecoveredImages').onclick = async () => {
-  if (!state?.archive) {
-    setStatus('Нет локального архива для довставки картинок.', true);
-    return;
-  }
-  if (!state?.linkedDoc?.url) {
-    setStatus('У этого чата нет связанного документа Google Docs.', true);
-    return;
-  }
-
-  $('patchRecoveredImages').disabled = true;
-  setStatus('Ищу сообщения в связанном документе Google Docs и довставляю только добранные картинки…');
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_PATCH_RECOVERED_IMAGES',
-      archiveId: state.archive.id
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось довставить изображения.');
-    if (result.noChanges) {
-      setStatus('Новых добранных картинок для этого документа Google Docs нет.');
-    } else {
-      setStatus(
-        `Довставка завершена: ${result.inserted || 0} изображений вставлено` +
-        (result.failed ? `, ${result.failed} не вставлено.` : '.')
-      );
-    }
-    await getState();
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('patchRecoveredImages').disabled = false;
-  }
-};
-
 $('copyArchive').onclick = async () => {
   $('copyArchive').disabled = true;
   try {
@@ -2063,22 +2022,31 @@ $('activeDoc').onclick = async () => {
       linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
       { archiveId: state?.archive?.id || '' }
     );
-    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
-      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+    const imageInserted = Number(result.imageInsertedCount || 0);
+    const imageFailed = Number(result.imageFailedCount || 0);
+    const imageAttempted = Number(result.recoveredImagePatchCandidateCount || 0);
+    const failureReason = String(result.firstImageFailure || '').trim();
+    const imagePart = (imageInserted || imageFailed || imageAttempted)
+      ? ` Изображения: ${imageInserted} вставлено отдельно через debugger` +
+        (imageFailed ? `, ${imageFailed} не вставлено` : '') +
+        (failureReason ? `. Причина: ${failureReason}` : '') + '.'
       : '';
 
     if (result.noChanges) {
       setStatus(
         linked
-          ? 'Связанный документ Google Docs открыт. Новых сообщений и изображений для добавления нет.'
+          ? 'Связанный документ Google Docs открыт. Новых сообщений и невставленных сохранённых изображений нет.'
           : 'В этом документе Google Docs уже есть все сообщения из локального архива.'
       );
     } else if (result.addedCount) {
-      setStatus(`Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` + imagePart);
-    } else if (result.imageInsertedCount || result.imageFailedCount) {
       setStatus(
-        `Готово. Сообщения не дублировались. Изображения: ${result.imageInsertedCount || 0} вставлено, ` +
-        `${result.imageFailedCount || 0} ошибок.`
+        `Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` +
+        imagePart
+      );
+    } else if (imageInserted || imageFailed || imageAttempted) {
+      setStatus(
+        'Текст повторно не вставлялся.' + imagePart,
+        Boolean(imageFailed && !imageInserted)
       );
     } else {
       setStatus('Связанный документ Google Docs открыт и проверен.');

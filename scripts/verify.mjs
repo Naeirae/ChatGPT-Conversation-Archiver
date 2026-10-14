@@ -169,9 +169,9 @@ try {
       !serviceWorkerSource.includes('verifiedTabCount !== expectedCount')) {
     fail('service-worker.js: missing physical Google Docs tab-count verification');
   }
-  if (!serviceWorkerSource.includes('ARCHIVER_PATCH_RECOVERED_IMAGES') ||
+  if (!serviceWorkerSource.includes('patchRecoveredImagesToLinkedDoc') ||
       !serviceWorkerSource.includes('DOC_IMAGE_PATCHES_KEY')) {
-    fail('service-worker.js: missing recovered-image patch action');
+    fail('service-worker.js: missing recovered-image patch machinery');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_OPEN_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_EXPORT_LINKED_DOC'") ||
@@ -184,8 +184,18 @@ try {
     serviceWorkerSource.indexOf("if (message.mode === 'images')"),
     serviceWorkerSource.indexOf('let docResult = null;')
   );
-  if (!imageRecoveryBlock.includes('patchRecoveredImagesToLinkedDoc')) {
-    fail('image recovery: recovered images must auto-patch a linked Google Doc');
+  if (imageRecoveryBlock.includes('patchRecoveredImagesToLinkedDoc') ||
+      !imageRecoveryBlock.includes('документ Google Docs не изменялся')) {
+    fail('image recovery: binary recovery must stay local and must not auto-modify Google Docs');
+  }
+  const linkedExportBlock = serviceWorkerSource.slice(
+    serviceWorkerSource.indexOf('async function exportConversationToLinkedDoc'),
+    serviceWorkerSource.indexOf('async function exportConversation({')
+  );
+  if (!linkedExportBlock.includes('appendMessagesToGoogleDocUrl') ||
+      !linkedExportBlock.includes('patchRecoveredImagesToLinkedDoc') ||
+      !linkedExportBlock.includes('recoveredImagePatchCandidateCount')) {
+    fail('manual linked-doc export: one user action must append text delta and separately paste recovered images');
   }
   if (!serviceWorkerSource.includes("type: 'ARCHIVER_PING'") ||
       !serviceWorkerSource.includes('ping.version !== expectedVersion') ||
@@ -280,8 +290,9 @@ try {
     fail('popup.js: missing interface appearance layer');
   }
   if (!popupJs.includes('ARCHIVER_OPEN_LINKED_DOC') ||
-      !popupJs.includes('ARCHIVER_EXPORT_LINKED_DOC')) {
-    fail('popup.js: linked Google Doc must open/append through validated worker routes');
+      !popupJs.includes('ARCHIVER_EXPORT_LINKED_DOC') ||
+      popupJs.includes("$('patchRecoveredImages').onclick")) {
+    fail('popup.js: linked Doc export must be one manual action without a separate image-patch button');
   }
   if (!popupJs.includes("hasManualRange ? 'ARCHIVER_CAPTURE_MANUAL_FULL' : 'ARCHIVER_CAPTURE_CURRENT'") ||
       !popupJs.includes("'Собрать отмеченный диапазон'") ||
