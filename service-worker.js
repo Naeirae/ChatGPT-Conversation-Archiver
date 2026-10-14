@@ -1328,16 +1328,21 @@ async function startCapture({
   // whole rebuilt archive to an already-linked Google Doc. Automatic Docs
   // append is reserved for verified continuation/sync deltas.
   const currentLinkedUrl = normalizeGoogleDocUrl(currentLink?.url || '');
+  const recoveryPendingDocUrl = (mode === 'resume-draft' || mode === 'retry-walk')
+    ? normalizeGoogleDocUrl(existingDraft?.pendingDocUrl || '')
+    : '';
   const pendingDocUrl = (mode === 'continue' || mode === 'sync')
     ? (requestedDocUrl || currentLinkedUrl || '')
-    : '';
+    : recoveryPendingDocUrl;
   const pendingDocMode = mode === 'sync'
     ? 'sync'
     : mode === 'continue'
       ? (requestedDocUrl && requestedDocUrl !== currentLinkedUrl
           ? 'explicit'
           : (pendingDocUrl ? 'linked' : 'local-only'))
-      : '';
+      : ((mode === 'resume-draft' || mode === 'retry-walk') && pendingDocUrl
+          ? (existingDraft?.pendingDocMode || 'recovery')
+          : '');
 
   const jobId = makeJobId();
   const captureStartedAt = Date.now();
@@ -2374,6 +2379,7 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
     captureRange: draft.captureRange || null,
+    docUrl: draft.pendingDocUrl || '',
     captureTarget
   });
 }
@@ -2848,7 +2854,10 @@ async function handleCaptureComplete(message) {
 
   const isContinuation = message.mode === 'continue' || message.mode === 'sync';
   const isDraftRecovery = message.mode === 'resume-draft' || message.mode === 'retry-walk';
-  const shouldAutoAppend = Boolean(isContinuation && job.pendingDocUrl);
+  const shouldAutoAppend = Boolean(
+    (isContinuation || isDraftRecovery) &&
+    job.pendingDocUrl
+  );
 
   if (shouldAutoAppend) {
     try {
