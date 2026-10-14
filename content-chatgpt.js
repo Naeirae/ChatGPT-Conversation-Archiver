@@ -1870,6 +1870,13 @@
     throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
   }
 
+  function sharedConversationStartVisible() {
+    if (!/^\/share\/(?:e\/)?/i.test(location.pathname)) return false;
+    const intro = String(document.body?.innerText || '').slice(0, 2500);
+    return /Это копия общего чата ChatGPT\./i.test(intro) &&
+      /Пожаловаться на разговор/i.test(intro);
+  }
+
   async function reachTopWithoutCapture(
     existingCount = 0,
     {
@@ -1891,6 +1898,12 @@
         firstVisibleKey = '';
       }
 
+      if (sharedConversationStartVisible()) {
+        await progress('Начало опубликованной переписки подтверждено.', existingCount, {
+          phase: 'walk', force: true, sharedStartDetected: true
+        });
+        return;
+      }
       const turnsBefore = orderedTurns();
       const signature = visibleTurnSignature();
       const firstBefore = turnsBefore.length
@@ -1919,6 +1932,12 @@
         { settleTimeout: 4500, quietWindow: 450 }
       );
 
+      if (sharedConversationStartVisible()) {
+        await progress('Начало опубликованной переписки найдено.', existingCount, {
+          phase: 'walk', force: true, sharedStartDetected: true
+        });
+        return;
+      }
       let nextSignature = visibleTurnSignature();
       let turnsAfter = orderedTurns();
       let firstAfter = turnsAfter.length
@@ -1945,7 +1964,7 @@
           }
         );
 
-        await sleep(2200);
+        await sleep(1400);
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
         const afterWaitFirst = turnsAfter.length
@@ -1968,7 +1987,7 @@
       previousSignature = nextSignature;
       firstVisibleKey = firstAfter;
 
-      if (confirmedIdle >= 5) {
+      if (confirmedIdle >= 3 && !visibleRetryButton()) {
         await progress(
           fullCapture
             ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
