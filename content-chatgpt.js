@@ -31,7 +31,8 @@
     paused: false,
     pauseCheckpoint: null,
     resumeFailure: '',
-    lastScrollDirection: ''
+    lastScrollDirection: '',
+    manualTopConfirmed: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -1802,6 +1803,14 @@
 
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
+      if (state.manualTopConfirmed) {
+        await progress('Этап 1/3: начало подтверждено вручную. Начинаю сохранение сверху вниз…', map.size, {
+          phase: 'walk',
+          manualTopConfirmed: true,
+          force: true
+        });
+        return;
+      }
       if (sharedConversationStartVisible()) return;
 
       if (await recoverVisibleLoadError('top', map.size)) {
@@ -1834,6 +1843,14 @@
       // Push harder than a single viewport. ChatGPT may sit visually at the top
       // while an older virtualized chunk is still loading.
       await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
+      if (state.manualTopConfirmed) {
+        await progress('Этап 1/3: начало подтверждено вручную. Начинаю сохранение сверху вниз…', map.size, {
+          phase: 'walk',
+          manualTopConfirmed: true,
+          force: true
+        });
+        return;
+      }
       if (sharedConversationStartVisible()) return;
 
       await expandVisible();
@@ -1942,6 +1959,22 @@
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
 
+      if (state.manualTopConfirmed) {
+        await progress(
+          fullCapture
+            ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
+            : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
+          existingCount,
+          {
+            phase: 'walk',
+            manualTopConfirmed: true,
+            retryWalkOnly: !fullCapture,
+            force: true
+          }
+        );
+        return;
+      }
+
       if (await recoverVisibleLoadError('top', existingCount)) {
         confirmedIdle = 0;
         previousSignature = '';
@@ -1981,6 +2014,22 @@
         24,
         { settleTimeout: 4500, quietWindow: 450 }
       );
+
+      if (state.manualTopConfirmed) {
+        await progress(
+          fullCapture
+            ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
+            : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
+          existingCount,
+          {
+            phase: 'walk',
+            manualTopConfirmed: true,
+            retryWalkOnly: !fullCapture,
+            force: true
+          }
+        );
+        return;
+      }
 
       if (sharedConversationStartVisible()) {
         await progress('Начало опубликованной переписки найдено.', existingCount, {
@@ -2766,6 +2815,7 @@
     state.cancel = false;
     state.paused = false;
     state.lastScrollDirection = '';
+    state.manualTopConfirmed = false;
     lastProgressAt = 0;
 
     const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment'].includes(options.mode) ? options.mode : 'full';
@@ -3394,6 +3444,7 @@
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
       state.lastScrollDirection = '';
+      state.manualTopConfirmed = false;
     }
   }
 
@@ -3608,6 +3659,15 @@
         resumeNavigation: Boolean(message.resumeNavigation)
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
+      return false;
+    }
+    if (message && message.type === 'ARCHIVER_CONFIRM_TOP') {
+      if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
+        sendResponse({ ok: false, error: 'Активный сбор для ручной отметки начала не найден.' });
+        return false;
+      }
+      state.manualTopConfirmed = true;
+      sendResponse({ ok: true, confirmed: true });
       return false;
     }
     if (message && message.type === 'ARCHIVER_PAUSE_CAPTURE') {
