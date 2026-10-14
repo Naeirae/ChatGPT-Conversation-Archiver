@@ -1688,12 +1688,26 @@
       const source = findScanned(target);
       if (!source?.images?.length) continue;
 
-      const merged = mergeImageRecords(target.images || [], source.images || []);
-      if (!merged.added.length) continue;
+      const beforeImages = target.images || [];
+      const beforeReady = new Map(beforeImages.map(image => [
+        String(image?.src || ''),
+        Boolean(image?.binaryStatus === 'ready' && image?.dataUrl)
+      ]));
+      const merged = mergeImageRecords(beforeImages, source.images || []);
+      const enrichedExisting = merged.images.filter(image => {
+        const src = String(image?.src || '');
+        return src && beforeReady.has(src) &&
+          !beforeReady.get(src) &&
+          image?.binaryStatus === 'ready' &&
+          image?.dataUrl;
+      });
+      if (!merged.added.length && !enrichedExisting.length) continue;
 
       target.images = merged.images;
-      target.html = appendRecoveredImageMarkup(target.html, merged.images, merged.added);
-      for (const image of merged.added) {
+      if (merged.added.length) {
+        target.html = appendRecoveredImageMarkup(target.html, merged.images, merged.added);
+      }
+      for (const image of [...merged.added, ...enrichedExisting]) {
         recovered.push({
           messageId: target.id || '',
           messageSignature: messageTextSignature(target),
