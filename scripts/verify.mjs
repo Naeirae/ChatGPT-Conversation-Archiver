@@ -224,8 +224,14 @@ try {
   }
   if (!popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
+      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
+      !popupJs.includes('ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE') ||
       !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
     fail('popup.js: manual range/reconcile/image recovery controls are not wired');
+  }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
+    fail('service-worker.js: saved-archive reconcile/image routes are missing');
   }
   const iconSizes = new Map([
     ['icons/icon-16.png', 16],
