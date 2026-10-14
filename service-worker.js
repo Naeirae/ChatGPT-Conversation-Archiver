@@ -1626,7 +1626,7 @@ async function cancelCapture() {
 
   const preservedDraft = job.draftId ? await getDraft(job.draftId) : null;
   const hasTopBoundary = Boolean(
-    job.phase === 'top' &&
+    ['top', 'boundary'].includes(job.phase || '') &&
     job.captureBoundary?.kind &&
     job.captureBoundary?.key &&
     ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(job.captureMode)
@@ -1847,7 +1847,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   const boundary = job.captureBoundary || null;
   const navigationOnlyRecoverable = Boolean(
     ['error', 'cancelled'].includes(status) &&
-    job.phase === 'top' &&
+    ['top', 'boundary'].includes(job.phase || '') &&
     boundary?.kind &&
     boundary?.key &&
     ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(job.captureMode)
