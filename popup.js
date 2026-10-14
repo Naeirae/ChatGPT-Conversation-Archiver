@@ -351,6 +351,33 @@ function renderUnfinishedPasses(items = []) {
       secondary.appendChild(view);
     }
 
+    if (item.canExportCurrent && item.exportPassId) {
+      const reconcileSaved = document.createElement('button');
+      reconcileSaved.textContent = 'Сверить с локальным архивом и добрать';
+      reconcileSaved.onclick = async () => {
+        reconcileSaved.disabled = true;
+        setStatus('Сверяю сохранённую часть с локальным архивом…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RECONCILE_UNFINISHED_PASS',
+            passId: item.exportPassId
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось выполнить сверку.');
+          setStatus(
+            'Сверка завершена: восстановлено ' +
+            Number(result.addedCount || 0) + ' сообщений; в архиве ' +
+            Number(result.messageCount || 0) + '.'
+          );
+          await getState();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+        } finally {
+          reconcileSaved.disabled = false;
+        }
+      };
+      secondary.appendChild(reconcileSaved);
+    }
+
     if (item.copyPassId && Number(item.imageCount || 0) > Number(item.imageBinaryReady || 0)) {
       const hydrateImages = document.createElement('button');
       hydrateImages.textContent = 'Добрать изображения';
