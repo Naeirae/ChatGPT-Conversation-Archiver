@@ -1352,12 +1352,16 @@
     );
   }
 
-  function recordNavigationWindow(windows, settings) {
+  function recordNavigationWindow(windows, settings, stopBoundary = null) {
     if (!Array.isArray(windows)) return;
-    const refs = orderedTurns()
-      .map((turn, ordinal) => captureTurn(turn, ordinal, settings))
-      .filter(Boolean)
-      .map(navigationRef);
+    const refs = [];
+    const turns = orderedTurns();
+    for (let ordinal = 0; ordinal < turns.length; ordinal++) {
+      const turn = turns[ordinal];
+      const message = captureTurn(turn, ordinal, settings);
+      if (message) refs.push(navigationRef(message));
+      if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
+    }
     if (!refs.length) return;
 
     const previous = windows[windows.length - 1] || [];
@@ -1902,8 +1906,8 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-      recordNavigationWindow(navigationWindows, settings);
+      collect(map, order, settings, checkpointBoundary);
+      recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
@@ -1932,8 +1936,8 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-      recordNavigationWindow(navigationWindows, settings);
+      collect(map, order, settings, checkpointBoundary);
+      recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
@@ -1956,8 +1960,8 @@
         await sleep(450);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
-        collect(map, order, settings);
-        recordNavigationWindow(navigationWindows, settings);
+        collect(map, order, settings, checkpointBoundary);
+        recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
         const firstAfterWaitTurn = orderedTurns()[0] || null;
         const firstAfterWait = firstAfterWaitTurn
