@@ -2445,8 +2445,16 @@
     if (current.recoveryDraftId && current.phase !== 'top') {
       const prior = (await chrome.storage.local.get('draft:' + current.recoveryDraftId))['draft:' + current.recoveryDraftId];
       if (prior?.messages?.length) {
-        const known = new Set(prior.messages.map(item => item.id).filter(Boolean));
-        messages = prior.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
+        const used = new Set();
+        const combined = prior.messages.map(previous => {
+          const index = messages.findIndex((candidate, i) =>
+            !used.has(i) && sameNavigationRef(navigationRef(previous), navigationRef(candidate))
+          );
+          if (index < 0) return previous;
+          used.add(index);
+          return mergeRicherCapture(messages[index], previous);
+        });
+        messages = combined.concat(messages.filter((_, i) => !used.has(i)));
       }
     }
 
