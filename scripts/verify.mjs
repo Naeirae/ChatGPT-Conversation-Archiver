@@ -66,7 +66,20 @@ try {
   }
   if (!contentSource.includes("'compare'") ||
       !contentSource.includes("type: 'ARCHIVER_CAPTURE_COMPLETE'")) {
-    fail('content-chatgpt.js: missing non-mutating compare mode');
+    fail('content-chatgpt.js: missing legacy non-mutating compare mode');
+  }
+  if (!contentSource.includes("'reconcile'") ||
+      !contentSource.includes('reconcileVerifiedCaptureWithArchive') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_CURRENT'")) {
+    fail('capture runtime: missing verified reconcile-and-fill mode');
+  }
+  if (!contentSource.includes("'manual-full'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
+    fail('capture runtime: missing manual full-range route');
+  }
+  if (!contentSource.includes("message.type === 'ARCHIVER_HYDRATE_DRAFT_IMAGES'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES'")) {
+    fail('capture runtime: missing unfinished image hydration route');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||
@@ -140,6 +153,11 @@ try {
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');
   }
+  for (const id of ['captureManualFull', 'reconcileArchive', 'recoverImages']) {
+    if (!popupHtml.includes('id="' + id + '"')) {
+      fail('popup.html: missing capture-recovery control ' + id);
+    }
+  }
   const updaterHtml = await readFile('updater.html', 'utf8');
   const updaterJs = await readFile('updater.js', 'utf8');
   if (!updaterHtml.includes('id="runUpdate"') || !updaterHtml.includes('id="log"')) {
@@ -203,6 +221,11 @@ try {
   if (!popupJs.includes('function applyInterfaceAppearance') ||
       !popupJs.includes('function normalizeInterfaceAppearance')) {
     fail('popup.js: missing interface appearance layer');
+  }
+  if (!popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
+      !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
+      !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
+    fail('popup.js: manual range/reconcile/image recovery controls are not wired');
   }
   const iconSizes = new Map([
     ['icons/icon-16.png', 16],
