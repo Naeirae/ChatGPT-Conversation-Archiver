@@ -262,9 +262,13 @@ async function reconcileUnfinishedPrefix(draft) {
     }
     return enriched;
   });
+  const imageReadyCount = message =>
+    (message?.images || []).filter(storedImageReady).length;
   const changed = draft.messages.length !== messages.length ||
     messages.some((item, i) =>
-      (item.images?.length || 0) !== (draft.messages[i]?.images?.length || 0));
+      (item.images?.length || 0) !== (draft.messages[i]?.images?.length || 0) ||
+      imageReadyCount(item) !== imageReadyCount(draft.messages[i]) ||
+      Boolean(item.reasoningText) !== Boolean(draft.messages[i]?.reasoningText));
   if (!changed) return draft;
   const updated = {
     ...draft,
