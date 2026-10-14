@@ -523,6 +523,12 @@ function renderSavedArchives(items = []) {
     if (item.partial) parts.push('Частичный архив · можно продолжить');
     if (/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/share\//i.test(item.sourceUrl || '')) parts.push('Опубликованная переписка');
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
+    if (item.imageCount != null) {
+      parts.push(
+        Number(item.imageCount || 0) + ' изображений · подготовлено ' +
+        Number(item.imageBinaryReady || 0)
+      );
+    }
     if (item.capturedAt) {
       try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
     }
@@ -626,6 +632,56 @@ function renderSavedArchives(items = []) {
       }
     };
     actions.appendChild(copyButton);
+
+    if (!item.isFragment && !item.partial) {
+      const reconcileButton = document.createElement('button');
+      reconcileButton.className = 'archive-link-open';
+      reconcileButton.type = 'button';
+      reconcileButton.textContent = 'Сверить и добрать';
+      reconcileButton.disabled = busy;
+      reconcileButton.onclick = async () => {
+        reconcileButton.disabled = true;
+        setStatus('Открываю исходный чат и сверяю выбранный архив…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
+            archiveId: item.id,
+            captureTarget: $('captureTarget').value
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку выбранного архива.');
+          render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          reconcileButton.disabled = false;
+        }
+      };
+      actions.appendChild(reconcileButton);
+
+      const imagesButton = document.createElement('button');
+      imagesButton.className = 'archive-link-open';
+      imagesButton.type = 'button';
+      imagesButton.textContent = 'Сверить изображения';
+      imagesButton.disabled = busy;
+      imagesButton.onclick = async () => {
+        imagesButton.disabled = true;
+        setStatus('Открываю исходный чат и сверяю изображения выбранного архива…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',
+            archiveId: item.id,
+            captureTarget: $('captureTarget').value
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку изображений.');
+          render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          imagesButton.disabled = false;
+        }
+      };
+      actions.appendChild(imagesButton);
+    }
 
     if (item.docUrl || (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc')) {
       const open = document.createElement('a');
