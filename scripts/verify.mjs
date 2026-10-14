@@ -83,6 +83,21 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_DRAFT_IMAGES_COMPLETE'")) {
     fail('capture runtime: missing transactional unfinished image reconciliation');
   }
+  if (!contentSource.includes("phase: 'boundary'") ||
+      !contentSource.includes('state.boundarySearchActive') ||
+      !contentSource.includes('locateBoundaryForUpwardScan') ||
+      !serviceWorkerSource.includes("['top', 'boundary'].includes(job.phase || '')")) {
+    fail('capture runtime: lower-boundary search/manual-top/recovery contract is incomplete');
+  }
+  if (!serviceWorkerSource.includes('async function setJob(patch, { replace = false } = {})') ||
+      (serviceWorkerSource.match(/\{ replace: true \}/g) || []).length < 3) {
+    fail('service-worker.js: new capture jobs must replace stale active-job state');
+  }
+  if (!serviceWorkerSource.includes('unfinishedRangeKey(item) === range') ||
+      !serviceWorkerSource.includes('pendingDocSource') ||
+      !contentSource.includes("pendingDocUrl: current.pendingDocUrl || ''")) {
+    fail('unfinished recovery: range and pending-document metadata are not preserved');
+  }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||
       !contentSource.includes('interstitialReasoningFragment') ||
@@ -233,6 +248,11 @@ try {
       !popupJs.includes('ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE') ||
       !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
     fail('popup.js: manual range/reconcile/image recovery controls are not wired');
+  }
+  if (!popupJs.includes("passId: item.exportPassId") ||
+      !popupJs.includes("job?.captureMode === 'images-draft'") ||
+      !popupJs.includes("!job?.boundarySearchActive")) {
+    fail('popup.js: unfinished image/boundary-search UI contract regressed');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
