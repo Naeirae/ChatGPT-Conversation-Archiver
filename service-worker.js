@@ -1300,10 +1300,10 @@ async function startCapture({
   if ((mode === 'continue' || mode === 'compare' || mode === 'reconcile' || mode === 'images') && !existingArchive?.messages?.length) {
     throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по документу Google Docs.');
   }
-  if (mode === 'resume-draft' && !existingDraft?.messages?.length) {
+  if ((mode === 'resume-draft' || mode === 'images-draft') && !existingDraft?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
   }
-  if (mode === 'resume-draft' && (!fixedCaptureBoundary?.kind || !fixedCaptureBoundary?.key)) {
+  if ((mode === 'resume-draft' || mode === 'images-draft') && (!fixedCaptureBoundary?.kind || !fixedCaptureBoundary?.key)) {
     throw new Error('У незавершённого прохода нет сохранённой нижней метки. Без неё продолжить проход безопасно нельзя.');
   }
 
@@ -1341,11 +1341,11 @@ async function startCapture({
     captureMode: mode,
     captureTarget,
     baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
-    recoveryDraftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
-    draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
-    draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
-    resumeBaseCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
-    captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+    recoveryDraftId: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+    draftId: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+    draftCount: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+    resumeBaseCount: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+    captureBoundary: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
     captureRange,
     pendingDocUrl,
     pendingDocMode,
@@ -1386,9 +1386,11 @@ async function startCapture({
           ? 'продолжение'
           : mode === 'images'
             ? 'добор изображений'
-            : mode === 'resume-draft'
-              ? 'продолжение незавершённого прохода'
-              : 'полный сбор';
+            : mode === 'images-draft'
+              ? 'сверка изображений незавершённой части'
+              : mode === 'resume-draft'
+                ? 'продолжение незавершённого прохода'
+                : 'полный сбор';
     const targetLabel = captureTarget === 'current' ? 'текущая вкладка' : 'рабочая копия';
 
     await setJob({
@@ -1402,12 +1404,12 @@ async function startCapture({
       captureMode: mode,
       captureTarget,
       baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
-      recoveryDraftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
-      draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
-      draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+      recoveryDraftId: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+      draftId: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+      draftCount: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
       partialSaveEnabled: Boolean(existingDraft?.partialSaveEnabled),
       partialArchiveId: existingDraft?.partialArchiveId || '',
-      captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+      captureBoundary: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
       captureRange,
       pendingDocUrl,
       pendingDocMode,
@@ -1423,11 +1425,15 @@ async function startCapture({
           ? (captureTarget === 'current'
               ? 'Текущая вкладка готова; добираю изображения по всей переписке…'
               : 'Рабочая копия загружена; добираю изображения по всей переписке…')
-          : mode === 'resume-draft'
+          : mode === 'images-draft'
             ? (captureTarget === 'current'
-                ? 'Текущая вкладка готова; ищу место остановки незавершённого прохода…'
-                : 'Рабочая копия загружена; ищу место остановки незавершённого прохода…')
-            : (captureTarget === 'current'
+                ? 'Текущая вкладка готова; сверяю изображения сохранённой части…'
+                : 'Рабочая копия загружена; сверяю изображения сохранённой части…')
+            : mode === 'resume-draft'
+              ? (captureTarget === 'current'
+                  ? 'Текущая вкладка готова; ищу место остановки незавершённого прохода…'
+                  : 'Рабочая копия загружена; ищу место остановки незавершённого прохода…')
+              : (captureTarget === 'current'
                 ? 'Текущая вкладка готова; ищу последний сохраненный стык…'
                 : 'Рабочая копия загружена; ищу последний сохраненный стык…'),
       count: 0,
@@ -1457,7 +1463,7 @@ async function startCapture({
     const lastDraftMessage = existingDraft?.messages?.[existingDraft.messages.length - 1] || null;
     const resumeAnchorId = mode === 'resume-draft'
       ? (lastDraftMessage?.id || '')
-      : (mode === 'sync' || mode === 'images')
+      : (mode === 'sync' || mode === 'images' || mode === 'images-draft')
         ? ''
         : (existingArchive?.lastMessageId || lastExistingMessage?.id || '');
     const resumeAnchorSignature = mode === 'resume-draft'
@@ -1473,7 +1479,7 @@ async function startCapture({
       resumeTailSignatures,
       existingArchiveId: existingArchive?.id || '',
       existingDraftId: existingDraft?.id || '',
-      fixedCaptureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+      fixedCaptureBoundary: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
       resumeNavigation,
       captureRange
     });
@@ -1488,9 +1494,11 @@ async function startCapture({
             ? 'Фоново собираю отмеченный полный диапазон…'
             : mode === 'reconcile'
               ? 'Фоново сверяю локальный архив и добираю пропуски…'
-              : mode === 'images'
-                ? 'Фоново сверяю и добираю изображения по всей переписке…'
-                : mode === 'fragment'
+              : mode === 'images-draft'
+                ? 'Фоново сверяю изображения сохранённой части…'
+                : mode === 'images'
+                  ? 'Фоново сверяю и добираю изображения по всей переписке…'
+                  : mode === 'fragment'
                   ? 'Фоново собираю отмеченный фрагмент…'
                   : 'Фоново добираю сообщения после найденного стыка…',
         phase: 'top'
@@ -2363,43 +2371,103 @@ async function deleteLocalArchive(archiveId = '') {
 }
 
 async function hydrateUnfinishedDraftImages(passId = '') {
-  const draft = await getDraft(passId);
+  const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!draft?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
   }
+  if (!isConversationUrl(draft.sourceUrl || '')) {
+    throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
+  }
 
-  let tab = null;
+  const lastMessage = draft.messages[draft.messages.length - 1] || null;
+  if (!lastMessage) {
+    throw new Error('В сохранённой части нет нижней границы для сверки изображений.');
+  }
+  const signature = messageSignature(lastMessage.role, lastMessage.text);
+  const prefixBoundary = lastMessage.id
+    ? { kind: 'stable', key: lastMessage.id, role: lastMessage.role || '', signature }
+    : { kind: 'signature', key: signature, role: lastMessage.role || '', signature };
+
   const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
   if (recovery.available) {
-    tab = recovery.tab;
-  } else {
-    const active = await getActiveTab();
-    if (active?.id &&
-        conversationKey(active.url || '') === conversationKey(draft.sourceUrl || '')) {
-      tab = active;
+    await chrome.tabs.update(recovery.tab.id, { active: true });
+    if (recovery.tab.windowId != null) {
+      await chrome.windows.update(recovery.tab.windowId, { focused: true }).catch(() => {});
     }
-  }
-  if (!tab?.id) {
-    throw new Error('Откройте исходный чат или сохранённую рабочую вкладку, чтобы добрать изображения.');
-  }
-
-  const expectedVersion = chrome.runtime.getManifest().version;
-  let ping = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_PING' }).catch(() => null);
-  if (!ping?.ok || ping.version !== expectedVersion) {
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-chatgpt.js'] });
-    await sleep(80);
-    ping = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_PING' }).catch(() => null);
-  }
-  if (!ping?.ok || ping.version !== expectedVersion) {
-    throw new Error('Обновите страницу исходного чата после обновления Архиватора.');
+    return startCapture({
+      mode: 'images-draft',
+      existingDraft: draft,
+      fixedCaptureBoundary: prefixBoundary,
+      captureTarget: 'current'
+    });
   }
 
-  const result = await chrome.tabs.sendMessage(tab.id, {
-    type: 'ARCHIVER_HYDRATE_DRAFT_IMAGES',
-    draftId: passId
+  const sourceTab = await chrome.tabs.create({ url: draft.sourceUrl, active: true });
+  if (!sourceTab?.id) {
+    throw new Error('Не удалось открыть исходный чат для сверки изображений.');
+  }
+  await waitForChatTabComplete(sourceTab.id);
+  await waitForChatDomReady(sourceTab.id, 45000);
+
+  return startCapture({
+    mode: 'images-draft',
+    existingDraft: draft,
+    fixedCaptureBoundary: prefixBoundary,
+    captureTarget: 'copy'
   });
-  if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения незавершённого сбора.');
-  return { ok: true, ...result, draftId: passId };
+}
+
+async function handleDraftImagesComplete(message) {
+  const job = await getJob();
+  if (!job || job.jobId !== message.jobId) return;
+
+  const draft = await getDraft(message.draftId || job.draftId || job.recoveryDraftId || '');
+  if (!draft?.messages?.length) {
+    await finishJobWithError(
+      message.jobId,
+      job.sourceTabId ?? job.tabId,
+      'Сверка изображений завершилась без сохранённого черновика.',
+      message.draftId || '',
+      0,
+      'error'
+    );
+    return;
+  }
+
+  const finalMessage =
+    'Сверка изображений сохранённой части завершена: ' +
+    Number(draft.imageBinaryReady || 0) + ' подготовлено из ' +
+    Number(draft.imageCount || 0) + '.';
+
+  const next = await appendRunLog({
+    status: 'done',
+    phase: 'done',
+    captureMode: 'images-draft',
+    message: finalMessage,
+    count: draft.messages.length,
+    addedCount: 0,
+    imageCount: Number(draft.imageCount || 0),
+    imageBinaryReady: Number(draft.imageBinaryReady || 0),
+    imageBinaryFailed: Number(draft.imageBinaryFailed || 0),
+    draftId: draft.id,
+    recoveryDraftId: draft.id,
+    draftCount: draft.messages.length,
+    finishedAt: Date.now(),
+    captureTabId: null,
+    recoveryAvailable: false
+  }, {
+    level: 'info',
+    code: 'DRAFT_IMAGES_RECONCILED',
+    message: finalMessage,
+    phase: 'done',
+    count: draft.messages.length
+  });
+  await recordRunHistory(next);
+
+  if (job.captureTarget === 'copy' && job.captureTabId != null &&
+      job.captureTabId !== job.sourceTabId) {
+    await chrome.tabs.remove(job.captureTabId).catch(() => {});
+  }
 }
 
 async function compareUnfinishedPass(passId = '') {
@@ -4718,6 +4786,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await writeClipboard('<pre>' + escapeHtml(text) + '</pre>', text);
         return { ok: true };
       }
+      case 'ARCHIVER_DRAFT_IMAGES_COMPLETE':
+        await handleDraftImagesComplete(message);
+        return { ok: true };
       case 'ARCHIVER_CAPTURE_COMPLETE':
         await handleCaptureComplete(message);
         return { ok: true };
