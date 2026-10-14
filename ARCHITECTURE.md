@@ -65,11 +65,13 @@ ChatGPT-page adapter.
 Responsibilities:
 
 - discovers user/assistant message units in a virtualized conversation;
-- performs full or continuation capture in chronological order;
+- performs full, manual-range, continuation, reconciliation, image-recovery and fragment capture in chronological order;
 - expands visible truncation controls and, when enabled, interstitial reasoning disclosures between neighbouring messages;
 - captures rich HTML, plain text, stable message identifiers and image metadata;
 - fetches image binaries while the authenticated ChatGPT page is still available;
-- writes completed archives and incomplete drafts to `chrome.storage.local`.
+- writes completed archives and incomplete drafts to `chrome.storage.local`;
+- keeps fixed snapshot boundaries and explicit manual start/end anchors with the capture so recovery does not depend on the current viewport;
+- incrementally prepares detected image binaries before writing unfinished checkpoints, so partial exports are not text-only by design.
 
 This file contains site-specific DOM knowledge. DOM selectors and traversal rules should not leak into Google Docs/export code.
 
@@ -82,7 +84,7 @@ Responsibilities:
 - validates the active ChatGPT/Google Docs tab;
 - owns capture jobs, run logs and failure state;
 - drives physical scrolling through Chrome DevTools Protocol;
-- starts full, continue and sync flows;
+- starts full, manual-full, continue, verified reconcile-and-fill, image-recovery, fragment and sync flows;
 - manages archive-to-Google-Doc links and continuation anchors;
 - prepares export data;
 - drives Google Docs focus, clipboard paste, image insertion and physical document-tab creation;
@@ -130,8 +132,9 @@ The planner does not mutate the canonical archive content or message order.
 The extension currently stores:
 
 - completed archives;
-- incomplete capture drafts;
-- active capture job metadata;
+- incomplete capture drafts, including their fixed bottom boundary and explicit manual range when present;
+- active capture job metadata, including immutable `resumeBaseCount`, cumulative `draftCount` and current-pass `count`;
+- recovery-tab bindings for unfinished drafts;
 - archive index by conversation;
 - linked Google Docs metadata;
 - updater state outside Chrome storage.
@@ -146,11 +149,31 @@ A Google Doc is an export target/baseline, not the canonical in-browser archive.
 
 A full rebuild refreshes the local archive only. It must not silently append the rebuilt archive to a previously linked Google Doc.
 
+### Manual full range
+
+`explicit start marker + explicit end marker -> verified traversal -> local archive`
+
+This uses the same message-anchored marking mechanism as fragment capture, but both boundaries are required. The ordinary **«Я в начале»** control remains available as a separate manual confirmation during top navigation.
+
 ### Continue
 
 `existing local archive -> verified last anchor -> capture delta -> merge -> linked Google Doc delta`
 
 Only messages after the verified anchor may be appended.
+
+### Reconcile and fill
+
+`existing local archive -> verified full current traversal -> ordered archive-subsequence proof -> repaired local archive`
+
+This is intentionally different from the legacy non-mutating compare mode. Reconciliation may mutate the local archive only after every previously saved message is found in the same order inside the newly verified full traversal. Messages present in the traversal but absent from the archive are inserted at their proven chronological positions. If an old saved message cannot be proven, the archive is left unchanged.
+
+An unfinished chronological prefix has its own deterministic reconciliation path. It may fill holes in a completed archive only when the completed archive's overlapping prefix is an ordered subsequence of the saved unfinished prefix. Divergence inside the overlap fails closed.
+
+### Image verification and recovery
+
+`existing local archive -> full image-aware traversal -> image-record union -> missing binary hydration`
+
+Image recovery never replaces message text. Same-source image records are merged monotonically: a prepared binary/data URL is richer than a pending or failed record and must not be lost when checkpoints or passes are reconciled.
 
 ### Sync
 
@@ -170,6 +193,8 @@ Images are treated as data, not as remote URLs:
 
 The archive keeps separate counters for detected, prepared and inserted images because those are different failure stages.
 
+Incomplete checkpoints use the same distinction. Detected images are prepared incrementally before a checkpoint is persisted when possible; a separate unfinished-draft action can retry binaries that were detected but not prepared. Completed-archive image recovery additionally re-walks the chat to discover image records that an earlier pass did not observe.
+
 ## Trust and permission boundary
 
 The extension requests broad browser capabilities because it physically drives pages:
@@ -182,6 +207,19 @@ The extension requests broad browser capabilities because it physically drives p
 No project server, OpenAI API key or Google API token is currently required.
 
 See [SECURITY.md](SECURITY.md) for user-facing security notes.
+
+## Capture and recovery invariants
+
+These invariants are regression-sensitive and must be kept aligned across popup, service worker, content adapter and storage:
+
+1. **Worker-owned job state.** The service worker is the only owner of `activeCaptureJob`; page scripts report progress/checkpoints but do not overwrite job state.
+2. **Fixed lower boundary.** A run captures only through the bottom message fixed at start, unless an explicit manual end marker defines an earlier boundary.
+3. **Manual ranges travel with the draft.** Fragment/manual-full start/end anchors are persisted in `captureRange` and reused during recovery.
+4. **Unfinished chains do not cross boundaries.** User-facing unfinished groups are keyed by conversation, snapshot boundary and explicit range. A resume candidate from one snapshot must never be paired with export/count data from another.
+5. **Resume counters have distinct meanings.** `resumeBaseCount` is immutable for one recovery run; `draftCount` is the latest cumulative persisted checkpoint; `count` is live progress of the current physical pass. UI must not infer totals by blindly adding mutable counters.
+6. **Richer data wins.** Message reconciliation preserves reasoning and prepared image binaries. Equal image counts do not imply equal image readiness.
+7. **Mutating reconciliation is fail-closed.** Reconcile-and-fill changes the canonical archive only after ordered compatibility is proven. The legacy compare route remains diagnostic/non-mutating.
+8. **Google Docs is not canonical storage.** Repairing a local archive does not silently rewrite a linked document; document updates remain explicit or verified continuation deltas.
 
 ## Known technical debt
 
