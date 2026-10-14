@@ -1698,7 +1698,12 @@ async function resumeFailedCaptureFromWorkingTab() {
     return resumeNavigationOnlyFromWorkingTab(failedJob);
   }
 
-  const draft = await getDraft(failedJob.draftId);
+  // The resumed run may stop before writing its first checkpoint.
+  // In that case the new draft ID has no record yet: use the prior prefix.
+  let draft = await getDraft(failedJob.draftId);
+  if (!draft?.messages?.length && failedJob.recoveryDraftId) {
+    draft = await getDraft(failedJob.recoveryDraftId);
+  }
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
