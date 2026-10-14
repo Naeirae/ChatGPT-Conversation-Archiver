@@ -2617,6 +2617,12 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
+
+    const canonicalRecoveryDraftId =
+      current.draftId || current.recoveryDraftId || '';
+    const canonicalRecoveryDraft = canonicalRecoveryDraftId
+      ? (await chrome.storage.local.get('draft:' + canonicalRecoveryDraftId))['draft:' + canonicalRecoveryDraftId]
+      : null;
     // On a resumed downward pass, every checkpoint must include the already
     // saved prefix; otherwise a second failure exposes only the new tail.
     if (current.recoveryDraftId && current.phase !== 'top') {
@@ -2663,7 +2669,10 @@
       title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'Переписка ChatGPT',
       sourceUrl: location.href,
       capturedAt: new Date().toISOString(),
-      captureMode: current.captureMode || 'full',
+      captureMode:
+        canonicalRecoveryDraft?.captureMode ||
+        current.captureMode ||
+        'full',
       capturePhase: current.phase || 'walk',
       captureBoundary: current.captureBoundary || boundary,
       navigationHighWater: Number(current.navigationHighWater || 0),
@@ -2680,9 +2689,10 @@
         sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
       complete: false,
       error: '',
-      captureRange: (current.captureMode === 'fragment' || current.captureMode === 'manual-full')
-        ? (current.captureRange || null)
-        : null,
+      captureRange:
+        canonicalRecoveryDraft?.captureRange ||
+        current.captureRange ||
+        null,
       pendingDocUrl: current.pendingDocUrl || '',
       pendingDocMode: current.pendingDocMode || '',
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
@@ -3745,7 +3755,11 @@
               sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
             imageBinaryFailed: draftMessages.reduce((sum, item) =>
               sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
-            captureRange: (mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null,
+            captureRange:
+              existingRecoveryDraft?.captureRange ||
+              ((mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null) ||
+              current.captureRange ||
+              null,
             pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
             pendingDocMode: existingRecoveryDraft?.pendingDocMode || current.pendingDocMode || '',
             complete: false,
