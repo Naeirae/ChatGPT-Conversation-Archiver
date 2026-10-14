@@ -2535,6 +2535,9 @@
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
+    // Image-only repair of an unfinished draft must be transactional: do not
+    // overwrite the canonical saved text with intermediate DOM snapshots.
+    if (current.captureMode === 'images-draft') return;
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
