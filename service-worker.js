@@ -228,8 +228,10 @@ function storedMessagesMatch(a, b) {
   );
 }
 
-// Merge only verified chronological prefixes from the same conversation and
-// snapshot boundary. Never concatenate unrelated fragments or delete backups.
+// Merge only verified chronological prefixes from the same conversation,
+// snapshot boundary and manual range. Once the merged canonical draft is
+ // durably written, compatible technical retry copies are redundant and may
+ // be removed; unrelated ranges/boundaries are never collapsed.
 async function reconcileUnfinishedPrefix(draft) {
   if (!draft?.id || !draft.messages?.length ||
       !['walk', 'finalizing'].includes(draft.capturePhase || '')) return draft;
@@ -309,6 +311,45 @@ async function reconcileUnfinishedPrefix(draft) {
     ])]
   };
   await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + draft.id]: updated });
+
+  const redundantIds = compatible
+    .map(item => item.id)
+    .filter(id => id && id !== draft.id);
+
+  if (redundantIds.length) {
+    const recoveryRecords = [];
+    const canonicalRecovery = await getDraftRecoveryTabRecord(draft.id);
+    if (canonicalRecovery) recoveryRecords.push(canonicalRecovery);
+    for (const id of redundantIds) {
+      const record = await getDraftRecoveryTabRecord(id);
+      if (record) recoveryRecords.push(record);
+    }
+    recoveryRecords.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    const bestRecovery = recoveryRecords[0] || null;
+    if (bestRecovery?.tabId != null) {
+      await setDraftRecoveryTab(draft.id, {
+        tabId: bestRecovery.tabId,
+        sourceUrl: bestRecovery.sourceUrl || updated.sourceUrl || '',
+        sourceTabId: bestRecovery.sourceTabId,
+        captureTarget: bestRecovery.captureTarget || '',
+        jobId: bestRecovery.jobId || ''
+      });
+    }
+
+    const activeJob = await getJob();
+    if (activeJob) {
+      const patch = {};
+      if (redundantIds.includes(activeJob.draftId)) patch.draftId = draft.id;
+      if (redundantIds.includes(activeJob.recoveryDraftId)) patch.recoveryDraftId = draft.id;
+      if (Object.keys(patch).length) await setJob(patch);
+    }
+
+    for (const id of redundantIds) {
+      await removeDraft(id).catch(() => {});
+      await removeDraftRecoveryTab(id).catch(() => {});
+    }
+  }
+
   return updated;
 }
 
