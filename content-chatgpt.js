@@ -1201,7 +1201,7 @@
     return normalizeImageBlob(await response.blob());
   }
 
-  async function hydrateMessageImages(messages, { onlyMissing = false } = {}) {
+  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
     const unique = new Map();
     for (const message of messages || []) {
       for (const image of message.images || []) {
@@ -1241,18 +1241,20 @@
       }
 
       processed++;
-      await progress(
-        'Этап 3/3: забираю изображения · ' + processed + '/' + total,
-        messages.length,
-        {
-          phase: 'finalizing',
-          imageBinaryProcessed: processed,
-          imageBinaryTotal: total,
-          imageBinaryReady: embedded,
-          imageBinaryFailed: failed,
-          force: true
-        }
-      );
+      if (reportProgress) {
+        await progress(
+          'Этап 3/3: забираю изображения · ' + processed + '/' + total,
+          messages.length,
+          {
+            phase: 'finalizing',
+            imageBinaryProcessed: processed,
+            imageBinaryTotal: total,
+            imageBinaryReady: embedded,
+            imageBinaryFailed: failed,
+            force: true
+          }
+        );
+      }
     }
 
     return { embedded, failed, unique: total };
@@ -2726,7 +2728,7 @@
     state.manualTopConfirmed = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -2749,8 +2751,15 @@
     try {
       const settings = await getSettings();
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
-      const selectedFragment = mode === 'fragment' ? (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] || {} : null;
-      if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
+      const selectedFragment = (mode === 'fragment' || mode === 'manual-full')
+        ? (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] || {}
+        : null;
+      if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) {
+        throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
+      }
+      if (mode === 'manual-full' && (!selectedFragment.start || !selectedFragment.end)) {
+        throw new Error('Для ручного полного сбора отметьте и начало, и конец.');
+      }
       await progress(
         mode === 'full'
           ? 'Этап 1/3: фиксирую конец снимка…'
@@ -2772,7 +2781,7 @@
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
       }
 
-      const markerEnd = mode === 'fragment' && selectedFragment.end
+      const markerEnd = (mode === 'fragment' || mode === 'manual-full') && selectedFragment.end
         ? { kind: selectedFragment.end.id ? 'stable' : 'signature', key: selectedFragment.end.id || selectedFragment.end.signature, role: selectedFragment.end.role || '' }
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
@@ -2797,7 +2806,7 @@
 
       collect(map, order, settings, boundary);
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
@@ -2860,7 +2869,7 @@
             order,
             settings,
             navigationWindows,
-            mode === 'fragment' ? selectedFragment.start || null : null,
+            (mode === 'fragment' || mode === 'manual-full') ? selectedFragment.start || null : null,
             boundary
           );
           navigationMessages = [...map.values()];
@@ -2919,7 +2928,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -3005,7 +3014,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'fragment') {
+        if (mode === 'full' || mode === 'fragment' || mode === 'manual-full') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3058,16 +3067,24 @@
         capturedMessages = capturedMessages.slice(anchorIndex + 1);
       }
 
-      if (mode === 'fragment') {
-        const startMatches = selectedFragment.start ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.start) ? [i] : []) : [0];
-        const endMatches = selectedFragment.end ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.end) ? [i] : []) : [capturedMessages.length - 1];
-        if (startMatches.length !== 1 || endMatches.length !== 1) throw new Error('Невозможно однозначно определить отмеченные реплики.');
+      if (mode === 'fragment' || mode === 'manual-full') {
+        const startMatches = selectedFragment.start
+          ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.start) ? [i] : [])
+          : [0];
+        const endMatches = selectedFragment.end
+          ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.end) ? [i] : [])
+          : [capturedMessages.length - 1];
+        if (startMatches.length !== 1 || endMatches.length !== 1) {
+          throw new Error('Невозможно однозначно определить отмеченные реплики.');
+        }
         const startAt = startMatches[0];
         const endAt = endMatches[0];
-        if (startAt < 0 || endAt < 0 || startAt > endAt) throw new Error('Границы фрагмента не найдены или идут в обратном порядке.');
+        if (startAt < 0 || endAt < 0 || startAt > endAt) {
+          throw new Error('Отмеченные начало и конец не найдены или идут в обратном порядке.');
+        }
         capturedMessages = capturedMessages.slice(startAt, endAt + 1);
       }
-      if ((mode === 'full' || mode === 'images' || mode === 'fragment') && !capturedMessages.length) {
+      if ((mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -3193,7 +3210,7 @@
         return;
       }
 
-      const binaryTargetMessages = (mode === 'full' || mode === 'fragment')
+      const binaryTargetMessages = (mode === 'full' || mode === 'fragment' || mode === 'manual-full')
         ? messages
         : mode === 'images'
           ? messages.filter(message => {
@@ -3253,6 +3270,7 @@
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
         isFragment: mode === 'fragment',
+        manualFullRange: mode === 'manual-full' ? selectedFragment : undefined,
         fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
         lastCaptureAddedCount: addedCount,
         lastImageRecoveredCount: recoveredImageRefs.length,
@@ -3682,6 +3700,47 @@
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
+    }
+    if (message && message.type === 'ARCHIVER_HYDRATE_DRAFT_IMAGES') {
+      const draftId = String(message.draftId || '');
+      if (!draftId) {
+        sendResponse({ ok: false, error: 'Не указан незавершённый сбор.' });
+        return false;
+      }
+      (async () => {
+        const key = 'draft:' + draftId;
+        const stored = await chrome.storage.local.get(key);
+        const draft = stored[key];
+        if (!draft?.messages?.length) {
+          throw new Error('Незавершённый сбор не найден в рабочей вкладке.');
+        }
+        const targets = draft.messages.filter(item =>
+          (item.images || []).some(image =>
+            image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+          )
+        );
+        const stats = targets.length
+          ? await hydrateMessageImages(targets, { onlyMissing: true, reportProgress: false })
+          : { embedded: 0, failed: 0, unique: 0 };
+        const allImages = draft.messages.flatMap(item => item.images || []);
+        const next = {
+          ...draft,
+          imageCount: allImages.length,
+          imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
+          imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length
+        };
+        await chrome.storage.local.set({ [key]: next });
+        return {
+          ok: true,
+          imageCount: next.imageCount,
+          imageBinaryReady: next.imageBinaryReady,
+          imageBinaryFailed: next.imageBinaryFailed,
+          embedded: stats.embedded
+        };
+      })().then(sendResponse).catch(error => {
+        sendResponse({ ok: false, error: error?.message || String(error) });
+      });
+      return true;
     }
     if (message && message.type === 'ARCHIVER_CONFIRM_TOP') {
       if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
