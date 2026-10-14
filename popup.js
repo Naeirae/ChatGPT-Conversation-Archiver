@@ -1038,7 +1038,10 @@ function render(data) {
   $('docUrl').disabled = Boolean(running);
   $('captureTarget').disabled = Boolean(running);
 
+  // Keep pause visible even while the worker is preparing a new run.
   $('pauseCapture').classList.toggle('hidden', !activelyRunning);
+  $('pauseCapture').textContent = job?.status === 'starting' ? 'Пауза (запуск)' : 'Пауза';
+  $('captureControls').classList.toggle('hidden', !running);
   $('resumeCapture').classList.toggle('hidden', !paused);
   $('resumeCapture').disabled = Boolean(paused && job?.pauseReason && job.pauseReason !== 'user');
   $('cancel').classList.toggle('hidden', !running);
