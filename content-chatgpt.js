@@ -2123,7 +2123,9 @@
   }
 
   function visibleSavedPrefixEvidence(savedRefs) {
-    const refs = (savedRefs || []).filter(ref => ref && (ref.id || ref.signature));
+    const refs = (savedRefs || []).filter(ref =>
+      ref && (ref.id || ref.externalSignature || ref.signature)
+    );
     if (!refs.length) return { known: false, matchLength: 0, savedIndex: -1 };
 
     const visible = visibleMeaningfulSignatures().map(item => ({
@@ -2152,8 +2154,10 @@
         for (let s = 0; s <= refs.length - length; s++) {
           let same = true;
           for (let offset = 0; offset < length; offset++) {
+            const savedSignature =
+              refs[s + offset].externalSignature || refs[s + offset].signature || '';
             if (!visible[v + offset].signature ||
-                visible[v + offset].signature !== refs[s + offset].signature) {
+                visible[v + offset].signature !== savedSignature) {
               same = false;
               break;
             }
