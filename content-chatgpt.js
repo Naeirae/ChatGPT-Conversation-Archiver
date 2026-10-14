@@ -1630,6 +1630,50 @@
     return next;
   }
 
+  function reconcileVerifiedCaptureWithArchive(capturedMessages, existingMessages) {
+    const captured = [...(capturedMessages || [])];
+    const existing = [...(existingMessages || [])];
+    const matchedCapturedIndexes = [];
+    let searchFrom = 0;
+
+    for (let oldIndex = 0; oldIndex < existing.length; oldIndex++) {
+      const oldMessage = existing[oldIndex];
+      let found = -1;
+      for (let i = searchFrom; i < captured.length; i++) {
+        if (sameNavigationRef(navigationRef(oldMessage), navigationRef(captured[i]))) {
+          found = i;
+          break;
+        }
+      }
+      if (found < 0) {
+        return {
+          ok: false,
+          missingArchiveIndex: oldIndex,
+          missingArchiveMessage: oldMessage,
+          messages: captured,
+          addedCount: 0
+        };
+      }
+      matchedCapturedIndexes.push(found);
+      searchFrom = found + 1;
+    }
+
+    const oldByCapturedIndex = new Map(
+      matchedCapturedIndexes.map((capturedIndex, oldIndex) => [capturedIndex, existing[oldIndex]])
+    );
+    const messages = captured.map((message, index) => {
+      const previous = oldByCapturedIndex.get(index);
+      return previous ? mergeRicherCapture(message, previous) : message;
+    });
+
+    return {
+      ok: true,
+      messages,
+      addedCount: Math.max(0, captured.length - matchedCapturedIndexes.length),
+      matchedCount: matchedCapturedIndexes.length
+    };
+  }
+
   function mergeRecoveredImagesIntoArchive(existingMessages, scannedMessages) {
     const scanned = scannedMessages || [];
     const result = (existingMessages || []).map(message => ({ ...message }));
@@ -2763,7 +2807,7 @@
     state.manualTopConfirmed = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -2800,6 +2844,8 @@
       await progress(
         mode === 'full'
           ? 'Этап 1/3: фиксирую конец снимка…'
+          : mode === 'reconcile'
+            ? 'Этап 1/3: фиксирую текущий конец для сверки и добора…'
           : mode === 'images'
             ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
             : mode === 'retry-walk'
@@ -2843,7 +2889,7 @@
 
       collect(map, order, settings, boundary);
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
@@ -2965,7 +3011,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -3014,7 +3060,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3121,7 +3167,7 @@
         }
         capturedMessages = capturedMessages.slice(startAt, endAt + 1);
       }
-      if ((mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
+      if ((mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -3169,6 +3215,24 @@
           addedCount = delta.length;
           messages = existing.messages.concat(delta);
         }
+      } else if (mode === 'reconcile') {
+        if (!existingArchiveId) throw new Error('Для сверки и добора нужен существующий локальный архив.');
+        const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
+        const existing = stored['archive:' + existingArchiveId];
+        if (!existing?.messages?.length) throw new Error('Локальный архив для сверки недоступен.');
+
+        previousCount = existing.messages.length;
+        const reconciled = reconcileVerifiedCaptureWithArchive(capturedMessages, existing.messages);
+        if (!reconciled.ok) {
+          const index = Number(reconciled.missingArchiveIndex || 0) + 1;
+          throw new Error(
+            'Сверка остановлена: сохранённое сообщение №' + index +
+            ' не удалось подтвердить в текущем полном проходе. ' +
+            'Локальный архив не изменён; используйте ручной полный диапазон, если чат был отредактирован или ветка изменилась.'
+          );
+        }
+        messages = reconciled.messages;
+        addedCount = reconciled.addedCount;
       } else if (mode === 'images') {
         if (!existingArchiveId) throw new Error('Для добора изображений нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
@@ -3249,6 +3313,10 @@
 
       const binaryTargetMessages = (mode === 'full' || mode === 'fragment' || mode === 'manual-full')
         ? messages
+        : mode === 'reconcile'
+          ? messages.filter(message => (message.images || []).some(image =>
+              image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+            ))
         : mode === 'images'
           ? messages.filter(message => {
               const hasMissingBinary = (message.images || []).some(image =>
@@ -3273,7 +3341,9 @@
           )
         : [];
 
-      const binaryStats = await hydrateMessageImages(binaryTargetMessages, { onlyMissing: mode === 'images' });
+      const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
+        onlyMissing: mode === 'images' || mode === 'reconcile'
+      });
 
       if (mode === 'images' && unresolvedBeforeHydration.length) {
         const knownRecovered = new Set(recoveredImageRefs.map(ref =>
