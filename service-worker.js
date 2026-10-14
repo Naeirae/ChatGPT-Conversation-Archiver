@@ -563,6 +563,8 @@ async function listLinkedArchives() {
       title: archive.title || 'Архив ChatGPT',
       messageCount: archive.messages?.length || 0,
       imageCount: archive.imageCount || 0,
+      imageBinaryReady: archive.imageBinaryReady || 0,
+      imageBinaryFailed: archive.imageBinaryFailed || 0,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
       docUrl: linked?.url || '',
@@ -600,10 +602,13 @@ async function setArchiveSavedDestination(archiveId = '', { saved = true, url = 
   return { ok: true, archiveId: archive.id, destination };
 }
 
-async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
+async function captureSavedArchive(archiveId = '', mode = 'continue', captureTarget = 'copy') {
   const archive = await getArchive(archiveId);
   if (!archive?.messages?.length || !archive?.sourceUrl) {
     throw new Error('Сохранённый архив не найден.');
+  }
+  if (archive.isFragment) {
+    throw new Error('Эта операция доступна только для полного архива чата.');
   }
   if (!isConversationUrl(archive.sourceUrl)) {
     throw new Error('У архива нет рабочей ссылки на исходный чат.');
@@ -616,10 +621,14 @@ async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
   await waitForChatDomReady(sourceTab.id, 45000);
 
   return await startCapture({
-    mode: 'continue',
+    mode,
     existingArchive: archive,
     captureTarget
   });
+}
+
+async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
+  return captureSavedArchive(archiveId, 'continue', captureTarget);
 }
 
 function compareVersions(left = '', right = '') {
@@ -4377,6 +4386,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_CONTINUE_SAVED_ARCHIVE':
         return await continueSavedArchive(
           message.archiveId || '',
+          message.captureTarget || 'copy'
+        );
+      case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE':
+        return await captureSavedArchive(
+          message.archiveId || '',
+          'reconcile',
+          message.captureTarget || 'copy'
+        );
+      case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE':
+        return await captureSavedArchive(
+          message.archiveId || '',
+          'images',
           message.captureTarget || 'copy'
         );
       case 'ARCHIVER_COMPARE_CURRENT':
