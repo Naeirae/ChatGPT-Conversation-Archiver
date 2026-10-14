@@ -2421,6 +2421,15 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
+    // On a resumed downward pass, every checkpoint must include the already
+    // saved prefix; otherwise a second failure exposes only the new tail.
+    if (current.recoveryDraftId && current.phase !== 'top') {
+      const prior = (await chrome.storage.local.get('draft:' + current.recoveryDraftId))['draft:' + current.recoveryDraftId];
+      if (prior?.messages?.length) {
+        const known = new Set(prior.messages.map(item => item.id).filter(Boolean));
+        messages = prior.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
+      }
+    }
 
     const draftId = current.draftId || ('draft-' + jobId);
     // In the upward phase the next checkpoint is cumulative. The older saved
@@ -3245,9 +3254,8 @@
             partialSavedAt: existingRecoveryDraft?.partialSavedAt || ''
           };
           await chrome.storage.local.set({ ['draft:' + draftId]: draft });
-          if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId && existingDraftId !== draftId) {
-            await chrome.storage.local.remove('draft:' + existingDraftId).catch(() => {});
-          }
+          // Never delete an earlier recovery attempt. A second interruption
+          // must still be able to fall back to its last complete prefix.
         }
       }
 
