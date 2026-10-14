@@ -1038,6 +1038,13 @@ function render(data) {
   $('docUrl').disabled = Boolean(running);
   $('captureTarget').disabled = Boolean(running);
 
+  // Keep the pause/resume controls next to the capture heading, not below
+  // the long capture form where they can be invisible during startup.
+  const captureControls = $('captureControls');
+  const captureHeadingRow = document.querySelector('.capture-card .section-heading');
+  if (captureControls && captureHeadingRow && captureControls.previousElementSibling !== captureHeadingRow) {
+    captureHeadingRow.after(captureControls);
+  }
   // Keep pause visible even while the worker is preparing a new run.
   $('pauseCapture').classList.toggle('hidden', !activelyRunning);
   $('pauseCapture').textContent = job?.status === 'starting' ? 'Пауза (запуск)' : 'Пауза';
