@@ -444,7 +444,8 @@
       key,
       role: String(value.role || ''),
       ordinal: Number.isFinite(Number(value.ordinal)) ? Number(value.ordinal) : -1,
-      signature: String(value.signature || '')
+      signature: String(value.signature || ''),
+      strictStable: Boolean(value.strictStable)
     };
   }
 
@@ -476,6 +477,9 @@
     if (!boundary || !turn) return false;
     if (boundary.kind === 'stable') {
       if (turnStableKey(turn) === boundary.key) return true;
+      // Explicitly marked boundaries are user-selected message identities.
+      // They must never stop early on another message with identical text.
+      if (boundary.strictStable) return false;
       return Boolean(boundary.signature && turnTextSignature(turn) === boundary.signature);
     }
     return turnTextSignature(turn) === boundary.key;
@@ -2989,7 +2993,8 @@
             kind: selectedFragment.end.id ? 'stable' : 'signature',
             key: selectedFragment.end.id || selectedFragment.end.signature,
             role: selectedFragment.end.role || '',
-            signature: selectedFragment.end.signature || ''
+            signature: selectedFragment.end.signature || '',
+            strictStable: Boolean(selectedFragment.end.id)
           }
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
@@ -3007,7 +3012,9 @@
             kind: boundary.kind,
             key: boundary.key,
             role: boundary.role || '',
-            ordinal: Number(boundary.ordinal ?? -1)
+            ordinal: Number(boundary.ordinal ?? -1),
+            signature: boundary.signature || '',
+            strictStable: Boolean(boundary.strictStable)
           }
         }
       );
