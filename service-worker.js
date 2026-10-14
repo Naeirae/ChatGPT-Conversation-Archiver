@@ -230,8 +230,8 @@ function storedMessagesMatch(a, b) {
 
 // Merge only verified chronological prefixes from the same conversation,
 // snapshot boundary and manual range. Once the merged canonical draft is
- // durably written, compatible technical retry copies are redundant and may
- // be removed; unrelated ranges/boundaries are never collapsed.
+// durably written, compatible technical retry copies are redundant and may
+// be removed; unrelated ranges/boundaries are never collapsed.
 async function reconcileUnfinishedPrefix(draft) {
   if (!draft?.id || !draft.messages?.length ||
       !['walk', 'finalizing'].includes(draft.capturePhase || '')) return draft;
