@@ -1273,6 +1273,12 @@ function render(data) {
 
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
+  } else if (job?.status === 'error' && job?.captureMode === 'images-draft') {
+    setStatus(
+      'Сверка изображений незавершённой части остановилась. Исходная сохранённая часть не заменена. ' +
+      (job.message || ''),
+      true
+    );
   } else if (job?.status === 'error') {
     const attempted = Number(job.count || 0);
     const attemptText = attempted
@@ -1280,11 +1286,18 @@ function render(data) {
       : 'Сбор остановился.';
     const nextText = hasUnfinished ? ' Незавершённый сбор можно продолжить ниже.' : '';
     setStatus(attemptText + nextText + ' ' + (job.message || ''), true);
+  } else if (job?.status === 'cancelled' && job?.captureMode === 'images-draft') {
+    setStatus('Сверка изображений остановлена. Сохранённая часть оставлена без замены.');
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
     setStatus(
       (attempted ? `Сбор остановлен после ${attempted} сообщений.` : 'Сбор остановлен.') +
       (hasUnfinished ? ' Сохранённую часть можно продолжить.' : '')
+    );
+  } else if (job?.status === 'done' && job?.captureMode === 'images-draft') {
+    setStatus(
+      job.message ||
+      'Сверка изображений незавершённой части завершена. Сохранённый префикс обновлён.'
     );
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
