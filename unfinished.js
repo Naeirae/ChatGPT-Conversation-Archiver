@@ -112,10 +112,8 @@ async function load() {
   const isChronologicalPrefix = ['walk', 'finalizing'].includes(pass.capturePhase || '');
   $('exportDoc').classList.toggle('hidden', !isChronologicalPrefix);
   $('reconcileArchive').classList.toggle('hidden', !isChronologicalPrefix);
-  $('hydrateImages').classList.toggle(
-    'hidden',
-    Number(pass.imageCount || 0) <= Number(pass.imageBinaryReady || 0)
-  );
+  $('hydrateImages').classList.toggle('hidden', !isChronologicalPrefix);
+  $('hydrateImages').textContent = 'Сверить и добрать изображения';
 
   const compared = await chrome.runtime.sendMessage({
     type: 'ARCHIVER_COMPARE_UNFINISHED_PASS',
