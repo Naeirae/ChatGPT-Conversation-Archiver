@@ -65,17 +65,35 @@ function renderCaptureProgress(job, running) {
   if (!running) return;
 
   const isFragment = job?.captureMode === 'fragment';
+  const isManualFull = job?.captureMode === 'manual-full';
   const fragmentPhaseLabels = {
     top: 'Фрагмент · Ищу отмеченное начало',
     walk: 'Фрагмент · Собираю до отмеченного конца',
     finalizing: 'Фрагмент · Сохраняю выбранные сообщения',
     paused: 'Сбор фрагмента приостановлен'
   };
+  const manualFullPhaseLabels = {
+    top: 'Полный диапазон · Ищу отмеченное начало',
+    walk: 'Полный диапазон · Собираю до отмеченного конца',
+    finalizing: 'Полный диапазон · Сверяю и сохраняю',
+    paused: 'Сбор полного диапазона приостановлен'
+  };
   $('capturePhase').textContent = isFragment
     ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
-    : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
+    : isManualFull
+      ? (manualFullPhaseLabels[job?.phase] || 'Сбор полного диапазона')
+      : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
-  if (job?.navigationHighWater && job?.phase === 'walk') {
+  const resumedTotal = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
+    Number(job?.draftCount || 0) > 0 &&
+    ['walk', 'finalizing'].includes(job?.phase || '')
+      ? Number(job.draftCount || 0) + Number(job?.count || 0)
+      : 0;
+  if (resumedTotal) {
+    parts.push('уже сохранено: ' + Number(job.draftCount || 0));
+    parts.push('в этом проходе: ' + Number(job?.count || 0));
+    parts.push('всего сейчас: ' + resumedTotal);
+  } else if (job?.navigationHighWater && job?.phase === 'walk') {
     parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
     parts.push('собрано по порядку: ' + Number(job.chronologicalCount ?? job.count ?? 0));
   } else {
@@ -117,7 +135,9 @@ function renderRunLog(job) {
             ? 'добор изображений'
             : job.captureMode === 'retry-walk'
               ? 'повтор только прохода вниз'
-              : 'полный сбор'
+              : job.captureMode === 'manual-full'
+                ? 'ручной полный диапазон'
+                : 'полный сбор'
   );
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
@@ -178,7 +198,8 @@ function renderUnfinishedPasses(items = []) {
     const parts = [
       when,
       Number(item.messageCount || 0) + ' сообщений',
-      Number(item.imageCount || 0) + ' изображений'
+      Number(item.imageCount || 0) + ' изображений',
+      Number(item.imageBinaryReady || 0) + ' изображений подготовлено'
     ];
     if (item.hasBoundary) parts.push('конец чата зафиксирован');
     if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
@@ -323,6 +344,33 @@ function renderUnfinishedPasses(items = []) {
         await chrome.tabs.create({ url });
       };
       secondary.appendChild(view);
+    }
+
+    if (item.copyPassId && Number(item.imageCount || 0) > Number(item.imageBinaryReady || 0)) {
+      const hydrateImages = document.createElement('button');
+      hydrateImages.textContent = 'Добрать изображения';
+      hydrateImages.onclick = async () => {
+        hydrateImages.disabled = true;
+        setStatus('Добираю изображения в сохранённой части незавершённого сбора…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES',
+            passId: item.copyPassId
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
+          setStatus(
+            'Изображения проверены: ' +
+            Number(result.imageBinaryReady || 0) + ' подготовлено, ' +
+            Number(result.imageBinaryFailed || 0) + ' не удалось подготовить.'
+          );
+          await getState();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+        } finally {
+          hydrateImages.disabled = false;
+        }
+      };
+      secondary.appendChild(hydrateImages);
     }
 
     if (item.copyPassId) {
@@ -1025,13 +1073,23 @@ function render(data) {
   }
 
   const isFragmentRun = job?.captureMode === 'fragment' && running;
+  const isManualFullRun = job?.captureMode === 'manual-full' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
-  if (captureHeading) captureHeading.textContent = isFragmentRun ? 'Собирается фрагмент' : 'Собрать чат целиком';
+  if (captureHeading) captureHeading.textContent = isFragmentRun
+    ? 'Собирается фрагмент'
+    : isManualFullRun
+      ? 'Собирается ручной полный диапазон'
+      : 'Собрать чат целиком';
   $('captureFragment').disabled = Boolean(running);
+  $('captureManualFull').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
-    ? (isFragmentRun ? 'Собирается выбранный фрагмент…' : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
+    ? (isFragmentRun
+        ? 'Собирается выбранный фрагмент…'
+        : isManualFullRun
+          ? 'Собирается ручной полный диапазон…'
+          : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
     : 'Собрать чат';
   $('continue').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
@@ -1050,7 +1108,7 @@ function render(data) {
     ['starting', 'running'].includes(job?.status || '') &&
     job?.phase === 'top' &&
     job?.captureTabId != null &&
-    ['full', 'images', 'retry-walk'].includes(job?.captureMode || '')
+    ['full', 'images', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
   );
   $('confirmTop').classList.toggle('hidden', !canConfirmTop);
   $('confirmTop').disabled = !canConfirmTop;
@@ -1087,11 +1145,13 @@ function render(data) {
   renderCaptureProgress(job, running);
   renderRunLog(job);
 
-  $('archive').classList.add('hidden');
+  $('archive').classList.toggle('hidden', !archive);
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
-    ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
-      (archive.lastImageRecoveredCount ? ` · добор изображений +${archive.lastImageRecoveredCount}` : ''))
+    ? ((archive.messageCount || 0) + ' сообщений · ' + (archive.imageCount || 0) + ' изображений' +
+      ' · подготовлено ' + (archive.imageBinaryReady || 0) +
+      (archive.imageBinaryFailed ? ' · не подготовлено ' + archive.imageBinaryFailed : '') +
+      (archive.lastImageRecoveredCount ? ' · добор изображений +' + archive.lastImageRecoveredCount : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
   $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
@@ -1297,6 +1357,24 @@ $('markFragment').onclick = async () => {
     setStatus(error.message || String(error), true);
   } finally {
     button.disabled = false;
+  }
+};
+
+$('captureManualFull').onclick = async () => {
+  $('captureManualFull').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CAPTURE_MANUAL_FULL',
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить ручной полный диапазон.');
+    $('fragmentHint').textContent = 'Сбор полного диапазона между отмеченными репликами запущен.';
+    startPolling();
+  } catch (error) {
+    $('fragmentHint').textContent = error.message || String(error);
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('captureManualFull').disabled = false;
   }
 };
 
