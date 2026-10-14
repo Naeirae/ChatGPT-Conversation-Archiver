@@ -3097,7 +3097,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'fragment' || mode === 'manual-full') {
+        if (mode === 'full' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
