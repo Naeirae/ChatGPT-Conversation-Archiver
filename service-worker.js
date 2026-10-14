@@ -1280,11 +1280,11 @@ async function startCapture({
   let existingArchive = providedArchive;
   const existingDraft = providedDraft;
 
-  if ((mode === 'continue' || mode === 'sync' || mode === 'compare' || mode === 'images') && !existingArchive) {
+  if ((mode === 'continue' || mode === 'sync' || mode === 'compare' || mode === 'reconcile' || mode === 'images') && !existingArchive) {
     existingArchive = await getArchiveForUrl(inspection.href);
   }
 
-  if ((mode === 'continue' || mode === 'compare' || mode === 'images') && !existingArchive?.messages?.length) {
+  if ((mode === 'continue' || mode === 'compare' || mode === 'reconcile' || mode === 'images') && !existingArchive?.messages?.length) {
     throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по документу Google Docs.');
   }
   if (mode === 'resume-draft' && !existingDraft?.messages?.length) {
@@ -1362,8 +1362,10 @@ async function startCapture({
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
-    const modeLabel = mode === 'manual-full' ? 'ручной полный диапазон' : mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'compare'
-      ? 'сверка с локальным архивом'
+    const modeLabel = mode === 'manual-full' ? 'ручной полный диапазон' : mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'reconcile'
+      ? 'сверка и добор локального архива'
+      : mode === 'compare'
+        ? 'сверка с локальным архивом'
       : mode === 'sync'
         ? 'восстановление по документу Google Docs'
         : mode === 'continue'
@@ -2531,6 +2533,38 @@ async function handleCaptureComplete(message) {
       message: finalMessage,
       phase: 'done',
       count: Number(message.count || archive.messages?.length || 0)
+    });
+    await recordRunHistory(next);
+    return;
+  }
+
+  if (message.mode === 'reconcile') {
+    const repaired = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
+    const finalMessage = repaired
+      ? ('Сверка и добор завершены: восстановлено ' + repaired + ' сообщений. Локальный архив обновлён.')
+      : 'Сверка завершена: пропущенных сообщений не найдено; локальный архив подтверждён.';
+
+    const next = await appendRunLog({
+      status: 'done',
+      phase: 'done',
+      captureMode: 'reconcile',
+      message: finalMessage,
+      count: archive.messages?.length || 0,
+      addedCount: repaired,
+      imageCount: archive.imageCount || 0,
+      archiveId: archive.id,
+      finishedAt: Date.now(),
+      captureTabId: null,
+      recoveryAvailable: false,
+      recoveryDraftId: '',
+      draftId: '',
+      draftCount: 0
+    }, {
+      level: 'info',
+      code: 'ARCHIVE_RECONCILE_COMPLETE',
+      message: finalMessage,
+      phase: 'done',
+      count: archive.messages?.length || 0
     });
     await recordRunHistory(next);
     return;
@@ -4217,6 +4251,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
+          captureTarget: message.captureTarget || 'copy'
+        });
+      case 'ARCHIVER_RECONCILE_CURRENT':
+        return await startCapture({
+          mode: 'reconcile',
           captureTarget: message.captureTarget || 'copy'
         });
       case 'ARCHIVER_RECOVER_IMAGES_CURRENT':
