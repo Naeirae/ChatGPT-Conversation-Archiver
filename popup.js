@@ -685,10 +685,34 @@ function renderSavedArchives(items = []) {
       actions.appendChild(imagesButton);
     }
 
-    if (item.docUrl || (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc')) {
+    if (item.docUrl) {
+      const open = document.createElement('button');
+      open.className = 'archive-link-open';
+      open.type = 'button';
+      open.textContent = 'Документ Google Docs ↗';
+      open.disabled = busy;
+      open.onclick = async () => {
+        open.disabled = true;
+        setStatus('Открываю и проверяю связанный документ Google Docs…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_OPEN_LINKED_DOC',
+            archiveId: item.id
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть связанный документ Google Docs.');
+          setStatus('Связанный документ Google Docs открыт.');
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          await getState().catch(() => {});
+        } finally {
+          open.disabled = false;
+        }
+      };
+      actions.appendChild(open);
+    } else if (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc') {
       const open = document.createElement('a');
       open.className = 'archive-link-open';
-      open.href = item.docUrl || item.destination.url;
+      open.href = item.destination.url;
       open.target = '_blank';
       open.rel = 'noopener noreferrer';
       open.textContent = 'Документ Google Docs ↗';
@@ -1861,6 +1885,28 @@ $('recoverImages').onclick = async () => {
   } catch (error) {
     setStatus(error.message || String(error), true);
     $('recoverImages').disabled = false;
+  }
+};
+
+$('archiveDocLink').onclick = async event => {
+  event.preventDefault();
+  if (!state?.archive?.id || !state?.linkedDoc?.url) return;
+
+  const link = $('archiveDocLink');
+  link.setAttribute('aria-disabled', 'true');
+  setStatus('Открываю и проверяю связанный документ Google Docs…');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_OPEN_LINKED_DOC',
+      archiveId: state.archive.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть связанный документ Google Docs.');
+    setStatus('Связанный документ Google Docs открыт.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    await getState().catch(() => {});
+  } finally {
+    link.removeAttribute('aria-disabled');
   }
 };
 
