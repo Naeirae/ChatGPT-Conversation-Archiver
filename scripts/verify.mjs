@@ -66,7 +66,37 @@ try {
   }
   if (!contentSource.includes("'compare'") ||
       !contentSource.includes("type: 'ARCHIVER_CAPTURE_COMPLETE'")) {
-    fail('content-chatgpt.js: missing non-mutating compare mode');
+    fail('content-chatgpt.js: missing legacy non-mutating compare mode');
+  }
+  if (!contentSource.includes("'reconcile'") ||
+      !contentSource.includes('reconcileVerifiedCaptureWithArchive') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_CURRENT'")) {
+    fail('capture runtime: missing verified reconcile-and-fill mode');
+  }
+  if (!contentSource.includes("'manual-full'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
+    fail('capture runtime: missing manual full-range route');
+  }
+  if (!contentSource.includes("'images-draft'") ||
+      !contentSource.includes("current.captureMode === 'images-draft'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_DRAFT_IMAGES_COMPLETE'")) {
+    fail('capture runtime: missing transactional unfinished image reconciliation');
+  }
+  if (!contentSource.includes("phase: 'boundary'") ||
+      !contentSource.includes('state.boundarySearchActive') ||
+      !contentSource.includes('locateBoundaryForUpwardScan') ||
+      !serviceWorkerSource.includes("['top', 'boundary'].includes(job.phase || '')")) {
+    fail('capture runtime: lower-boundary search/manual-top/recovery contract is incomplete');
+  }
+  if (!serviceWorkerSource.includes('async function setJob(patch, { replace = false } = {})') ||
+      (serviceWorkerSource.match(/\{ replace: true \}/g) || []).length < 3) {
+    fail('service-worker.js: new capture jobs must replace stale active-job state');
+  }
+  if (!serviceWorkerSource.includes('unfinishedRangeKey(item) === range') ||
+      !serviceWorkerSource.includes('pendingDocSource') ||
+      !contentSource.includes("pendingDocUrl: current.pendingDocUrl || ''")) {
+    fail('unfinished recovery: range and pending-document metadata are not preserved');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||
@@ -94,8 +124,10 @@ try {
   }
   if (!contentSource.includes('trimMessagesThroughBoundary') ||
       !contentSource.includes('captureBoundaryKey') ||
-      !contentSource.includes("collect(map, order, settings, boundary)")) {
-    fail('content-chatgpt.js: missing fixed bottom snapshot boundary');
+      !contentSource.includes("collect(map, order, settings, boundary)") ||
+      !contentSource.includes('locateBoundaryForUpwardScan') ||
+      !contentSource.includes('recordNavigationWindow(navigationWindows, settings, checkpointBoundary)')) {
+    fail('content-chatgpt.js: missing fixed bottom snapshot boundary or bounded rich traversal');
   }
   if (!contentSource.includes("'resume-draft'") ||
       !contentSource.includes('allowDownwardFallback') ||
@@ -140,6 +172,11 @@ try {
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');
   }
+  for (const id of ['captureManualFull', 'reconcileArchive', 'recoverImages']) {
+    if (!popupHtml.includes('id="' + id + '"')) {
+      fail('popup.html: missing capture-recovery control ' + id);
+    }
+  }
   const updaterHtml = await readFile('updater.html', 'utf8');
   const updaterJs = await readFile('updater.js', 'utf8');
   if (!updaterHtml.includes('id="runUpdate"') || !updaterHtml.includes('id="log"')) {
@@ -165,6 +202,7 @@ try {
 try {
   const popupHtml = await readFile('popup.html', 'utf8');
   const popupJs = await readFile('popup.js', 'utf8');
+  const serviceWorkerSource = await readFile('service-worker.js', 'utf8');
   const requiredUiIds = [
     'status',
     'interfaceSettings',
@@ -203,6 +241,22 @@ try {
   if (!popupJs.includes('function applyInterfaceAppearance') ||
       !popupJs.includes('function normalizeInterfaceAppearance')) {
     fail('popup.js: missing interface appearance layer');
+  }
+  if (!popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
+      !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
+      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
+      !popupJs.includes('ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE') ||
+      !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
+    fail('popup.js: manual range/reconcile/image recovery controls are not wired');
+  }
+  if (!popupJs.includes("passId: item.exportPassId") ||
+      !popupJs.includes("job?.captureMode === 'images-draft'") ||
+      !popupJs.includes("!job?.boundarySearchActive")) {
+    fail('popup.js: unfinished image/boundary-search UI contract regressed');
+  }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
+    fail('service-worker.js: saved-archive reconcile/image routes are missing');
   }
   const iconSizes = new Map([
     ['icons/icon-16.png', 16],

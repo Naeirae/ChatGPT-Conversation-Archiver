@@ -131,19 +131,25 @@ Popup открывает отдельную **визуальную страни�
 - **Найти стык и продолжить** — найти последнюю реплику, уже сохранённую в черновике, и продолжить сбор в этой же вкладке;
 - продолжение идёт только до **нижней метки снимка**, зафиксированной в момент исходного запуска; сообщения, написанные после старта, в восстановленный архив не попадают;
 - если автоматический поиск стыка не сработал с текущей позиции, recovery-проход умеет искать в обе стороны, а пользователь может вручную приблизить вкладку к месту обрыва и повторить действие;
-- recovery применяется к полному сбору/повторному recovery, а не подменяет обычные режимы «Добрать новое», «Сверить» или «Добрать картинки».
+- recovery применяется к полному сбору, ручному полному диапазону, сверке сообщений, сверке изображений и повторному recovery; все эти режимы используют ту же сохранённую рабочую вкладку и фиксированную нижнюю границу снимка.
 
-Черновик можно удалить отдельно. Если у него была сохранённая рабочая вкладка recovery, удаление черновика закрывает и её.
+В карточке незавершённого сбора отдельно показываются три счётчика: сколько было сохранено до продолжения, сколько подтверждено в последней контрольной точке и сколько видит текущий физический проход. Эти числа имеют разные значения и не складываются автоматически.
+
+Черновик можно удалить отдельно. Удаление сохранённых данных не закрывает физическую рабочую вкладку: она остаётся доступной для ручного восстановления, пока пользователь сам её не закроет.
 
 Локальный архив тоже можно удалить отдельно. Удаляется только локальная копия и её индекс в расширении; связанный Google Doc не удаляется и не изменяется.
 
 ## Сверка, продолжение и Google Docs
 
-**Сверить с архивом** и **Продолжить** — разные действия.
+В расширении есть два разных вида сверки.
 
-**Сверить с архивом** использует локальный архив текущего чата как точку сравнения. Расширение находит последний подтверждённый стык, проходит до текущего конца разговора и показывает количество новых сообщений. Эта операция не меняет локальный архив и ничего не записывает в Google Docs.
+**Диагностическая сверка** — старый non-mutating compare. Она считает новые сообщения относительно подтверждённого стыка и не меняет локальный архив.
 
-**Продолжить** использует тот же локальный стык, но уже сохраняет найденную дельту в локальный архив. Поле Google Doc при этом необязательно:
+**Сверить и добрать сообщения** — ремонтный режим. Он проходит текущий чат целиком до зафиксированной нижней границы и проверяет, что все уже сохранённые сообщения встречаются в том же порядке. Только после такого доказанного совпадения сообщения, которых не было в архиве, вставляются в их подтверждённые хронологические места. Если хотя бы одно сохранённое сообщение не удаётся подтвердить, локальный архив не меняется.
+
+Сохранённую непрерывную часть незавершённого сбора можно сверить с готовым локальным архивом отдельно. Добор разрешён только для доказанно совместимого общего диапазона; расхождение внутри него останавливает операцию без изменения архива.
+
+**Продолжить** использует сохранённый стык и сохраняет найденную дельту в локальный архив. Поле Google Doc при этом необязательно:
 
 - если поле пустое и для чата есть связанный Google Doc, дельта добавляется туда;
 - если поле пустое и связанного документа нет, обновляется только локальный архив;
@@ -168,7 +174,11 @@ From 0.3.14 the archive stores more than the source URL. During finalization the
 
 Google Docs export no longer asks Docs to fetch private ChatGPT image URLs from rich HTML. Text is pasted as rich HTML with image tags removed. When an archived message contains a prepared binary image, the debugger keeps the Docs tab active, writes the real image to the clipboard (ClipboardItem first, selected-image execCommand fallback), and performs a physical Ctrl+V at that point in the message sequence.
 
-The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. The normal capture path is unchanged and does not run any extra image pass. If poor network conditions leave an archive with missing images, **Добрать картинки** can be started manually: it re-walks the chat and merges only newly discovered image records into the existing local archive. If the archive is linked to a Google Doc, **Довставить добранные картинки** attempts to insert only those recovered images, using a unique text anchor for the owning message and failing closed when the placement cannot be proven.
+The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. Normal full capture prepares image binaries incrementally before unfinished checkpoints where possible, so a partial capture is not intentionally text-only.
+
+If poor network conditions or virtualization leave missing image records or missing binaries, **Сверить и добрать изображения** re-walks the whole fixed chat snapshot. It unions image sightings from the upward and downward passes, retries unresolved binaries, and merges richer same-source image records without replacing message text. Prepared binary data is monotonic: a ready data URL must never be replaced by a pending or failed record.
+
+Unfinished captures expose their own **Добрать изображения** action, using either the preserved working tab or the currently open source chat. If the completed archive is linked to a Google Doc, **Довставить добранные картинки** attempts to insert only recovered images, using a unique text anchor for the owning message and failing closed when placement cannot be proven.
 
 ## Engineering status
 

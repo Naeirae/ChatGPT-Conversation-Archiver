@@ -44,6 +44,7 @@ const INTERFACE_FONT_STACKS = {
 };
 
 const PHASE_LABELS = {
+  boundary: 'Подготовка · Ищу нижнюю границу',
   top: 'Этап 1/3 · Загружаю начало',
   walk: 'Этап 2/3 · Собираю к зафиксированному концу',
   finalizing: 'Этап 3/3 · Сохраняю локальный архив',
@@ -65,17 +66,40 @@ function renderCaptureProgress(job, running) {
   if (!running) return;
 
   const isFragment = job?.captureMode === 'fragment';
+  const isManualFull = job?.captureMode === 'manual-full';
   const fragmentPhaseLabels = {
     top: 'Фрагмент · Ищу отмеченное начало',
     walk: 'Фрагмент · Собираю до отмеченного конца',
     finalizing: 'Фрагмент · Сохраняю выбранные сообщения',
     paused: 'Сбор фрагмента приостановлен'
   };
+  const manualFullPhaseLabels = {
+    top: 'Полный диапазон · Ищу отмеченное начало',
+    walk: 'Полный диапазон · Собираю до отмеченного конца',
+    finalizing: 'Полный диапазон · Сверяю и сохраняю',
+    paused: 'Сбор полного диапазона приостановлен'
+  };
   $('capturePhase').textContent = isFragment
     ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
-    : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
+    : isManualFull
+      ? (manualFullPhaseLabels[job?.phase] || 'Сбор полного диапазона')
+      : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
-  if (job?.navigationHighWater && job?.phase === 'walk') {
+  const resumed = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
+    Number(job?.resumeBaseCount || job?.draftCount || 0) > 0;
+  if (resumed) {
+    const base = Number(job?.resumeBaseCount || 0);
+    const savedNow = Number(job?.draftCount || base || 0);
+    parts.push('было сохранено: ' + base);
+    parts.push('сохранено сейчас: ' + savedNow);
+    if (Number(job?.count || 0)) {
+      parts.push(
+        job?.captureMode === 'retry-walk'
+          ? 'подтверждено в повторном проходе: ' + Number(job.count || 0)
+          : 'текущий проход: ' + Number(job.count || 0)
+      );
+    }
+  } else if (job?.navigationHighWater && job?.phase === 'walk') {
     parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
     parts.push('собрано по порядку: ' + Number(job.chronologicalCount ?? job.count ?? 0));
   } else {
@@ -113,11 +137,17 @@ function renderRunLog(job) {
         ? 'восстановление по документу Google Docs'
         : job.captureMode === 'continue'
           ? 'продолжение'
-          : job.captureMode === 'images'
-            ? 'добор изображений'
-            : job.captureMode === 'retry-walk'
-              ? 'повтор только прохода вниз'
-              : 'полный сбор'
+          : job.captureMode === 'reconcile'
+            ? 'сверка и добор сообщений'
+            : job.captureMode === 'images-draft'
+              ? 'сверка изображений незавершённой части'
+              : job.captureMode === 'images'
+                ? 'сверка и добор изображений'
+                : job.captureMode === 'retry-walk'
+                  ? 'повтор только прохода вниз'
+                  : job.captureMode === 'manual-full'
+                    ? 'ручной полный диапазон'
+                    : 'полный сбор'
   );
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
@@ -178,7 +208,8 @@ function renderUnfinishedPasses(items = []) {
     const parts = [
       when,
       Number(item.messageCount || 0) + ' сообщений',
-      Number(item.imageCount || 0) + ' изображений'
+      Number(item.imageCount || 0) + ' изображений',
+      Number(item.imageBinaryReady || 0) + ' изображений подготовлено'
     ];
     if (item.hasBoundary) parts.push('конец чата зафиксирован');
     if (item.recoveryTabAvailable) parts.push('рабочая вкладка сохранена');
@@ -325,6 +356,57 @@ function renderUnfinishedPasses(items = []) {
       secondary.appendChild(view);
     }
 
+    if (item.canExportCurrent && item.exportPassId) {
+      const reconcileSaved = document.createElement('button');
+      reconcileSaved.textContent = 'Сверить с локальным архивом и добрать';
+      reconcileSaved.onclick = async () => {
+        reconcileSaved.disabled = true;
+        setStatus('Сверяю сохранённую часть с локальным архивом…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RECONCILE_UNFINISHED_PASS',
+            passId: item.exportPassId
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось выполнить сверку.');
+          setStatus(
+            'Сверка завершена: восстановлено ' +
+            Number(result.addedCount || 0) + ' сообщений; в архиве ' +
+            Number(result.messageCount || 0) + '.'
+          );
+          await getState();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+        } finally {
+          reconcileSaved.disabled = false;
+        }
+      };
+      secondary.appendChild(reconcileSaved);
+    }
+
+    if (item.exportPassId && item.canExportCurrent) {
+      const hydrateImages = document.createElement('button');
+      hydrateImages.textContent = 'Сверить и добрать изображения';
+      hydrateImages.onclick = async () => {
+        hydrateImages.disabled = true;
+        setStatus('Добираю изображения в сохранённой части незавершённого сбора…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES',
+            passId: item.exportPassId
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
+          setStatus('Сверка изображений сохранённой части запущена…');
+          if (result.job) render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+        } finally {
+          hydrateImages.disabled = false;
+        }
+      };
+      secondary.appendChild(hydrateImages);
+    }
+
     if (item.copyPassId) {
       const copy = document.createElement('button');
       copy.textContent = 'Скопировать сохранённую часть';
@@ -443,6 +525,12 @@ function renderSavedArchives(items = []) {
     if (item.partial) parts.push('Частичный архив · можно продолжить');
     if (/^https:\/\/(?:chatgpt\.com|chat\.openai\.com)\/share\//i.test(item.sourceUrl || '')) parts.push('Опубликованная переписка');
     if (item.messageCount != null) parts.push(item.messageCount + ' сообщений');
+    if (item.imageCount != null) {
+      parts.push(
+        Number(item.imageCount || 0) + ' изображений · подготовлено ' +
+        Number(item.imageBinaryReady || 0)
+      );
+    }
     if (item.capturedAt) {
       try { parts.push(new Date(item.capturedAt).toLocaleString('ru-RU')); } catch (_) {}
     }
@@ -546,6 +634,56 @@ function renderSavedArchives(items = []) {
       }
     };
     actions.appendChild(copyButton);
+
+    if (!item.isFragment && !item.partial) {
+      const reconcileButton = document.createElement('button');
+      reconcileButton.className = 'archive-link-open';
+      reconcileButton.type = 'button';
+      reconcileButton.textContent = 'Сверить и добрать';
+      reconcileButton.disabled = busy;
+      reconcileButton.onclick = async () => {
+        reconcileButton.disabled = true;
+        setStatus('Открываю исходный чат и сверяю выбранный архив…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
+            archiveId: item.id,
+            captureTarget: $('captureTarget').value
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку выбранного архива.');
+          render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          reconcileButton.disabled = false;
+        }
+      };
+      actions.appendChild(reconcileButton);
+
+      const imagesButton = document.createElement('button');
+      imagesButton.className = 'archive-link-open';
+      imagesButton.type = 'button';
+      imagesButton.textContent = 'Сверить изображения';
+      imagesButton.disabled = busy;
+      imagesButton.onclick = async () => {
+        imagesButton.disabled = true;
+        setStatus('Открываю исходный чат и сверяю изображения выбранного архива…');
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',
+            archiveId: item.id,
+            captureTarget: $('captureTarget').value
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку изображений.');
+          render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          imagesButton.disabled = false;
+        }
+      };
+      actions.appendChild(imagesButton);
+    }
 
     if (item.docUrl || (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc')) {
       const open = document.createElement('a');
@@ -736,7 +874,10 @@ function renderHistory(history = []) {
     continue: 'Добор нового',
     compare: 'Сверка',
     sync: 'Восстановление',
-    images: 'Добор изображений',
+    images: 'Сверка и добор изображений',
+    'images-draft': 'Сверка изображений незавершённой части',
+    reconcile: 'Сверка и добор сообщений',
+    'manual-full': 'Ручной полный диапазон',
     'retry-walk': 'Повтор прохода вниз'
   };
 
@@ -1025,13 +1166,23 @@ function render(data) {
   }
 
   const isFragmentRun = job?.captureMode === 'fragment' && running;
+  const isManualFullRun = job?.captureMode === 'manual-full' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
-  if (captureHeading) captureHeading.textContent = isFragmentRun ? 'Собирается фрагмент' : 'Собрать чат целиком';
+  if (captureHeading) captureHeading.textContent = isFragmentRun
+    ? 'Собирается фрагмент'
+    : isManualFullRun
+      ? 'Собирается ручной полный диапазон'
+      : 'Собрать чат целиком';
   $('captureFragment').disabled = Boolean(running);
+  $('captureManualFull').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
-    ? (isFragmentRun ? 'Собирается выбранный фрагмент…' : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
+    ? (isFragmentRun
+        ? 'Собирается выбранный фрагмент…'
+        : isManualFullRun
+          ? 'Собирается ручной полный диапазон…'
+          : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
     : 'Собрать чат';
   $('continue').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
@@ -1049,8 +1200,9 @@ function render(data) {
   const canConfirmTop = Boolean(
     ['starting', 'running'].includes(job?.status || '') &&
     job?.phase === 'top' &&
+    !job?.boundarySearchActive &&
     job?.captureTabId != null &&
-    ['full', 'images', 'retry-walk'].includes(job?.captureMode || '')
+    ['full', 'images', 'images-draft', 'reconcile', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
   );
   $('confirmTop').classList.toggle('hidden', !canConfirmTop);
   $('confirmTop').disabled = !canConfirmTop;
@@ -1087,11 +1239,13 @@ function render(data) {
   renderCaptureProgress(job, running);
   renderRunLog(job);
 
-  $('archive').classList.add('hidden');
+  $('archive').classList.toggle('hidden', !archive);
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
-    ? (`${archive.messageCount || 0} сообщений · ${archive.imageCount || 0} изображений` +
-      (archive.lastImageRecoveredCount ? ` · добор изображений +${archive.lastImageRecoveredCount}` : ''))
+    ? ((archive.messageCount || 0) + ' сообщений · ' + (archive.imageCount || 0) + ' изображений' +
+      ' · подготовлено ' + (archive.imageBinaryReady || 0) +
+      (archive.imageBinaryFailed ? ' · не подготовлено ' + archive.imageBinaryFailed : '') +
+      (archive.lastImageRecoveredCount ? ' · добор изображений +' + archive.lastImageRecoveredCount : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
   $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
@@ -1107,6 +1261,7 @@ function render(data) {
   $('newDoc').disabled = Boolean(running || !archive);
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
+  $('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue);
   $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
   $('deleteArchive').disabled = Boolean(running || !archive);
   $('patchRecoveredImages').disabled = Boolean(
@@ -1118,6 +1273,12 @@ function render(data) {
 
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
+  } else if (job?.status === 'error' && job?.captureMode === 'images-draft') {
+    setStatus(
+      'Сверка изображений незавершённой части остановилась. Исходная сохранённая часть не заменена. ' +
+      (job.message || ''),
+      true
+    );
   } else if (job?.status === 'error') {
     const attempted = Number(job.count || 0);
     const attemptText = attempted
@@ -1125,11 +1286,18 @@ function render(data) {
       : 'Сбор остановился.';
     const nextText = hasUnfinished ? ' Незавершённый сбор можно продолжить ниже.' : '';
     setStatus(attemptText + nextText + ' ' + (job.message || ''), true);
+  } else if (job?.status === 'cancelled' && job?.captureMode === 'images-draft') {
+    setStatus('Сверка изображений остановлена. Сохранённая часть оставлена без замены.');
   } else if (job?.status === 'cancelled') {
     const attempted = Number(job.count || 0);
     setStatus(
       (attempted ? `Сбор остановлен после ${attempted} сообщений.` : 'Сбор остановлен.') +
       (hasUnfinished ? ' Сохранённую часть можно продолжить.' : '')
+    );
+  } else if (job?.status === 'done' && job?.captureMode === 'images-draft') {
+    setStatus(
+      job.message ||
+      'Сверка изображений незавершённой части завершена. Сохранённый префикс обновлён.'
     );
   } else if (job?.status === 'done' && job?.captureMode === 'compare') {
     const added = Number(job.addedCount || 0);
@@ -1137,6 +1305,13 @@ function render(data) {
       added
         ? `Сверка завершена: ${added} новых сообщений относительно локального архива. Архив не изменён.`
         : 'Сверка завершена: новых сообщений относительно локального архива нет. Архив не изменён.'
+    );
+  } else if (job?.status === 'done' && job?.captureMode === 'reconcile') {
+    const repaired = Number(job.addedCount || archive?.lastCaptureAddedCount || 0);
+    setStatus(
+      repaired
+        ? 'Сверка завершена: восстановлено ' + repaired + ' сообщений. Локальный архив обновлён.'
+        : 'Сверка завершена: пропущенных сообщений не найдено.'
     );
   } else if (job?.status === 'done' && job?.captureMode === 'images') {
     const recovered = Number(job.imageRecoveredCount || archive?.lastImageRecoveredCount || 0);
@@ -1300,6 +1475,24 @@ $('markFragment').onclick = async () => {
   }
 };
 
+$('captureManualFull').onclick = async () => {
+  $('captureManualFull').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CAPTURE_MANUAL_FULL',
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить ручной полный диапазон.');
+    $('fragmentHint').textContent = 'Сбор полного диапазона между отмеченными репликами запущен.';
+    startPolling();
+  } catch (error) {
+    $('fragmentHint').textContent = error.message || String(error);
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('captureManualFull').disabled = false;
+  }
+};
+
 $('captureFragment').onclick = async () => {
   $('captureFragment').disabled = true;
   try {
@@ -1452,8 +1645,14 @@ $('retryCurrent').onclick = async () => {
         docUrl: $('docUrl').value.trim(),
         captureTarget: 'current'
       });
+    } else if (previousMode === 'reconcile') {
+      setStatus('Повторяю сверку и добор сообщений в текущей вкладке…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_RECONCILE_CURRENT',
+        captureTarget: 'current'
+      });
     } else if (previousMode === 'images') {
-      setStatus('Повторяю добор изображений в текущей вкладке…');
+      setStatus('Повторяю сверку и добор изображений в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
         captureTarget: 'current'
@@ -1583,13 +1782,40 @@ $('clearHistory').onclick = async () => {
     $('clearHistory').disabled = false;
   }
 };
+$('reconcileArchive').onclick = async () => {
+  if (!state?.archive) {
+    setStatus('Сначала нужен локальный архив этого чата.', true);
+    return;
+  }
+  $('reconcileArchive').disabled = true;
+  setStatus('Сверяю весь текущий чат с локальным архивом и добираю пропущенные сообщения…');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_RECONCILE_CURRENT',
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку архива.');
+    render({
+      ...state,
+      job: result.job,
+      archive: state?.archive || null,
+      unfinishedPass: null,
+      canContinue: true
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('reconcileArchive').disabled = false;
+  }
+};
+
 $('recoverImages').onclick = async () => {
   if (!state?.archive) {
     setStatus('Сначала нужен локальный архив этого чата.', true);
     return;
   }
   $('recoverImages').disabled = true;
-  setStatus('Повторно прохожу чат и добираю только изображения…');
+  setStatus('Сверяю изображения по всему чату и добираю недостающие…');
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',

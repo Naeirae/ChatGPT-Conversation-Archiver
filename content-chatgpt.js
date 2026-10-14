@@ -32,7 +32,8 @@
     pauseCheckpoint: null,
     resumeFailure: '',
     lastScrollDirection: '',
-    manualTopConfirmed: false
+    manualTopConfirmed: false,
+    boundarySearchActive: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -1352,12 +1353,16 @@
     );
   }
 
-  function recordNavigationWindow(windows, settings) {
+  function recordNavigationWindow(windows, settings, stopBoundary = null) {
     if (!Array.isArray(windows)) return;
-    const refs = orderedTurns()
-      .map((turn, ordinal) => captureTurn(turn, ordinal, settings))
-      .filter(Boolean)
-      .map(navigationRef);
+    const refs = [];
+    const turns = orderedTurns();
+    for (let ordinal = 0; ordinal < turns.length; ordinal++) {
+      const turn = turns[ordinal];
+      const message = captureTurn(turn, ordinal, settings);
+      if (message) refs.push(navigationRef(message));
+      if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
+    }
     if (!refs.length) return;
 
     const previous = windows[windows.length - 1] || [];
@@ -1440,9 +1445,12 @@
       merged.reasoningStatus = fallback.reasoningStatus;
       merged.reasoningCount = fallback.reasoningCount;
     }
-    if ((fallback.images?.length || 0) > (base.images?.length || 0)) {
-      merged.images = fallback.images;
-      merged.html = fallback.html;
+    const imageMerge = mergeImageRecords(base.images || [], fallback.images || []);
+    if (imageMerge.images.length) {
+      merged.images = imageMerge.images;
+      if (imageMerge.added.length && fallback.html) {
+        merged.html = fallback.html;
+      }
     }
     return merged;
   }
@@ -1559,22 +1567,47 @@
 
   function mergeImageRecords(existingImages, scannedImages) {
     const merged = (existingImages || []).map(image => ({ ...image }));
-    const seen = new Set(merged.map(image => String(image?.src || '')).filter(Boolean));
+    const bySrc = new Map();
+    merged.forEach((image, index) => {
+      const src = String(image?.src || '');
+      if (src && !bySrc.has(src)) bySrc.set(src, index);
+    });
     const added = [];
 
     for (const image of scannedImages || []) {
       const src = String(image?.src || '');
-      if (!src || seen.has(src)) continue;
-      seen.add(src);
-      const next = {
-        ...image,
-        index: merged.length,
-        dataUrl: image?.dataUrl || '',
-        binaryStatus: image?.binaryStatus || 'pending',
-        binaryError: image?.binaryError || ''
+      if (!src) continue;
+      const index = bySrc.get(src);
+      if (index == null) {
+        const next = {
+          ...image,
+          index: merged.length,
+          dataUrl: image?.dataUrl || '',
+          binaryStatus: image?.binaryStatus || 'pending',
+          binaryError: image?.binaryError || ''
+        };
+        bySrc.set(src, merged.length);
+        merged.push(next);
+        added.push(next);
+        continue;
+      }
+
+      const current = merged[index] || {};
+      const currentReady = current.binaryStatus === 'ready' && current.dataUrl;
+      const incomingReady = image?.binaryStatus === 'ready' && image?.dataUrl;
+      merged[index] = {
+        ...current,
+        alt: current.alt || image?.alt || '',
+        width: current.width || image?.width || null,
+        height: current.height || image?.height || null,
+        placement: current.placement || image?.placement || '',
+        mimeType: currentReady ? current.mimeType : (image?.mimeType || current.mimeType || ''),
+        byteSize: currentReady ? current.byteSize : (image?.byteSize || current.byteSize || 0),
+        dataUrl: currentReady ? current.dataUrl : (incomingReady ? image.dataUrl : (current.dataUrl || '')),
+        binaryStatus: currentReady ? 'ready' : (incomingReady ? 'ready' : (image?.binaryStatus || current.binaryStatus || 'pending')),
+        binaryError: currentReady || incomingReady ? '' : (current.binaryError || image?.binaryError || ''),
+        index
       };
-      merged.push(next);
-      added.push(next);
     }
 
     merged.forEach((image, index) => { image.index = index; });
@@ -1602,6 +1635,50 @@
     return next;
   }
 
+  function reconcileVerifiedCaptureWithArchive(capturedMessages, existingMessages) {
+    const captured = [...(capturedMessages || [])];
+    const existing = [...(existingMessages || [])];
+    const matchedCapturedIndexes = [];
+    let searchFrom = 0;
+
+    for (let oldIndex = 0; oldIndex < existing.length; oldIndex++) {
+      const oldMessage = existing[oldIndex];
+      let found = -1;
+      for (let i = searchFrom; i < captured.length; i++) {
+        if (sameNavigationRef(navigationRef(oldMessage), navigationRef(captured[i]))) {
+          found = i;
+          break;
+        }
+      }
+      if (found < 0) {
+        return {
+          ok: false,
+          missingArchiveIndex: oldIndex,
+          missingArchiveMessage: oldMessage,
+          messages: captured,
+          addedCount: 0
+        };
+      }
+      matchedCapturedIndexes.push(found);
+      searchFrom = found + 1;
+    }
+
+    const oldByCapturedIndex = new Map(
+      matchedCapturedIndexes.map((capturedIndex, oldIndex) => [capturedIndex, existing[oldIndex]])
+    );
+    const messages = captured.map((message, index) => {
+      const previous = oldByCapturedIndex.get(index);
+      return previous ? mergeRicherCapture(message, previous) : message;
+    });
+
+    return {
+      ok: true,
+      messages,
+      addedCount: Math.max(0, captured.length - matchedCapturedIndexes.length),
+      matchedCount: matchedCapturedIndexes.length
+    };
+  }
+
   function mergeRecoveredImagesIntoArchive(existingMessages, scannedMessages) {
     const scanned = scannedMessages || [];
     const result = (existingMessages || []).map(message => ({ ...message }));
@@ -1616,12 +1693,26 @@
       const source = findScanned(target);
       if (!source?.images?.length) continue;
 
-      const merged = mergeImageRecords(target.images || [], source.images || []);
-      if (!merged.added.length) continue;
+      const beforeImages = target.images || [];
+      const beforeReady = new Map(beforeImages.map(image => [
+        String(image?.src || ''),
+        Boolean(image?.binaryStatus === 'ready' && image?.dataUrl)
+      ]));
+      const merged = mergeImageRecords(beforeImages, source.images || []);
+      const enrichedExisting = merged.images.filter(image => {
+        const src = String(image?.src || '');
+        return src && beforeReady.has(src) &&
+          !beforeReady.get(src) &&
+          image?.binaryStatus === 'ready' &&
+          image?.dataUrl;
+      });
+      if (!merged.added.length && !enrichedExisting.length) continue;
 
       target.images = merged.images;
-      target.html = appendRecoveredImageMarkup(target.html, merged.images, merged.added);
-      for (const image of merged.added) {
+      if (merged.added.length) {
+        target.html = appendRecoveredImageMarkup(target.html, merged.images, merged.added);
+      }
+      for (const image of [...merged.added, ...enrichedExisting]) {
         recovered.push({
           messageId: target.id || '',
           messageSignature: messageTextSignature(target),
@@ -1797,6 +1888,77 @@
     return direction === 'up' ? 'down' : 'up';
   }
 
+  async function locateBoundaryForUpwardScan(boundary) {
+    if (!boundary || boundaryIsVisible(boundary)) return;
+
+    state.manualTopConfirmed = false;
+    state.boundarySearchActive = true;
+    await progress('Сначала нахожу нижнюю границу выбранного диапазона…', 0, {
+      phase: 'boundary',
+      boundarySearchActive: true,
+      force: true
+    });
+
+    const scanDirection = async (direction, limit = 320) => {
+      let stable = 0;
+      let previous = '';
+      for (let i = 0; i < limit; i++) {
+        await waitIfPaused();
+        await expandVisible();
+        if (boundaryIsVisible(boundary)) return true;
+
+        const before = visibleTurnSignature();
+        await progress(
+          direction === 'up'
+            ? 'Ищу отмеченную нижнюю границу выше текущей позиции…'
+            : 'Ищу отмеченную нижнюю границу ниже текущей позиции…',
+          0,
+          {
+            phase: 'boundary',
+            boundarySearchActive: true,
+            boundarySearchDirection: direction,
+            boundarySearchIteration: i + 1
+          }
+        );
+        await physicalScroll(direction, direction === 'up' ? 6 : 4, {
+          settleTimeout: 2600,
+          quietWindow: 350
+        });
+        await expandVisible();
+        if (boundaryIsVisible(boundary)) return true;
+
+        const after = visibleTurnSignature();
+        if (after && after === before && after === previous) stable++;
+        else stable = 0;
+        previous = after;
+
+        const atPhysicalEdge = direction === 'up'
+          ? physicalScrollStartVisible()
+          : physicalScrollEndVisible();
+        if (atPhysicalEdge && stable >= 1) return false;
+      }
+      return false;
+    };
+
+    try {
+      if (await scanDirection('up')) return;
+      if (await scanDirection('down')) return;
+
+      throw new Error(
+        'Не удалось найти зафиксированную нижнюю границу выбранного диапазона. ' +
+        'Сбор остановлен, чтобы не захватить сообщения за пределами диапазона.'
+      );
+    } finally {
+      state.boundarySearchActive = false;
+      state.manualTopConfirmed = false;
+      await progress('Нижняя граница найдена; теперь иду к началу диапазона…', 0, {
+        phase: 'top',
+        boundarySearchActive: false,
+        force: true
+      }).catch(() => {});
+    }
+  }
+
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
@@ -1816,8 +1978,8 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-      recordNavigationWindow(navigationWindows, settings);
+      collect(map, order, settings, checkpointBoundary);
+      recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
@@ -1846,8 +2008,8 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-      recordNavigationWindow(navigationWindows, settings);
+      collect(map, order, settings, checkpointBoundary);
+      recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
@@ -1870,8 +2032,8 @@
         await sleep(450);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
-        collect(map, order, settings);
-        recordNavigationWindow(navigationWindows, settings);
+        collect(map, order, settings, checkpointBoundary);
+        recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
         const firstAfterWaitTurn = orderedTurns()[0] || null;
         const firstAfterWait = firstAfterWaitTurn
@@ -2449,6 +2611,9 @@
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
+    // Image-only repair of an unfinished draft must be transactional: do not
+    // overwrite the canonical saved text with intermediate DOM snapshots.
+    if (current.captureMode === 'images-draft') return;
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
@@ -2480,6 +2645,18 @@
         messages = preserved.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
       }
     }
+    if (!state.cancel) {
+      const missingImages = messages.filter(item => (item.images || []).some(image =>
+        image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+      ));
+      if (missingImages.length) {
+        await hydrateMessageImages(missingImages, {
+          onlyMissing: true,
+          reportProgress: false
+        }).catch(() => {});
+      }
+    }
+
     const draft = {
       id: draftId,
       kind: 'capture-draft',
@@ -2497,8 +2674,17 @@
       resumeWindowSignatures: currentResumeWindowSignatures(6),
       messages,
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+      imageBinaryReady: messages.reduce((sum, item) =>
+        sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
+      imageBinaryFailed: messages.reduce((sum, item) =>
+        sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
       complete: false,
       error: '',
+      captureRange: (current.captureMode === 'fragment' || current.captureMode === 'manual-full')
+        ? (current.captureRange || null)
+        : null,
+      pendingDocUrl: current.pendingDocUrl || '',
+      pendingDocMode: current.pendingDocMode || '',
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
       partialArchiveId: current.partialArchiveId || '',
       partialSavedAt: current.partialSavedAt || ''
@@ -2726,9 +2912,10 @@
     state.paused = false;
     state.lastScrollDirection = '';
     state.manualTopConfirmed = false;
+    state.boundarySearchActive = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'images', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'images-draft', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -2752,7 +2939,9 @@
       const settings = await getSettings();
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
       const selectedFragment = (mode === 'fragment' || mode === 'manual-full')
-        ? (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] || {}
+        ? (options.captureRange ||
+          (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] ||
+          {})
         : null;
       if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) {
         throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
@@ -2763,9 +2952,13 @@
       await progress(
         mode === 'full'
           ? 'Этап 1/3: фиксирую конец снимка…'
-          : mode === 'images'
-            ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
-            : mode === 'retry-walk'
+          : mode === 'reconcile'
+            ? 'Этап 1/3: фиксирую текущий конец для сверки и добора…'
+          : mode === 'images-draft'
+            ? 'Этап 1/3: фиксирую границу сохранённой части и готовлю сверку изображений…'
+            : mode === 'images'
+              ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
+              : mode === 'retry-walk'
               ? 'Повторяю только второй этап: возвращаюсь к началу без пересчёта сообщений…'
               : mode === 'resume-draft'
                 ? 'Этап 1/3: восстанавливаю место незавершённого прохода…'
@@ -2782,7 +2975,12 @@
       }
 
       const markerEnd = (mode === 'fragment' || mode === 'manual-full') && selectedFragment.end
-        ? { kind: selectedFragment.end.id ? 'stable' : 'signature', key: selectedFragment.end.id || selectedFragment.end.signature, role: selectedFragment.end.role || '' }
+        ? {
+            kind: selectedFragment.end.id ? 'stable' : 'signature',
+            key: selectedFragment.end.id || selectedFragment.end.signature,
+            role: selectedFragment.end.role || '',
+            signature: selectedFragment.end.signature || ''
+          }
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
@@ -2806,7 +3004,7 @@
 
       collect(map, order, settings, boundary);
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
@@ -2862,6 +3060,14 @@
           order.length = 0;
           await reachTopWithoutCapture(0, { fullCapture: true });
         } else {
+          // Rich upward scans must begin at the fixed lower boundary. The active
+          // tab may currently be below or above an older manual/draft boundary;
+          // locate it first without accumulating out-of-range messages.
+          if (boundary && !boundaryIsVisible(boundary)) {
+            await locateBoundaryForUpwardScan(boundary);
+          }
+          map.clear();
+          order.length = 0;
           // Image recovery still benefits from a rich upward scan, and fragment
           // capture may need to discover its explicit start marker.
           await reachTop(
@@ -2928,7 +3134,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -2977,7 +3183,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3014,7 +3220,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'fragment' || mode === 'manual-full') {
+        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment' || mode === 'manual-full') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3051,7 +3257,7 @@
         }
       }
 
-      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment') {
+      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment' && mode !== 'manual-full') {
         const anchorIndex = capturedMessages.findIndex(item =>
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
@@ -3084,7 +3290,7 @@
         }
         capturedMessages = capturedMessages.slice(startAt, endAt + 1);
       }
-      if ((mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
+      if ((mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -3132,6 +3338,53 @@
           addedCount = delta.length;
           messages = existing.messages.concat(delta);
         }
+      } else if (mode === 'images-draft') {
+        if (!existingDraftId) throw new Error('Для сверки изображений нужен сохранённый незавершённый проход.');
+        const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+        const existing = stored['draft:' + existingDraftId];
+        if (!existing?.messages?.length) {
+          throw new Error('Сохранённый незавершённый проход недоступен.');
+        }
+
+        previousCount = existing.messages.length;
+        const scanPool = [];
+        const scanByRef = new Map();
+        for (const candidate of [...navigationMessages, ...capturedMessages]) {
+          const ref = navigationRef(candidate);
+          const key = ref.id || ref.signature || ref.externalSignature;
+          if (!key) continue;
+          const previous = scanByRef.get(key);
+          if (!previous) {
+            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
+            continue;
+          }
+          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
+          previous.images = merged.images;
+        }
+        scanPool.push(...scanByRef.values());
+
+        const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
+        messages = merged.messages;
+        recoveredImageRefs = merged.recovered;
+        addedCount = 0;
+      } else if (mode === 'reconcile') {
+        if (!existingArchiveId) throw new Error('Для сверки и добора нужен существующий локальный архив.');
+        const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
+        const existing = stored['archive:' + existingArchiveId];
+        if (!existing?.messages?.length) throw new Error('Локальный архив для сверки недоступен.');
+
+        previousCount = existing.messages.length;
+        const reconciled = reconcileVerifiedCaptureWithArchive(capturedMessages, existing.messages);
+        if (!reconciled.ok) {
+          const index = Number(reconciled.missingArchiveIndex || 0) + 1;
+          throw new Error(
+            'Сверка остановлена: сохранённое сообщение №' + index +
+            ' не удалось подтвердить в текущем полном проходе. ' +
+            'Локальный архив не изменён; используйте ручной полный диапазон, если чат был отредактирован или ветка изменилась.'
+          );
+        }
+        messages = reconciled.messages;
+        addedCount = reconciled.addedCount;
       } else if (mode === 'images') {
         if (!existingArchiveId) throw new Error('Для добора изображений нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
@@ -3212,6 +3465,14 @@
 
       const binaryTargetMessages = (mode === 'full' || mode === 'fragment' || mode === 'manual-full')
         ? messages
+        : mode === 'images-draft'
+          ? messages.filter(message => (message.images || []).some(image =>
+              image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+            ))
+        : mode === 'reconcile'
+          ? messages.filter(message => (message.images || []).some(image =>
+              image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+            ))
         : mode === 'images'
           ? messages.filter(message => {
               const hasMissingBinary = (message.images || []).some(image =>
@@ -3236,7 +3497,9 @@
           )
         : [];
 
-      const binaryStats = await hydrateMessageImages(binaryTargetMessages, { onlyMissing: mode === 'images' });
+      const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
+        onlyMissing: mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
+      });
 
       if (mode === 'images' && unresolvedBeforeHydration.length) {
         const knownRecovered = new Set(recoveredImageRefs.map(ref =>
@@ -3258,6 +3521,41 @@
       }
 
       const allImages = messages.flatMap(item => item.images || []);
+
+      if (mode === 'images-draft') {
+        const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+        const existing = stored['draft:' + existingDraftId];
+        if (!existing?.messages?.length) {
+          throw new Error('Сохранённый незавершённый проход исчез во время сверки изображений.');
+        }
+        const nextDraft = {
+          ...existing,
+          messages,
+          chronologicalCount: messages.length,
+          imageCount: allImages.length,
+          imageBinaryReady: allImages.filter(image =>
+            image.binaryStatus === 'ready' && image.dataUrl
+          ).length,
+          imageBinaryFailed: allImages.filter(image =>
+            image.binaryStatus === 'failed'
+          ).length,
+          capturedAt: new Date().toISOString()
+        };
+        await chrome.storage.local.set({ ['draft:' + existingDraftId]: nextDraft });
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_DRAFT_IMAGES_COMPLETE',
+            jobId,
+            draftId: existingDraftId,
+            count: messages.length,
+            imageCount: nextDraft.imageCount,
+            imageBinaryReady: nextDraft.imageBinaryReady,
+            imageBinaryFailed: nextDraft.imageBinaryFailed
+          });
+        } catch (_) {}
+        return;
+      }
+
       const conversation = {
         title: (mode === 'fragment' ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
         sourceUrl: location.href,
@@ -3366,7 +3664,8 @@
         }
       }
 
-      if ((chronologicalStarted || current.phase === 'top') && map.size > 0) {
+      if (mode !== 'images-draft' &&
+          (chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
         let existingRecoveryDraft = null;
@@ -3438,6 +3737,13 @@
             resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+            imageBinaryReady: draftMessages.reduce((sum, item) =>
+              sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
+            imageBinaryFailed: draftMessages.reduce((sum, item) =>
+              sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
+            captureRange: (mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null,
+            pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
+            pendingDocMode: existingRecoveryDraft?.pendingDocMode || current.pendingDocMode || '',
             complete: false,
             error: message,
             partialSaveEnabled: Boolean(existingRecoveryDraft?.partialSaveEnabled || current.partialSaveEnabled),
@@ -3485,6 +3791,7 @@
       state.resumeFailure = '';
       state.lastScrollDirection = '';
       state.manualTopConfirmed = false;
+      state.boundarySearchActive = false;
     }
   }
 
@@ -3696,55 +4003,22 @@
         fixedCaptureBoundary: message.fixedCaptureBoundary,
         resumeAnchorSignature: message.resumeAnchorSignature,
         resumeTailSignatures: message.resumeTailSignatures,
-        resumeNavigation: Boolean(message.resumeNavigation)
+        resumeNavigation: Boolean(message.resumeNavigation),
+        captureRange: message.captureRange || null
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
     }
-    if (message && message.type === 'ARCHIVER_HYDRATE_DRAFT_IMAGES') {
-      const draftId = String(message.draftId || '');
-      if (!draftId) {
-        sendResponse({ ok: false, error: 'Не указан незавершённый сбор.' });
-        return false;
-      }
-      (async () => {
-        const key = 'draft:' + draftId;
-        const stored = await chrome.storage.local.get(key);
-        const draft = stored[key];
-        if (!draft?.messages?.length) {
-          throw new Error('Незавершённый сбор не найден в рабочей вкладке.');
-        }
-        const targets = draft.messages.filter(item =>
-          (item.images || []).some(image =>
-            image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
-          )
-        );
-        const stats = targets.length
-          ? await hydrateMessageImages(targets, { onlyMissing: true, reportProgress: false })
-          : { embedded: 0, failed: 0, unique: 0 };
-        const allImages = draft.messages.flatMap(item => item.images || []);
-        const next = {
-          ...draft,
-          imageCount: allImages.length,
-          imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
-          imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length
-        };
-        await chrome.storage.local.set({ [key]: next });
-        return {
-          ok: true,
-          imageCount: next.imageCount,
-          imageBinaryReady: next.imageBinaryReady,
-          imageBinaryFailed: next.imageBinaryFailed,
-          embedded: stats.embedded
-        };
-      })().then(sendResponse).catch(error => {
-        sendResponse({ ok: false, error: error?.message || String(error) });
-      });
-      return true;
-    }
     if (message && message.type === 'ARCHIVER_CONFIRM_TOP') {
       if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
         sendResponse({ ok: false, error: 'Активный сбор для ручной отметки начала не найден.' });
+        return false;
+      }
+      if (state.boundarySearchActive) {
+        sendResponse({
+          ok: false,
+          error: 'Сейчас Архиватор ищет нижнюю границу диапазона. «Я в начале» станет доступно после её нахождения.'
+        });
         return false;
       }
       state.manualTopConfirmed = true;
