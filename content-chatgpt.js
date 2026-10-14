@@ -2683,6 +2683,8 @@
       captureRange: (current.captureMode === 'fragment' || current.captureMode === 'manual-full')
         ? (current.captureRange || null)
         : null,
+      pendingDocUrl: current.pendingDocUrl || '',
+      pendingDocMode: current.pendingDocMode || '',
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
       partialArchiveId: current.partialArchiveId || '',
       partialSavedAt: current.partialSavedAt || ''
@@ -3740,6 +3742,8 @@
             imageBinaryFailed: draftMessages.reduce((sum, item) =>
               sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
             captureRange: (mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null,
+            pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
+            pendingDocMode: existingRecoveryDraft?.pendingDocMode || current.pendingDocMode || '',
             complete: false,
             error: message,
             partialSaveEnabled: Boolean(existingRecoveryDraft?.partialSaveEnabled || current.partialSaveEnabled),
