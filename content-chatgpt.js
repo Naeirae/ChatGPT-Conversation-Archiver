@@ -2212,7 +2212,7 @@
       let unchanged = 0;
       let previousSignature = '';
 
-      for (let i = 0; i < 700; i++) {
+      for (let i = 0; i < 160; i++) {
         await waitIfPaused();
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
@@ -2360,7 +2360,7 @@
     let unchanged = 0;
     let previousSignature = '';
 
-    for (let i = 0; i < 600; i++) {
+    for (let i = 0; i < 160; i++) {
       await waitIfPaused();
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
