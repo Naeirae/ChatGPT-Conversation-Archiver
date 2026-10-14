@@ -45,7 +45,7 @@ const REMOTE_MANIFEST_URL = 'https://raw.githubusercontent.com/Naeirae/ChatGPT-C
 const UPDATE_ALARM = 'archiver-update-check';
 const WHATS_NEW_PENDING_KEY = 'archiverWhatsNewPending';
 const DRAFT_RECOVERY_TAB_PREFIX = 'draftRecoveryTab:';
-const AUTO_RECOVERY_MAX_ATTEMPTS = 2;
+const AUTO_RECOVERY_MAX_ATTEMPTS = 0;
 const AUTO_RECOVERY_TRIGGER_DELAY_MS = 900;
 const AUTO_RECOVERY_ALARM_PREFIX = 'archiver-auto-recovery:';
 
@@ -1206,8 +1206,36 @@ async function startCapture({
       : '';
 
   const jobId = makeJobId();
+  const captureStartedAt = Date.now();
   let captureTab = null;
   let domProbe = null;
+
+  await setJob({
+    jobId,
+    tabId: sourceTab.id,
+    sourceTabId: sourceTab.id,
+    captureTabId: captureTarget === 'current' ? sourceTab.id : null,
+    sourceUrl: inspection.href,
+    status: 'starting',
+    phase: 'top',
+    captureMode: mode,
+    captureTarget,
+    baselineArchiveId: mode === 'sync' ? (existingArchive?.id || '') : '',
+    recoveryDraftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+    draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
+    draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+    captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+    pendingDocUrl,
+    pendingDocMode,
+    count: 0,
+    addedCount: 0,
+    imageCount: 0,
+    startedAt: captureStartedAt,
+    finishedAt: null,
+    message: captureTarget === 'current'
+      ? 'Запуск: жду готовности текущей вкладки ChatGPT…'
+      : 'Запуск: открываю и прогреваю рабочую вкладку ChatGPT…'
+  });
 
   try {
     if (captureTarget === 'current') {
@@ -1278,7 +1306,7 @@ async function startCapture({
       count: 0,
       addedCount: 0,
       imageCount: 0,
-      startedAt: Date.now(),
+      startedAt: captureStartedAt,
       domProbe,
       log: [{
         at: Date.now(),
@@ -1390,7 +1418,7 @@ async function startCapture({
       pendingDocUrl,
       pendingDocMode,
       message,
-      startedAt: Date.now(),
+      startedAt: captureStartedAt,
       finishedAt: Date.now(),
       log: [{
         at: Date.now(),
