@@ -4467,10 +4467,6 @@ async function exportConversationToLinkedDoc(archiveId = '') {
       null,
       { linkTarget: true }
     );
-  } else {
-    // Still validate/open the linked document during a manual export even when
-    // there are no new text messages.
-    await openLinkedGoogleDoc({ archiveId: conversation.id });
   }
 
   // Recovered images can belong to messages that were exported long before
@@ -4496,6 +4492,10 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     patchResult = await patchRecoveredImagesToLinkedDoc(conversation.id, {
       excludeMessages: delta
     });
+  } else if (!delta.length) {
+    // No text delta and no pending recovered images: opening the linked Doc is
+    // the only visible result of the user's manual export action.
+    await openLinkedGoogleDoc({ archiveId: conversation.id });
   }
 
   const imageInsertedCount =
@@ -4518,8 +4518,10 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     imageFailedCount,
     failedImages,
     recoveredImagePatchAttempted: Boolean(oldRecoveredItems.length),
+    recoveredImagePatchCandidateCount: oldRecoveredItems.length,
     recoveredImagePatchInserted: Number(patchResult.inserted || 0),
-    recoveredImagePatchFailed: Number(patchResult.failed || 0)
+    recoveredImagePatchFailed: Number(patchResult.failed || 0),
+    firstImageFailure: String(failedImages[0]?.error || '')
   };
 }
 
