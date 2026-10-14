@@ -32,7 +32,8 @@
     pauseCheckpoint: null,
     resumeFailure: '',
     lastScrollDirection: '',
-    manualTopConfirmed: false
+    manualTopConfirmed: false,
+    boundarySearchActive: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -1890,6 +1891,14 @@
   async function locateBoundaryForUpwardScan(boundary) {
     if (!boundary || boundaryIsVisible(boundary)) return;
 
+    state.manualTopConfirmed = false;
+    state.boundarySearchActive = true;
+    await progress('Сначала нахожу нижнюю границу выбранного диапазона…', 0, {
+      phase: 'boundary',
+      boundarySearchActive: true,
+      force: true
+    });
+
     const scanDirection = async (direction, limit = 320) => {
       let stable = 0;
       let previous = '';
@@ -1905,7 +1914,8 @@
             : 'Ищу отмеченную нижнюю границу ниже текущей позиции…',
           0,
           {
-            phase: 'top',
+            phase: 'boundary',
+            boundarySearchActive: true,
             boundarySearchDirection: direction,
             boundarySearchIteration: i + 1
           }
@@ -1930,13 +1940,23 @@
       return false;
     };
 
-    if (await scanDirection('up')) return;
-    if (await scanDirection('down')) return;
+    try {
+      if (await scanDirection('up')) return;
+      if (await scanDirection('down')) return;
 
-    throw new Error(
-      'Не удалось найти зафиксированную нижнюю границу выбранного диапазона. ' +
-      'Сбор остановлен, чтобы не захватить сообщения за пределами диапазона.'
-    );
+      throw new Error(
+        'Не удалось найти зафиксированную нижнюю границу выбранного диапазона. ' +
+        'Сбор остановлен, чтобы не захватить сообщения за пределами диапазона.'
+      );
+    } finally {
+      state.boundarySearchActive = false;
+      state.manualTopConfirmed = false;
+      await progress('Нижняя граница найдена; теперь иду к началу диапазона…', 0, {
+        phase: 'top',
+        boundarySearchActive: false,
+        force: true
+      }).catch(() => {});
+    }
   }
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
@@ -2890,6 +2910,7 @@
     state.paused = false;
     state.lastScrollDirection = '';
     state.manualTopConfirmed = false;
+    state.boundarySearchActive = false;
     lastProgressAt = 0;
 
     const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'images-draft', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
@@ -3766,6 +3787,7 @@
       state.resumeFailure = '';
       state.lastScrollDirection = '';
       state.manualTopConfirmed = false;
+      state.boundarySearchActive = false;
     }
   }
 
@@ -3986,6 +4008,13 @@
     if (message && message.type === 'ARCHIVER_CONFIRM_TOP') {
       if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
         sendResponse({ ok: false, error: 'Активный сбор для ручной отметки начала не найден.' });
+        return false;
+      }
+      if (state.boundarySearchActive) {
+        sendResponse({
+          ok: false,
+          error: 'Сейчас Архиватор ищет нижнюю границу диапазона. «Я в начале» станет доступно после её нахождения.'
+        });
         return false;
       }
       state.manualTopConfirmed = true;
