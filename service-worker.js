@@ -4436,6 +4436,78 @@ async function appendMessagesToGoogleDocUrl(
   }
 }
 
+async function exportConversationToLinkedDoc(archiveId = '') {
+  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
+  if (!conversation) throw new Error('Сначала соберите переписку.');
+  if (conversation.isFragment) {
+    throw new Error('Для фрагмента нет канонического связанного документа.');
+  }
+
+  const linked = await getLinkedDoc(conversation.sourceUrl || '');
+  const docUrl = normalizeGoogleDocUrl(linked?.url || '');
+  if (!docUrl) throw new Error('Для этого чата нет связанного документа Google Docs.');
+
+  const docId = googleDocKey(docUrl);
+  const previous = await getDocExport(docId);
+  const messages = conversation.messages || [];
+  const currentConversationKey = conversationKey(conversation.sourceUrl);
+  let anchorIndex = -1;
+
+  if (previous?.conversationKey === currentConversationKey) {
+    if (previous.lastMessageId) {
+      anchorIndex = messages.findIndex(item => item.id === previous.lastMessageId);
+    }
+    if (anchorIndex < 0 &&
+        Array.isArray(previous.tailSignatures) &&
+        previous.tailSignatures.length >= 2) {
+      anchorIndex = findExportTailAnchor(messages, previous.tailSignatures);
+    }
+  }
+
+  if (anchorIndex < 0) {
+    throw new Error(
+      'Связанный документ найден, но точку продолжения подтвердить не удалось. ' +
+      'Полный архив повторно не вставлен.'
+    );
+  }
+
+  const delta = messages.slice(anchorIndex + 1);
+  if (delta.length) {
+    return appendMessagesToGoogleDocUrl(
+      conversation,
+      delta,
+      docUrl,
+      null,
+      { linkTarget: true }
+    );
+  }
+
+  const pendingImages = recoveredImageItems(conversation);
+  if (pendingImages.length) {
+    const patched = await patchRecoveredImagesToLinkedDoc(conversation.id);
+    return {
+      docUrl,
+      addedCount: 0,
+      noChanges: Boolean(patched.noChanges),
+      linkedDoc: await getLinkedDoc(conversation.sourceUrl || ''),
+      imageInsertedCount: Number(patched.inserted || 0),
+      imageFailedCount: Number(patched.failed || 0),
+      failedImages: patched.failures || []
+    };
+  }
+
+  const opened = await openLinkedGoogleDoc({ archiveId: conversation.id });
+  return {
+    docUrl: opened.docUrl,
+    addedCount: 0,
+    noChanges: true,
+    linkedDoc: opened.linkedDoc,
+    imageInsertedCount: 0,
+    imageFailedCount: 0,
+    failedImages: []
+  };
+}
+
 async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
   const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
@@ -4941,8 +5013,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           currentArchive = await getArchiveForUrl(tab.url);
           linkedDoc = await getLinkedDoc(tab.url);
         }
-        const archive = currentArchive || await getLastArchive();
-        if (!linkedDoc && archive?.sourceUrl) {
+        const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
+        const archive = activeIsConversation
+          ? currentArchive
+          : (currentArchive || await getLastArchive());
+        if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
         const drafts = await listDrafts();
@@ -5257,6 +5332,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           activeDoc: true,
           archiveId: message.archiveId || ''
         })) };
+      case 'ARCHIVER_EXPORT_LINKED_DOC':
+        return { ok: true, ...(await exportConversationToLinkedDoc(message.archiveId || '')) };
       case 'ARCHIVER_OPEN_LINKED_DOC':
         return await openLinkedGoogleDoc({
           archiveId: message.archiveId || '',
