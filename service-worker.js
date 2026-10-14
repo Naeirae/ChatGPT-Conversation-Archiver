@@ -2401,6 +2401,11 @@ async function hydrateUnfinishedDraftImages(passId = '') {
   if (!draft?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
   }
+  if (!['walk', 'finalizing'].includes(draft.capturePhase || '')) {
+    throw new Error(
+      'Сверка изображений доступна после начала непрерывного сохранения сверху вниз.'
+    );
+  }
   if (!isConversationUrl(draft.sourceUrl || '')) {
     throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
   }
