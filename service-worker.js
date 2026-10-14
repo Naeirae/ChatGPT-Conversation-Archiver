@@ -798,8 +798,8 @@ async function probeLiveCapture(job, timeoutMs = 1800) {
   return Promise.race([probe, timeout]);
 }
 
-async function setJob(patch) {
-  const current = await getJob();
+async function setJob(patch, { replace = false } = {}) {
+  const current = replace ? null : await getJob();
   const next = { ...(current || {}), ...patch, updatedAt: Date.now() };
   delete next.coverageRetry;
   await chrome.storage.local.set({ [ACTIVE_JOB_KEY]: next });
@@ -1373,7 +1373,7 @@ async function startCapture({
     message: captureTarget === 'current'
       ? 'Запуск: жду готовности текущей вкладки ChatGPT…'
       : 'Запуск: открываю и прогреваю рабочую вкладку ChatGPT…'
-  });
+  }, { replace: true });
 
   try {
     if (captureTarget === 'current') {
@@ -1702,6 +1702,9 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
   const jobId = makeJobId();
   await setJob({
     jobId,
+    tabId: failedJob.tabId ?? failedJob.sourceTabId ?? captureTab.id,
+    sourceTabId: failedJob.sourceTabId ?? failedJob.tabId ?? captureTab.id,
+    sourceUrl: failedJob.sourceUrl || captureTab.url || '',
     status: 'starting',
     phase: 'top',
     captureMode: failedJob.captureMode,
@@ -1710,14 +1713,20 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     recoveryDraftId: '',
     draftId: '',
     draftCount: 0,
+    resumeBaseCount: 0,
     captureTabId: captureTab.id,
     captureBoundary: boundary,
     captureRange: failedJob.captureRange || null,
+    restoreCanonicalArchiveId: failedJob.restoreCanonicalArchiveId || '',
+    restoreLastArchiveId: failedJob.restoreLastArchiveId || '',
+    pendingDocUrl: failedJob.pendingDocUrl || '',
+    pendingDocMode: failedJob.pendingDocMode || '',
+    baselineArchiveId: failedJob.baselineArchiveId || '',
     autoRecoveryPending: false,
     message: 'Продолжаю путь к началу в той же рабочей вкладке…',
     startedAt: Date.now(),
     finishedAt: null
-  });
+  }, { replace: true });
 
   try {
     await ensureChatGptContentScript(captureTab.id, jobId, {
@@ -2042,6 +2051,9 @@ async function resumeFailedCaptureFromWorkingTab() {
   const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
     jobId,
+    tabId: failedJob.tabId ?? failedJob.sourceTabId ?? captureTab.id,
+    sourceTabId: failedJob.sourceTabId ?? failedJob.tabId ?? captureTab.id,
+    sourceUrl: draft.sourceUrl || failedJob.sourceUrl || captureTab.url || '',
     status: 'starting',
     phase: 'top',
     captureMode: resumeMode,
@@ -2054,10 +2066,17 @@ async function resumeFailedCaptureFromWorkingTab() {
     resumeBaseCount: draft.messages.length,
     partialSaveEnabled: Boolean(draft.partialSaveEnabled),
     partialArchiveId: draft.partialArchiveId || '',
+    partialSavedAt: draft.partialSavedAt || '',
     recoveryAvailable: false,
     autoRecoveryPending: false,
     captureTabId: captureTab.id,
+    captureBoundary: boundary,
     captureRange: draft.captureRange || failedJob.captureRange || null,
+    restoreCanonicalArchiveId: failedJob.restoreCanonicalArchiveId || '',
+    restoreLastArchiveId: failedJob.restoreLastArchiveId || '',
+    pendingDocUrl: failedJob.pendingDocUrl || '',
+    pendingDocMode: failedJob.pendingDocMode || '',
+    baselineArchiveId: failedJob.baselineArchiveId || '',
     message: resumeNavigation
       ? 'Продолжаю навигацию вверх от сохранённого места…'
       : resumeMode === 'resume-draft'
@@ -2065,7 +2084,7 @@ async function resumeFailedCaptureFromWorkingTab() {
         : 'Возвращаю рабочую вкладку к началу для восстановления…',
     startedAt: Date.now(),
     finishedAt: null
-  });
+  }, { replace: true });
 
   try {
     await ensureChatGptContentScript(captureTab.id, jobId, {
