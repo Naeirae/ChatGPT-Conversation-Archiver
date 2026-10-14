@@ -2403,8 +2403,9 @@ async function compareUnfinishedPass(passId = '') {
   }
 
   const identity = message => {
-    if (message?.id) return 'id:' + message.id;
-    return 'sig:' + messageSignature(message?.role || '', message?.text || '');
+    const text = String(message?.text || '').trim();
+    if (text) return 'sig:' + messageSignature(message?.role || '', text);
+    return message?.id ? 'id:' + message.id : '';
   };
 
   const passMessages = unfinishedPass.messages || [];
@@ -2432,6 +2433,97 @@ async function compareUnfinishedPass(passId = '') {
     sharedCount,
     onlyInUnfinishedPassCount: [...passSet].filter(key => !archiveSet.has(key)).length,
     onlyInArchiveCount: [...archiveSet].filter(key => !passSet.has(key)).length
+  };
+}
+
+async function reconcileUnfinishedPassIntoArchive(passId = '') {
+  const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
+  if (!draft?.messages?.length) {
+    throw new Error('Сохранённый незавершённый проход не найден.');
+  }
+  if (!['walk', 'finalizing'].includes(draft.capturePhase || '')) {
+    throw new Error('Этот проход ещё не является непрерывной сохранённой частью от начала чата.');
+  }
+
+  const archive = await getArchiveForUrl(draft.sourceUrl || '');
+  if (!archive?.messages?.length) {
+    throw new Error('Для этого чата нет завершённого локального архива, с которым можно сверить сохранённую часть.');
+  }
+
+  const draftMessages = draft.messages || [];
+  const archiveMessages = archive.messages || [];
+  const matches = [];
+  let draftFrom = 0;
+
+  for (let archiveIndex = 0; archiveIndex < archiveMessages.length; archiveIndex++) {
+    let found = -1;
+    for (let i = draftFrom; i < draftMessages.length; i++) {
+      if (storedMessagesMatch(archiveMessages[archiveIndex], draftMessages[i])) {
+        found = i;
+        break;
+      }
+    }
+    if (found < 0) {
+      matches.push({ archiveIndex, draftIndex: -1 });
+      continue;
+    }
+    matches.push({ archiveIndex, draftIndex: found });
+    draftFrom = found + 1;
+  }
+
+  const matched = matches.filter(item => item.draftIndex >= 0);
+  if (!matched.length) {
+    throw new Error('Сверка не нашла доказуемого общего участка между незавершённым проходом и локальным архивом.');
+  }
+
+  const lastMatch = matched[matched.length - 1];
+  const unresolvedInside = matches.filter(item =>
+    item.archiveIndex <= lastMatch.archiveIndex && item.draftIndex < 0
+  );
+  if (unresolvedInside.length) {
+    throw new Error(
+      'Сверка остановлена: внутри общего диапазона есть сообщения локального архива, ' +
+      'которых нет в незавершённом проходе. Архив не изменён.'
+    );
+  }
+
+  const oldByDraftIndex = new Map(
+    matched.map(item => [item.draftIndex, archiveMessages[item.archiveIndex]])
+  );
+  const mergedPrefix = draftMessages.map((message, index) => {
+    const old = oldByDraftIndex.get(index);
+    return old ? mergeStoredMessageCapture(message, old) : message;
+  });
+  const archiveTail = archiveMessages.slice(lastMatch.archiveIndex + 1);
+  const messages = mergedPrefix.concat(archiveTail);
+  const addedCount = draftMessages.length - matched.length;
+  const allImages = messages.flatMap(item => item.images || []);
+
+  const updated = {
+    ...archive,
+    messages,
+    messageCount: messages.length,
+    imageCount: allImages.length,
+    imageBinaryReady: allImages.filter(storedImageReady).length,
+    imageBinaryFailed: allImages.filter(image => image?.binaryStatus === 'failed').length,
+    capturedAt: new Date().toISOString(),
+    lastCaptureMode: 'reconcile-unfinished',
+    lastCaptureAddedCount: Math.max(0, addedCount),
+    previousMessageCount: archiveMessages.length,
+    lastMessageId: messages[messages.length - 1]?.id || archive.lastMessageId || ''
+  };
+
+  await putArchive(updated);
+  await indexArchive(updated);
+  await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: updated.id });
+
+  return {
+    ok: true,
+    archive: summarize(updated),
+    previousMessageCount: archiveMessages.length,
+    messageCount: messages.length,
+    addedCount: Math.max(0, addedCount),
+    matchedCount: matched.length
   };
 }
 
@@ -4374,6 +4466,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_COMPARE_UNFINISHED_PASS':
         return await compareUnfinishedPass(message.passId || message.draftId || '');
+      case 'ARCHIVER_RECONCILE_UNFINISHED_PASS':
+        return await reconcileUnfinishedPassIntoArchive(message.passId || message.draftId || '');
       case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES':
         return await hydrateUnfinishedDraftImages(message.passId || message.draftId || '');
       case 'ARCHIVER_GET_LAST':
