@@ -3914,48 +3914,6 @@
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
     }
-    if (message && message.type === 'ARCHIVER_HYDRATE_DRAFT_IMAGES') {
-      const draftId = String(message.draftId || '');
-      if (!draftId) {
-        sendResponse({ ok: false, error: 'Не указан незавершённый сбор.' });
-        return false;
-      }
-      (async () => {
-        const key = 'draft:' + draftId;
-        const stored = await chrome.storage.local.get(key);
-        const draft = stored[key];
-        if (!draft?.messages?.length) {
-          throw new Error('Незавершённый сбор не найден в рабочей вкладке.');
-        }
-        const targets = draft.messages.filter(item =>
-          (item.images || []).some(image =>
-            image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
-          )
-        );
-        const stats = targets.length
-          ? await hydrateMessageImages(targets, { onlyMissing: true, reportProgress: false })
-          : { embedded: 0, failed: 0, unique: 0 };
-        const allImages = draft.messages.flatMap(item => item.images || []);
-        const next = {
-          ...draft,
-          imageCount: allImages.length,
-          imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
-          imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length,
-          capturedAt: new Date().toISOString()
-        };
-        await chrome.storage.local.set({ [key]: next });
-        return {
-          ok: true,
-          imageCount: next.imageCount,
-          imageBinaryReady: next.imageBinaryReady,
-          imageBinaryFailed: next.imageBinaryFailed,
-          embedded: stats.embedded
-        };
-      })().then(sendResponse).catch(error => {
-        sendResponse({ ok: false, error: error?.message || String(error) });
-      });
-      return true;
-    }
     if (message && message.type === 'ARCHIVER_CONFIRM_TOP') {
       if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
         sendResponse({ ok: false, error: 'Активный сбор для ручной отметки начала не найден.' });
