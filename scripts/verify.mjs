@@ -81,6 +81,10 @@ try {
       !contentSource.includes("closeSelection.textContent = 'Завершить разметку'")) {
     fail('manual full range: explicit end marker must not trigger a pre-scan and marking exit must be visible');
   }
+  if (!contentSource.includes('strictStable: Boolean(selectedFragment.end.id)') ||
+      !contentSource.includes('if (boundary.strictStable) return false')) {
+    fail('manual full range: manually marked stable end must not fall back to text-signature matching');
+  }
   if (!contentSource.includes('resolveFragmentTurnFromTarget') ||
       !contentSource.includes("document.addEventListener('click'") ||
       !contentSource.includes("'archiver-fragment-overlay'") ||
