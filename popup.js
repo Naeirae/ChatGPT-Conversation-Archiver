@@ -382,7 +382,7 @@ function renderUnfinishedPasses(items = []) {
       secondary.appendChild(reconcileSaved);
     }
 
-    if (item.copyPassId && item.canExportCurrent) {
+    if (item.exportPassId && item.canExportCurrent) {
       const hydrateImages = document.createElement('button');
       hydrateImages.textContent = 'Сверить и добрать изображения';
       hydrateImages.onclick = async () => {
@@ -391,7 +391,7 @@ function renderUnfinishedPasses(items = []) {
         try {
           const result = await chrome.runtime.sendMessage({
             type: 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES',
-            passId: item.copyPassId
+            passId: item.exportPassId
           });
           if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
           setStatus('Сверка изображений сохранённой части запущена…');
