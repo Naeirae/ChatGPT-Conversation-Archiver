@@ -735,6 +735,36 @@ async function recordRunHistory(job) {
   await chrome.storage.local.set({ [RUN_HISTORY_KEY]: next });
 }
 
+async function confirmCaptureTop() {
+  const job = await getJob();
+  if (!job || !['starting', 'running'].includes(job.status)) {
+    throw new Error('Сейчас нет активного сбора.');
+  }
+  if (job.phase !== 'top') {
+    throw new Error('Ручная отметка начала доступна только на этапе поиска начала.');
+  }
+  if (job.captureTabId == null) {
+    throw new Error('Рабочая вкладка сбора недоступна.');
+  }
+
+  const result = await chrome.tabs.sendMessage(job.captureTabId, {
+    type: 'ARCHIVER_CONFIRM_TOP',
+    jobId: job.jobId
+  }).catch(() => ({ ok: false, error: 'Рабочая вкладка не ответила.' }));
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось передать ручную отметку начала.');
+
+  const next = await appendRunLog({
+    message: 'Начало переписки отмечено вручную; переключаюсь на проход сверху вниз.'
+  }, {
+    level: 'info',
+    code: 'TOP_CONFIRMED_BY_USER',
+    message: 'Пользователь подтвердил, что рабочая вкладка находится в начале переписки.',
+    phase: 'top',
+    count: Number(job.count || 0)
+  });
+  return { ok: true, job: next };
+}
+
 async function pauseCapture() {
   const job = await getJob();
   if (!job || !['starting', 'running'].includes(job.status)) return { ok: true, job };
@@ -4097,6 +4127,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await compareUnfinishedPass(message.passId || message.draftId || '');
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
+      case 'ARCHIVER_CONFIRM_TOP':
+        return await confirmCaptureTop();
       case 'ARCHIVER_PAUSE_CAPTURE':
         return await pauseCapture();
       case 'ARCHIVER_RESUME_CAPTURE':
