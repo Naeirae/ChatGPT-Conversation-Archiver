@@ -1829,14 +1829,29 @@ async function resumeFailedCaptureFromWorkingTab() {
     return resumeNavigationOnlyFromWorkingTab(failedJob);
   }
 
-  // The resumed run may stop before writing its first checkpoint.
-  // In that case the new draft ID has no record yet: use the prior prefix.
-  let draft = await getDraft(failedJob.draftId);
-  if (!draft?.messages?.length && failedJob.recoveryDraftId) {
-    draft = await getDraft(failedJob.recoveryDraftId);
+  // A failed retry can leave a newer but shallower technical draft while the
+  // previous recovery draft still contains a deeper chronological prefix.
+  // Choose by recovery value, not merely by which ID was written last.
+  const draftIds = [...new Set([
+    failedJob.draftId || '',
+    failedJob.recoveryDraftId || ''
+  ].filter(Boolean))];
+  const draftCandidates = [];
+  for (const id of draftIds) {
+    const candidate = await getDraft(id);
+    if (!candidate?.messages?.length) continue;
+    draftCandidates.push(await reconcileUnfinishedPrefix(candidate));
   }
-  if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
-  draft = await reconcileUnfinishedPrefix(draft);
+  if (!draftCandidates.length) {
+    throw new Error('Сохранённый незавершённый проход не найден.');
+  }
+  draftCandidates.sort((a, b) =>
+    Number(['walk', 'finalizing'].includes(b.capturePhase || '')) -
+      Number(['walk', 'finalizing'].includes(a.capturePhase || '')) ||
+    Number(b.messages?.length || 0) - Number(a.messages?.length || 0) ||
+    String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+  );
+  let draft = draftCandidates[0];
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
   if (!captureTab?.id ||
@@ -3679,6 +3694,11 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     tab = await chrome.tabs.create({ url: DOCS_NEW_URL, active: true });
     await waitForTabComplete(tab.id);
     await sleep(2500);
+
+    // A new Google Doc must always receive the archive title, including
+    // partial/unfinished snapshots. Completeness is unrelated to document naming.
+    const documentTitle = String(conversation.title || 'ChatGPT conversation').trim();
+    await renameGoogleDoc(tab.id, documentTitle).catch(() => false);
   }
 
   const pasted = await pasteArchiveIntoGoogleDoc(
