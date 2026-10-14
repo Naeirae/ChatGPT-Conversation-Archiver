@@ -157,6 +157,31 @@ test('one-off doc export records target without replacing canonical link', async
   assert.equal(linked.docId, 'doc-primary');
 });
 
+test('clearLinkedDoc removes the canonical link and prevents legacy export resurrection', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage, { now: () => 999 });
+  const conversation = {
+    id: 'archive-clear',
+    sourceUrl: 'https://chatgpt.com/c/conv-clear',
+    messages: [{ id: 'm1', role: 'user', text: 'Один' }]
+  };
+
+  await store.recordDocExport(
+    conversation,
+    'https://docs.google.com/document/d/doc-clear/edit'
+  );
+
+  const cleared = await store.clearLinkedDoc(
+    conversation.sourceUrl,
+    'https://docs.google.com/document/d/doc-clear/edit'
+  );
+
+  assert.equal(cleared.cleared, true);
+  assert.equal(await store.getLinkedDoc(conversation.sourceUrl), null);
+  assert.equal((await store.getDocExport('doc-clear')).linkEligible, false);
+  assert.equal((await store.getDocExport('doc-clear')).unlinkedAt, 999);
+});
+
 test('one-off doc export never becomes the recovered canonical link', async () => {
   const storage = fakeStorage();
   const store = createArchiveStore(storage);
