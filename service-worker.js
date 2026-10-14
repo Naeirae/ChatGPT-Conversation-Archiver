@@ -1580,7 +1580,7 @@ async function cancelCapture() {
     job.phase === 'top' &&
     job.captureBoundary?.kind &&
     job.captureBoundary?.key &&
-    ['full', 'fragment', 'manual-full'].includes(job.captureMode)
+    ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(job.captureMode)
   );
   const canRecover = Boolean(
     job.captureTabId != null &&
@@ -1640,7 +1640,7 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     throw new Error('Не сохранена нижняя метка снимка; безопасно продолжить этот проход нельзя.');
   }
 
-  if (!['full', 'fragment', 'manual-full'].includes(failedJob.captureMode)) {
+  if (!['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(failedJob.captureMode)) {
     throw new Error('Этот этап нельзя безопасно продолжить без сохранённого черновика.');
   }
 
@@ -1801,7 +1801,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     job.phase === 'top' &&
     boundary?.kind &&
     boundary?.key &&
-    ['full', 'fragment', 'manual-full'].includes(job.captureMode)
+    ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(job.captureMode)
   );
 
   let preservedCaptureTabId = null;
@@ -1983,7 +1983,7 @@ async function resumeFailedCaptureFromWorkingTab() {
 
   const jobId = makeJobId();
   const resumeNavigation = draft.capturePhase === 'top' &&
-    ['full', 'fragment', 'manual-full'].includes(draft.captureMode);
+    ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(draft.captureMode);
   const resumeMode = resumeNavigation
     ? draft.captureMode
     : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
@@ -2299,7 +2299,7 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
 
 
   return startCapture({
-    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'manual-full'].includes(draft.captureMode)
+    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
     resumeNavigation: draft.capturePhase === 'top',
     resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
