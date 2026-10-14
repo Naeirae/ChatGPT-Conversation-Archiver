@@ -1176,6 +1176,7 @@ function render(data) {
   $('captureFragment').disabled = Boolean(running);
   $('captureManualFull').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
+  $('openMarkingTab').disabled = Boolean(running);
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
     ? (isFragmentRun
@@ -1464,13 +1465,30 @@ $('markFragment').onclick = async () => {
       enabled: !current?.enabled
     });
     if (!next?.ok) throw new Error('Не удалось переключить режим разметки.');
-    button.textContent = next.enabled ? 'Закончить разметку' : 'Отметить фрагмент';
+    button.textContent = next.enabled ? 'Закончить разметку' : 'Отметить границы в текущей вкладке';
     $('fragmentHint').textContent = next.enabled
-      ? 'Режим разметки включён. Наведите курсор на нужную реплику.'
+      ? 'Разметка включена. Закройте popup, кликните по нужной реплике и используйте постоянную панель «Начало / Конец».'
       : 'Режим разметки выключен. Выбранные границы сохранены.';
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
+    button.disabled = false;
+  }
+};
+
+$('openMarkingTab').onclick = async () => {
+  const button = $('openMarkingTab');
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OPEN_MARKING_TAB' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть рабочую вкладку для разметки.');
+    await saveSettings({ captureTarget: 'current' }, null);
+    $('captureTarget').value = 'current';
+    updateCaptureTargetHint('current');
+    $('fragmentHint').textContent =
+      'Рабочая вкладка открыта. Там кликните по реплике, отметьте «Начало» и «Конец», затем снова откройте Архиватор и запустите полный диапазон.';
+  } catch (error) {
+    setStatus(error.message || String(error), true);
     button.disabled = false;
   }
 };
