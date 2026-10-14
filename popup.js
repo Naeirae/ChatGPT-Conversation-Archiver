@@ -1446,6 +1446,27 @@ $('capture').onclick = async () => {
   }
 };
 
+async function refreshBoundaryMarkingControl() {
+  const button = $('markFragment');
+  if (!button) return;
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
+  if (!tab?.id || !/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(tab.url || '')) {
+    button.textContent = 'Отметить границы в текущей вкладке';
+    return;
+  }
+  const current = await chrome.tabs.sendMessage(tab.id, {
+    type: 'ARCHIVER_GET_FRAGMENT_SELECTION'
+  }).catch(() => null);
+  const enabled = Boolean(current?.ok && current.enabled);
+  button.textContent = enabled
+    ? 'Завершить разметку'
+    : 'Отметить границы в текущей вкладке';
+  if (enabled) {
+    $('fragmentHint').textContent =
+      'Разметка включена. Чтобы выйти, нажмите «Завершить разметку» здесь или на панели Архиватора в чате.';
+  }
+}
+
 $('markFragment').onclick = async () => {
   const button = $('markFragment');
   button.disabled = true;
@@ -2275,6 +2296,7 @@ $('reloadExtension').addEventListener('click', () => {
     updateCaptureTargetHint($('captureTarget').value);
     renderInterfaceAppearanceControls(settings);
     applyInterfaceAppearance(settings);
+    void refreshBoundaryMarkingControl().catch(() => {});
 
     // Active capture state is tiny and must win the startup race. Load it before
     // the archive library, update check, tour metadata, or any other heavy UI data.
