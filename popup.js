@@ -390,12 +390,9 @@ function renderUnfinishedPasses(items = []) {
             passId: item.copyPassId
           });
           if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
-          setStatus(
-            'Изображения проверены: ' +
-            Number(result.imageBinaryReady || 0) + ' подготовлено, ' +
-            Number(result.imageBinaryFailed || 0) + ' не удалось подготовить.'
-          );
-          await getState();
+          setStatus('Сверка изображений сохранённой части запущена…');
+          if (result.job) render({ ...state, job: result.job });
+          startPolling();
         } catch (error) {
           setStatus(error.message || String(error), true);
         } finally {
@@ -873,6 +870,7 @@ function renderHistory(history = []) {
     compare: 'Сверка',
     sync: 'Восстановление',
     images: 'Сверка и добор изображений',
+    'images-draft': 'Сверка изображений незавершённой части',
     reconcile: 'Сверка и добор сообщений',
     'manual-full': 'Ручной полный диапазон',
     'retry-walk': 'Повтор прохода вниз'
@@ -1198,7 +1196,7 @@ function render(data) {
     ['starting', 'running'].includes(job?.status || '') &&
     job?.phase === 'top' &&
     job?.captureTabId != null &&
-    ['full', 'images', 'reconcile', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
+    ['full', 'images', 'images-draft', 'reconcile', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
   );
   $('confirmTop').classList.toggle('hidden', !canConfirmTop);
   $('confirmTop').disabled = !canConfirmTop;
