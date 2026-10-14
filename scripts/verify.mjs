@@ -185,6 +185,7 @@ try {
 try {
   const popupHtml = await readFile('popup.html', 'utf8');
   const popupJs = await readFile('popup.js', 'utf8');
+  const serviceWorkerSource = await readFile('service-worker.js', 'utf8');
   const requiredUiIds = [
     'status',
     'interfaceSettings',
