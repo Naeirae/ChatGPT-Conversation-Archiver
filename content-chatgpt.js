@@ -1796,11 +1796,6 @@
   }
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
-    let confirmedIdle = 0;
-    let previousSignature = '';
-    let previousSize = -1;
-    let firstVisibleKey = '';
-
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
       if (state.manualTopConfirmed) {
@@ -1814,35 +1809,29 @@
       if (sharedConversationStartVisible()) return;
 
       if (await recoverVisibleLoadError('top', map.size)) {
-        confirmedIdle = 0;
-        previousSignature = '';
-        previousSize = -1;
-        firstVisibleKey = '';
+        // Continue from the current viewport after ChatGPT recovers.
       }
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
-      // Upward navigation counts in memory; disk writes begin on the downward pass.
+
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
       const turnsBefore = orderedTurns();
-      const signature = visibleTurnSignature();
       const firstBefore = turnsBefore.length
         ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
         : '';
 
       await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
-        iteration: i + 1,
-        topIdleConfirmations: confirmedIdle
+        iteration: i + 1
       });
 
-      // Push harder than a single viewport. ChatGPT may sit visually at the top
-      // while an older virtualized chunk is still loading.
-      await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
+      await physicalScroll('up', 10, { settleTimeout: 2500, quietWindow: 350 });
+
       if (state.manualTopConfirmed) {
         await progress('Этап 1/3: начало подтверждено вручную. Начинаю сохранение сверху вниз…', map.size, {
           phase: 'walk',
@@ -1857,84 +1846,52 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
       recordNavigationWindow(navigationWindows, settings);
-      // Upward navigation counts in memory; disk writes begin on the downward pass.
+
       if (startAnchor && orderedTurns().some(turn =>
         anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
 
-      let nextSignature = visibleTurnSignature();
-      let turnsAfter = orderedTurns();
-      let firstAfter = turnsAfter.length
+      const turnsAfter = orderedTurns();
+      const firstAfter = turnsAfter.length
         ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
         : '';
-      let nextSize = map.size;
 
-      const unchanged =
-        Boolean(nextSignature) &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        nextSize === previousSize &&
-        firstAfter === firstBefore &&
-        firstAfter === firstVisibleKey;
-
-      if (unchanged) {
-        // A temporarily stalled/lazy-loading tab must not be mistaken for the
-        // true beginning. Give it a real loading window, then probe upward again.
-        await progress('Этап 1/3: проверяю, не догружается ли начало…', map.size, {
+      // At the real top only the first turn matters. Virtualized tail nodes may
+      // keep changing and must not reset top detection forever.
+      if (physicalScrollStartVisible() && firstBefore && firstAfter === firstBefore && !visibleRetryButton()) {
+        await progress('Этап 1/3: проверяю начало одним коротким контрольным ожиданием…', map.size, {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: confirmedIdle + 1
+          topIdleConfirmations: 1,
+          force: true
         });
 
-        await sleep(900);
+        await sleep(450);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
         recordNavigationWindow(navigationWindows, settings);
 
-        const afterWaitSignature = visibleTurnSignature();
-        turnsAfter = orderedTurns();
-        const afterWaitFirst = turnsAfter.length
-          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+        const firstAfterWaitTurn = orderedTurns()[0] || null;
+        const firstAfterWait = firstAfterWaitTurn
+          ? (turnStableKey(firstAfterWaitTurn) || turnTextSignature(firstAfterWaitTurn))
           : '';
 
-        if (
-          afterWaitSignature === nextSignature &&
-          map.size === nextSize &&
-          afterWaitFirst === firstAfter
-        ) {
-          confirmedIdle++;
-        } else {
-          confirmedIdle = 0;
-          nextSignature = afterWaitSignature;
-          firstAfter = afterWaitFirst;
-          nextSize = map.size;
+        if (physicalScrollStartVisible() && firstAfterWait === firstAfter && !visibleRetryButton()) {
+          if (startAnchor) {
+            throw new Error('Не удалось найти отмеченное начало фрагмента: достигнуто начало переписки.');
+          }
+          await progress('Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз', map.size, {
+            phase: 'walk',
+            iteration: i + 1,
+            topIdleConfirmations: 1,
+            force: true
+          });
+          return;
         }
-      } else {
-        confirmedIdle = 0;
-      }
-
-      previousSignature = nextSignature;
-      previousSize = nextSize;
-      firstVisibleKey = firstAfter;
-
-      // At the physical top, two unchanged probes are enough. If the page is
-      // not physically at the top, keep the stricter lazy-load protection.
-      const topConfirmed = physicalScrollStartVisible()
-        ? confirmedIdle >= 2
-        : confirmedIdle >= 3;
-      if (topConfirmed && !visibleRetryButton()) {
-        if (startAnchor) throw new Error('Не удалось найти отмеченное начало фрагмента: достигнуто начало переписки.');
-        await progress('Этап 1/3: начало подтверждено повторными проверками · собрано ' + map.size + ' сообщений', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          topIdleConfirmations: confirmedIdle,
-          force: true
-        });
-        return;
       }
     }
 
-    throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.');
+    throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки.');
   }
 
   function sharedConversationStartVisible() {
@@ -1951,9 +1908,6 @@
       timeoutMs = 2 * 60 * 60 * 1000
     } = {}
   ) {
-    let confirmedIdle = 0;
-    let previousSignature = '';
-    let firstVisibleKey = '';
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -1965,21 +1919,12 @@
             ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
             : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
           existingCount,
-          {
-            phase: 'walk',
-            manualTopConfirmed: true,
-            retryWalkOnly: !fullCapture,
-            force: true
-          }
+          { phase: 'walk', manualTopConfirmed: true, retryWalkOnly: !fullCapture, force: true }
         );
         return;
       }
 
-      if (await recoverVisibleLoadError('top', existingCount)) {
-        confirmedIdle = 0;
-        previousSignature = '';
-        firstVisibleKey = '';
-      }
+      await recoverVisibleLoadError('top', existingCount);
 
       if (sharedConversationStartVisible()) {
         await progress('Начало опубликованной переписки подтверждено.', existingCount, {
@@ -1987,16 +1932,16 @@
         });
         return;
       }
-      const turnsBefore = orderedTurns();
-      const signature = visibleTurnSignature();
-      const firstBefore = turnsBefore.length
-        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
+
+      const firstBeforeTurn = orderedTurns()[0] || null;
+      const firstBefore = firstBeforeTurn
+        ? (turnStableKey(firstBeforeTurn) || turnTextSignature(firstBeforeTurn))
         : '';
 
       await progress(
         fullCapture
-          ? 'Этап 1/3: быстро иду к началу · можно помочь вручную, проматывая эту же вкладку вверх'
-          : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений · можно помочь вручную…',
+          ? 'Этап 1/3: быстро иду к началу · можно помочь вручную'
+          : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений…',
         existingCount,
         {
           phase: 'top',
@@ -2006,14 +1951,7 @@
         }
       );
 
-      // This pass is navigation only. Large upward wheel bursts are safe because
-      // no messages are committed here; the real save happens afterwards,
-      // chronologically from top to the already fixed lower boundary.
-      await physicalScroll(
-        'up',
-        24,
-        { settleTimeout: 4500, quietWindow: 450 }
-      );
+      await physicalScroll('up', 24, { settleTimeout: 2500, quietWindow: 300 });
 
       if (state.manualTopConfirmed) {
         await progress(
@@ -2021,12 +1959,7 @@
             ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
             : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
           existingCount,
-          {
-            phase: 'walk',
-            manualTopConfirmed: true,
-            retryWalkOnly: !fullCapture,
-            force: true
-          }
+          { phase: 'walk', manualTopConfirmed: true, retryWalkOnly: !fullCapture, force: true }
         );
         return;
       }
@@ -2037,74 +1970,45 @@
         });
         return;
       }
-      let nextSignature = visibleTurnSignature();
-      let turnsAfter = orderedTurns();
-      let firstAfter = turnsAfter.length
-        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+
+      const firstAfterTurn = orderedTurns()[0] || null;
+      const firstAfter = firstAfterTurn
+        ? (turnStableKey(firstAfterTurn) || turnTextSignature(firstAfterTurn))
         : '';
 
-      const unchanged =
-        Boolean(nextSignature) &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        firstAfter === firstBefore &&
-        firstAfter === firstVisibleKey;
+      if (physicalScrollStartVisible() && firstBefore && firstAfter === firstBefore && !visibleRetryButton()) {
+        await progress('Этап 1/3: проверяю начало одним коротким контрольным ожиданием…', existingCount, {
+          phase: 'top',
+          iteration: i + 1,
+          topIdleConfirmations: 1,
+          retryWalkOnly: !fullCapture,
+          manualAssistAllowed: true,
+          force: true
+        });
 
-      if (unchanged) {
-        await progress(
-          'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
-          existingCount,
-          {
-            phase: 'top',
-            iteration: i + 1,
-            topIdleConfirmations: confirmedIdle + 1,
-            retryWalkOnly: !fullCapture,
-            manualAssistAllowed: true
-          }
-        );
-
-        await sleep(700);
-        const afterWaitSignature = visibleTurnSignature();
-        turnsAfter = orderedTurns();
-        const afterWaitFirst = turnsAfter.length
-          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
+        await sleep(450);
+        const firstAfterWaitTurn = orderedTurns()[0] || null;
+        const firstAfterWait = firstAfterWaitTurn
+          ? (turnStableKey(firstAfterWaitTurn) || turnTextSignature(firstAfterWaitTurn))
           : '';
 
-        if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
-          confirmedIdle++;
-        } else {
-          // Manual scrolling or a newly loaded older chunk simply becomes the
-          // new current position. No separate manual mode is required.
-          confirmedIdle = 0;
-          nextSignature = afterWaitSignature;
-          firstAfter = afterWaitFirst;
+        if (physicalScrollStartVisible() && firstAfterWait === firstAfter && !visibleRetryButton()) {
+          await progress(
+            fullCapture
+              ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+              : 'Начало подтверждено. Запускаю хронологический проход вниз…',
+            existingCount,
+            {
+              phase: 'walk',
+              iteration: i + 1,
+              topIdleConfirmations: 1,
+              retryWalkOnly: !fullCapture,
+              manualAssistAllowed: true,
+              force: true
+            }
+          );
+          return;
         }
-      } else {
-        confirmedIdle = 0;
-      }
-
-      previousSignature = nextSignature;
-      firstVisibleKey = firstAfter;
-
-      const topConfirmed = physicalScrollStartVisible()
-        ? confirmedIdle >= 2
-        : confirmedIdle >= 3;
-      if (topConfirmed && !visibleRetryButton()) {
-        await progress(
-          fullCapture
-            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-          existingCount,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            topIdleConfirmations: confirmedIdle,
-            retryWalkOnly: !fullCapture,
-            manualAssistAllowed: true,
-            force: true
-          }
-        );
-        return;
       }
     }
 
