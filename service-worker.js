@@ -1031,6 +1031,64 @@ function makeJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+async function ensureBoundaryMarkingScript(tabId) {
+  const expectedVersion = chrome.runtime.getManifest().version;
+  let ping = null;
+  try {
+    ping = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_PING' });
+  } catch (_) {}
+
+  if (!ping?.ok || ping.version !== expectedVersion) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
+    await sleep(80);
+    ping = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_PING' }).catch(() => null);
+  }
+
+  if (!ping?.ok || ping.version !== expectedVersion) {
+    throw new Error(
+      'Вкладка ChatGPT использует устаревший код архиватора. Обновите страницу и повторите.'
+    );
+  }
+
+  const result = await chrome.tabs.sendMessage(tabId, {
+    type: 'ARCHIVER_SET_FRAGMENT_SELECTION',
+    enabled: true
+  });
+  if (!result?.ok) {
+    throw new Error(result?.error || 'Не удалось включить режим разметки.');
+  }
+  return result;
+}
+
+async function openBoundaryMarkingTab() {
+  const sourceTab = await getActiveTab();
+  if (!sourceTab?.id || !isConversationUrl(sourceTab.url || '')) {
+    throw new Error('Откройте переписку ChatGPT в активной вкладке.');
+  }
+
+  const current = await getJob();
+  if (current && ['starting', 'running', 'paused'].includes(current.status)) {
+    throw new Error('Сначала завершите или остановите текущий сбор.');
+  }
+
+  const tab = await chrome.tabs.create({
+    url: sourceTab.url,
+    active: true
+  });
+  if (!tab?.id) throw new Error('Не удалось открыть рабочую вкладку.');
+
+  await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
+  await waitForChatTabComplete(tab.id);
+  await waitForChatDomReady(tab.id, 45000);
+  await ensureBoundaryMarkingScript(tab.id);
+
+  return {
+    ok: true,
+    tabId: tab.id,
+    sourceUrl: sourceTab.url
+  };
+}
+
 async function ensureChatGptContentScript(tabId, jobId, options = {}) {
   const payload = {
     type: 'ARCHIVER_START_CAPTURE',
@@ -4519,6 +4577,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case 'ARCHIVER_CHECK_UPDATE':
         return await checkForUpdate();
+      case 'ARCHIVER_OPEN_MARKING_TAB':
+        return await openBoundaryMarkingTab();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
         return await startCapture({ mode: 'fragment', captureTarget: message.captureTarget || 'copy' });
       case 'ARCHIVER_CAPTURE_MANUAL_FULL':
