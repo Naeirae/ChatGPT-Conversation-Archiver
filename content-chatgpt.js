@@ -2554,7 +2554,7 @@
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
-    for (let attempt = 0; attempt < 14; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
@@ -2572,7 +2572,7 @@
       await physicalScroll(
         'up',
         1,
-        { settleTimeout: 4000, quietWindow: 650 }
+        { settleTimeout: 2200, quietWindow: 350 }
       );
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -2629,7 +2629,7 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts, { settleTimeout: 5000, quietWindow: 850 });
+      await physicalScroll('down', bursts, { settleTimeout: 2600, quietWindow: 380 });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -2681,7 +2681,7 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 3 && physicalScrollEndVisible()) {
+      if (stable >= 2 && physicalScrollEndVisible()) {
         await progress(
           'Этап 2/3: достигнут физический конец переписки; сохраняю непрерывно собранный результат.',
           map.size,
