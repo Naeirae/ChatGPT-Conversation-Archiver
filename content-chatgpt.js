@@ -391,8 +391,10 @@
     const wrapper = turn.closest?.('[data-turn-key]') || turn.querySelector?.('[data-turn-key]');
     const wrapperKey = String(wrapper?.getAttribute?.('data-turn-key') || '').trim();
     if (wrapperKey) {
-      return 'turn:' + wrapperKey + ':' + role + ':' +
-        hashText(normalizeMatchText(turnMessageText(turn)));
+      // The wrapper UUID is the stable identity. Do not mix mutable rendered
+      // text into it: streaming/status/DOM rebuilds can change text without
+      // changing the underlying conversation turn.
+      return 'turn:' + wrapperKey + ':' + role;
     }
 
     const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
@@ -439,14 +441,23 @@
       kind,
       key,
       role: String(value.role || ''),
-      ordinal: Number.isFinite(Number(value.ordinal)) ? Number(value.ordinal) : -1
+      ordinal: Number.isFinite(Number(value.ordinal)) ? Number(value.ordinal) : -1,
+      signature: String(value.signature || '')
     };
   }
 
   function makeCaptureBoundary(turns) {
     for (let i = turns.length - 1; i >= 0; i--) {
       const key = turnStableKey(turns[i]);
-      if (key) return { kind: 'stable', key, role: roleOf(turns[i]) || '', ordinal: i };
+      if (key) {
+        return {
+          kind: 'stable',
+          key,
+          role: roleOf(turns[i]) || '',
+          ordinal: i,
+          signature: turnTextSignature(turns[i])
+        };
+      }
     }
 
     for (let i = turns.length - 1; i >= 0; i--) {
@@ -461,8 +472,23 @@
 
   function matchesBoundary(turn, boundary) {
     if (!boundary || !turn) return false;
-    if (boundary.kind === 'stable') return turnStableKey(turn) === boundary.key;
+    if (boundary.kind === 'stable') {
+      if (turnStableKey(turn) === boundary.key) return true;
+      return Boolean(boundary.signature && turnTextSignature(turn) === boundary.signature);
+    }
     return turnTextSignature(turn) === boundary.key;
+  }
+
+  function physicalScrollEndVisible() {
+    const turns = orderedTurns();
+    const last = turns[turns.length - 1] || null;
+    const scroller = findScrollContainer(last);
+    if (!scroller) return false;
+    const top = Number(scroller.scrollTop || 0);
+    const height = Number(scroller.clientHeight || 0);
+    const total = Number(scroller.scrollHeight || 0);
+    if (!height || !total) return false;
+    return top + height >= total - Math.max(24, Math.round(height * 0.04));
   }
 
   function boundaryIsVisible(boundary) {
@@ -2611,7 +2637,7 @@
           force: true
         });
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        return;
+        return { boundaryReached: true, physicalEndReached: false };
       }
 
       const signature = visibleTurnSignature();
@@ -2640,7 +2666,7 @@
           force: true
         });
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        return;
+        return { boundaryReached: true, physicalEndReached: false };
       }
 
       const afterRefs = visibleNavigationRefsLightweight();
@@ -2676,6 +2702,23 @@
 
       previousSignature = nextSignature;
       previousSize = map.size;
+
+      if (stable >= 3 && physicalScrollEndVisible()) {
+        await progress(
+          'Этап 2/3: достигнут физический конец переписки; сохраняю непрерывно собранный результат.',
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            physicalEndReached: true,
+            boundaryReached: false,
+            chronologicalCount: map.size,
+            force: true
+          }
+        );
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        return { boundaryReached: false, physicalEndReached: true };
+      }
 
       if (stable >= 6) {
         throw new Error(
@@ -2915,7 +2958,7 @@
       order.length = 0;
       chronologicalStarted = true;
 
-      await walkDown(map, order, settings, boundary, { bursts: 3 });
+      const walkResult = await walkDown(map, order, settings, boundary, { bursts: 3 });
 
       await progress(
         mode === 'compare'
@@ -2935,10 +2978,11 @@
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
-      if (!bounded.found) {
+      const acceptedPhysicalEnd = Boolean(!bounded.found && walkResult?.physicalEndReached);
+      if (!bounded.found && !acceptedPhysicalEnd) {
         throw new Error('Метка конца снимка не найдена в итоговом проходе. Архив не сохранён, чтобы не смешать сообщения, появившиеся после запуска.');
       }
-      capturedMessages = bounded.messages;
+      capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
       if (mode === 'full' || mode === 'images') {
         const reconciliation = reconcileNavigationCoverage(
@@ -3184,7 +3228,9 @@
         captureBoundaryKind: boundary.kind || '',
         captureBoundaryKey: boundary.key || '',
         captureBoundaryRole: boundary.role || '',
-        captureBoundaryTrimmedNewerCount: bounded.trimmed || 0
+        captureBoundaryTrimmedNewerCount: bounded.trimmed || 0,
+        captureBoundaryReached: Boolean(bounded.found),
+        captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd)
       };
 
       // Store the finished archive independently of the job record.
