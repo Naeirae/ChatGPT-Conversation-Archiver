@@ -2413,7 +2413,7 @@ async function hydrateUnfinishedDraftImages(passId = '') {
     mode: 'images-draft',
     existingDraft: draft,
     fixedCaptureBoundary: prefixBoundary,
-    captureTarget: 'copy'
+    captureTarget: 'current'
   });
 }
 
