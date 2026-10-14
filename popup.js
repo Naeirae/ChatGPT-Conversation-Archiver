@@ -84,15 +84,20 @@ function renderCaptureProgress(job, running) {
       ? (manualFullPhaseLabels[job?.phase] || 'Сбор полного диапазона')
       : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
-  const resumedTotal = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
-    Number(job?.draftCount || 0) > 0 &&
-    ['walk', 'finalizing'].includes(job?.phase || '')
-      ? Number(job.draftCount || 0) + Number(job?.count || 0)
-      : 0;
-  if (resumedTotal) {
-    parts.push('уже сохранено: ' + Number(job.draftCount || 0));
-    parts.push('в этом проходе: ' + Number(job?.count || 0));
-    parts.push('всего сейчас: ' + resumedTotal);
+  const resumed = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
+    Number(job?.resumeBaseCount || job?.draftCount || 0) > 0;
+  if (resumed) {
+    const base = Number(job?.resumeBaseCount || 0);
+    const savedNow = Number(job?.draftCount || base || 0);
+    parts.push('было сохранено: ' + base);
+    parts.push('сохранено сейчас: ' + savedNow);
+    if (Number(job?.count || 0)) {
+      parts.push(
+        job?.captureMode === 'retry-walk'
+          ? 'подтверждено в повторном проходе: ' + Number(job.count || 0)
+          : 'текущий проход: ' + Number(job.count || 0)
+      );
+    }
   } else if (job?.navigationHighWater && job?.phase === 'walk') {
     parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
     parts.push('собрано по порядку: ' + Number(job.chronologicalCount ?? job.count ?? 0));
