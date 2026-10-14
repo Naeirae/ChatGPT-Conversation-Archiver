@@ -243,6 +243,12 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
     const resumeCandidate = [...members]
       .filter(item => item.recoveryTabAvailable)
       .sort((a, b) =>
+        // Prefer a real chronological prefix over a newer navigation-only
+        // attempt. A failed retry can otherwise replace the useful frontier
+        // with a tiny "top" draft and make Continue search the chat again.
+        Number(['walk', 'finalizing'].includes(b.capturePhase || '')) -
+          Number(['walk', 'finalizing'].includes(a.capturePhase || '')) ||
+        Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
         Number(b.recoveryTabUpdatedAt || 0) - Number(a.recoveryTabUpdatedAt || 0) ||
         String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
       )[0] || null;
