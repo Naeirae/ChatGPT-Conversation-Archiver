@@ -283,6 +283,11 @@ try {
       !popupJs.includes('ARCHIVER_EXPORT_LINKED_DOC')) {
     fail('popup.js: linked Google Doc must open/append through validated worker routes');
   }
+  if (!popupJs.includes("hasManualRange ? 'ARCHIVER_CAPTURE_MANUAL_FULL' : 'ARCHIVER_CAPTURE_CURRENT'") ||
+      !popupJs.includes("'Собрать отмеченный диапазон'") ||
+      !serviceWorkerSource.includes('captureRange,')) {
+    fail('manual range UX: complete saved boundaries must switch the primary capture into manual-full');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
       !popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||

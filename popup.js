@@ -1176,6 +1176,18 @@ function render(data) {
   const activelyRunning = job && ['starting', 'running'].includes(job.status);
   const paused = job?.status === 'paused';
   const done = job?.status === 'done' && archive;
+  const hasManualRange = Boolean(state?.captureRange?.start && state?.captureRange?.end);
+
+  $('captureTitle').textContent = hasManualRange
+    ? 'Собрать отмеченный диапазон'
+    : 'Собрать чат целиком';
+  $('capture').textContent = hasManualRange
+    ? 'Собрать отмеченный диапазон'
+    : 'Собрать чат';
+  if (!running && hasManualRange) {
+    $('fragmentHint').textContent =
+      'Начало и конец отмечены. Главная кнопка соберёт именно этот диапазон.';
+  }
 
   renderCaptureState(job);
   if (Array.isArray(state.history)) renderHistory(state.history);
@@ -1451,15 +1463,24 @@ async function exportToDoc(type, payload = {}) {
 $('capture').onclick = async () => {
   $('capture').disabled = true;
   const captureTarget = $('captureTarget').value;
-  setStatus(captureTarget === 'copy'
-    ? 'Запускаю сбор в рабочей копии…'
-    : 'Запускаю сбор в текущей вкладке…');
+  const hasManualRange = Boolean(state?.captureRange?.start && state?.captureRange?.end);
+  setStatus(
+    hasManualRange
+      ? 'Запускаю сбор между отмеченными границами…'
+      : (captureTarget === 'copy'
+        ? 'Запускаю сбор в рабочей копии…'
+        : 'Запускаю сбор в текущей вкладке…')
+  );
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_CAPTURE_CURRENT',
+      type: hasManualRange ? 'ARCHIVER_CAPTURE_MANUAL_FULL' : 'ARCHIVER_CAPTURE_CURRENT',
       captureTarget
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
+    if (!result?.ok) throw new Error(
+      result?.error || (hasManualRange
+        ? 'Не удалось запустить сбор отмеченного диапазона.'
+        : 'Не удалось запустить сбор.')
+    );
     render({
       ...state,
       job: result.job,
@@ -1506,6 +1527,7 @@ $('markFragment').onclick = async () => {
     $('fragmentHint').textContent = next.enabled
       ? 'Разметка включена. Закройте popup, кликните по нужной реплике и используйте постоянную панель «Начало / Конец».'
       : 'Режим разметки выключен. Выбранные границы сохранены.';
+    if (!next.enabled) await getState().catch(() => {});
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
