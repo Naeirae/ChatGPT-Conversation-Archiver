@@ -1887,6 +1887,58 @@
     return direction === 'up' ? 'down' : 'up';
   }
 
+  async function locateBoundaryForUpwardScan(boundary) {
+    if (!boundary || boundaryIsVisible(boundary)) return;
+
+    const scanDirection = async (direction, limit = 320) => {
+      let stable = 0;
+      let previous = '';
+      for (let i = 0; i < limit; i++) {
+        await waitIfPaused();
+        await expandVisible();
+        if (boundaryIsVisible(boundary)) return true;
+
+        const before = visibleTurnSignature();
+        await progress(
+          direction === 'up'
+            ? 'Ищу отмеченную нижнюю границу выше текущей позиции…'
+            : 'Ищу отмеченную нижнюю границу ниже текущей позиции…',
+          0,
+          {
+            phase: 'top',
+            boundarySearchDirection: direction,
+            boundarySearchIteration: i + 1
+          }
+        );
+        await physicalScroll(direction, direction === 'up' ? 6 : 4, {
+          settleTimeout: 2600,
+          quietWindow: 350
+        });
+        await expandVisible();
+        if (boundaryIsVisible(boundary)) return true;
+
+        const after = visibleTurnSignature();
+        if (after && after === before && after === previous) stable++;
+        else stable = 0;
+        previous = after;
+
+        const atPhysicalEdge = direction === 'up'
+          ? physicalScrollStartVisible()
+          : physicalScrollEndVisible();
+        if (atPhysicalEdge && stable >= 1) return false;
+      }
+      return false;
+    };
+
+    if (await scanDirection('up')) return;
+    if (await scanDirection('down')) return;
+
+    throw new Error(
+      'Не удалось найти зафиксированную нижнюю границу выбранного диапазона. ' +
+      'Сбор остановлен, чтобы не захватить сообщения за пределами диапазона.'
+    );
+  }
+
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
@@ -2900,7 +2952,12 @@
       }
 
       const markerEnd = (mode === 'fragment' || mode === 'manual-full') && selectedFragment.end
-        ? { kind: selectedFragment.end.id ? 'stable' : 'signature', key: selectedFragment.end.id || selectedFragment.end.signature, role: selectedFragment.end.role || '' }
+        ? {
+            kind: selectedFragment.end.id ? 'stable' : 'signature',
+            key: selectedFragment.end.id || selectedFragment.end.signature,
+            role: selectedFragment.end.role || '',
+            signature: selectedFragment.end.signature || ''
+          }
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
@@ -2980,6 +3037,14 @@
           order.length = 0;
           await reachTopWithoutCapture(0, { fullCapture: true });
         } else {
+          // Rich upward scans must begin at the fixed lower boundary. The active
+          // tab may currently be below or above an older manual/draft boundary;
+          // locate it first without accumulating out-of-range messages.
+          if (boundary && !boundaryIsVisible(boundary)) {
+            await locateBoundaryForUpwardScan(boundary);
+          }
+          map.clear();
+          order.length = 0;
           // Image recovery still benefits from a rich upward scan, and fragment
           // capture may need to discover its explicit start marker.
           await reachTop(
