@@ -3192,10 +3192,16 @@
       const binaryTargetMessages = (mode === 'full' || mode === 'fragment')
         ? messages
         : mode === 'images'
-          ? messages.filter(message => recoveredImageRefs.some(ref =>
-              (ref.messageId && ref.messageId === message.id) ||
-              (ref.messageSignature && ref.messageSignature === messageTextSignature(message))
-            ))
+          ? messages.filter(message => {
+              const hasMissingBinary = (message.images || []).some(image =>
+                image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+              );
+              if (hasMissingBinary) return true;
+              return recoveredImageRefs.some(ref =>
+                (ref.messageId && ref.messageId === message.id) ||
+                (ref.messageSignature && ref.messageSignature === messageTextSignature(message))
+              );
+            })
           : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, { onlyMissing: mode === 'images' });
 
