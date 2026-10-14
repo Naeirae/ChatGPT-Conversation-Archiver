@@ -1046,6 +1046,13 @@ function render(data) {
     captureHeadingRow.after(captureControls);
   }
   // Keep pause visible even while the worker is preparing a new run.
+  const canConfirmTop = Boolean(
+    job?.status === 'running' &&
+    job?.phase === 'top' &&
+    ['full', 'images', 'retry-walk'].includes(job?.captureMode || '')
+  );
+  $('confirmTop').classList.toggle('hidden', !canConfirmTop);
+  $('confirmTop').disabled = !canConfirmTop;
   $('pauseCapture').classList.toggle('hidden', !activelyRunning);
   $('pauseCapture').textContent = job?.status === 'starting' ? 'Пауза (запуск)' : 'Пауза';
   $('captureControls').classList.toggle('hidden', !running);
@@ -1470,6 +1477,23 @@ $('retryCurrent').onclick = async () => {
     setStatus(error.message || String(error), true);
   } finally {
     $('retryCurrent').disabled = false;
+  }
+};
+
+$('confirmTop').onclick = async () => {
+  $('confirmTop').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CONFIRM_TOP',
+      jobId: state?.job?.jobId
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось отметить начало переписки.');
+    setStatus('Начало отмечено вручную. Архиватор переходит к сохранению сверху вниз…');
+    await getState();
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('confirmTop').disabled = false;
   }
 };
 
