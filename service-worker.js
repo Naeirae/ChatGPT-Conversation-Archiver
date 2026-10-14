@@ -3279,6 +3279,17 @@ async function clearLinkedDocumentState(sourceUrl = '', docUrl = '') {
   return result;
 }
 
+async function waitForTabLoadComplete(tabId, timeout = 30000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (!tab) throw new Error('Вкладка была закрыта до завершения загрузки.');
+    if (tab.status === 'complete') return tab;
+    await sleep(250);
+  }
+  throw new Error('Страница не загрузилась за 30 секунд.');
+}
+
 async function inspectGoogleDocAvailability(tabId) {
   const started = Date.now();
   let last = null;
@@ -3348,6 +3359,54 @@ async function inspectGoogleDocAvailability(tabId) {
   return { status: 'unknown', ...(last || {}) };
 }
 
+async function openExistingGoogleDocTab(
+  docUrl,
+  { sourceUrl = '', active = true, clearMissingLink = true } = {}
+) {
+  const normalized = normalizeGoogleDocUrl(docUrl);
+  if (!normalized) throw new Error('Некорректная ссылка на документ Google Docs.');
+
+  const tab = await chrome.tabs.create({ url: normalized, active });
+  if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs.');
+
+  try {
+    await waitForTabLoadComplete(tab.id, 30000);
+    await sleep(900);
+    const availability = await inspectGoogleDocAvailability(tab.id);
+
+    if (availability.status === 'available') return tab;
+
+    if (availability.status === 'missing') {
+      if (clearMissingLink && sourceUrl) {
+        await clearLinkedDocumentState(sourceUrl, normalized);
+      }
+      await chrome.tabs.remove(tab.id).catch(() => {});
+      throw new Error(
+        'Связанный документ Google Docs удалён или больше не существует. ' +
+        (clearMissingLink && sourceUrl
+          ? 'Архиватор снял устаревшую связь; можно создать новый документ.'
+          : 'Операция остановлена.')
+      );
+    }
+
+    if (availability.status === 'forbidden') {
+      throw new Error(
+        'Документ Google Docs существует, но текущему аккаунту не хватает доступа. Связь сохранена.'
+      );
+    }
+
+    if (availability.status === 'login') {
+      throw new Error('Google Docs просит войти в аккаунт. Связь сохранена.');
+    }
+
+    throw new Error(
+      'Страница открылась, но Архиватор не смог подтвердить редактор Google Docs. Связь не изменена.'
+    );
+  } catch (error) {
+    throw error;
+  }
+}
+
 async function openLinkedGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
   const archive = archiveId ? await getArchive(archiveId) : null;
   const source = sourceUrl || archive?.sourceUrl || '';
@@ -3357,47 +3416,12 @@ async function openLinkedGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
   const docUrl = normalizeGoogleDocUrl(linked?.url || '');
   if (!docUrl) throw new Error('Для этого чата нет связанного документа Google Docs.');
 
-  let tab = null;
-  try {
-    tab = await chrome.tabs.create({ url: docUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть связанный документ Google Docs.');
-    await waitForTabComplete(tab.id, 30000);
-    await sleep(900);
-
-    const availability = await inspectGoogleDocAvailability(tab.id);
-    if (availability.status === 'available') {
-      return { ok: true, docUrl, tabId: tab.id, linkedDoc: linked };
-    }
-
-    if (availability.status === 'missing') {
-      await clearLinkedDocumentState(source, docUrl);
-      await chrome.tabs.remove(tab.id).catch(() => {});
-      throw new Error(
-        'Связанный документ Google Docs удалён или больше не существует. ' +
-        'Архиватор снял устаревшую связь; можно создать новый документ.'
-      );
-    }
-
-    if (availability.status === 'forbidden') {
-      throw new Error(
-        'Связанный документ существует, но текущему аккаунту Google не хватает доступа. ' +
-        'Связь сохранена.'
-      );
-    }
-
-    if (availability.status === 'login') {
-      throw new Error(
-        'Google Docs просит войти в аккаунт. Связь сохранена; войдите и повторите.'
-      );
-    }
-
-    throw new Error(
-      'Документ открылся, но Архиватор не смог подтвердить редактор Google Docs. ' +
-      'Связь не изменена.'
-    );
-  } catch (error) {
-    throw error;
-  }
+  const tab = await openExistingGoogleDocTab(docUrl, {
+    sourceUrl: source,
+    active: true,
+    clearMissingLink: true
+  });
+  return { ok: true, docUrl, tabId: tab.id, linkedDoc: linked };
 }
 
 async function waitForTabComplete(tabId, timeout = 30000) {
@@ -3905,10 +3929,12 @@ async function readGoogleDocBaseline(docUrl, sourceTabId) {
   let tab = null;
   let attached = false;
   try {
-    tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для сверки.');
-    await waitForTabComplete(tab.id);
-    await sleep(1800);
+    tab = await openExistingGoogleDocTab(normalizedUrl, {
+      sourceUrl: '',
+      active: true,
+      clearMissingLink: false
+    });
+    await sleep(900);
 
     await chrome.debugger.attach({ tabId: tab.id }, '1.3');
     attached = true;
@@ -4290,10 +4316,12 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
   const failures = [];
 
   try {
-    tab = await chrome.tabs.create({ url: docUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть связанный документ Google Docs.');
-    await waitForTabComplete(tab.id);
-    await sleep(1800);
+    tab = await openExistingGoogleDocTab(docUrl, {
+      sourceUrl: archive.sourceUrl || '',
+      active: true,
+      clearMissingLink: true
+    });
+    await sleep(900);
 
     await chrome.debugger.attach({ tabId: tab.id }, '1.3');
     attached = true;
@@ -4373,10 +4401,12 @@ async function appendMessagesToGoogleDocUrl(
   const settings = await getSettings();
   let tab = null;
   try {
-    tab = await chrome.tabs.create({ url: normalizedUrl, active: true });
-    if (!tab?.id) throw new Error('Не удалось открыть документ Google Docs для продолжения.');
-    await waitForTabComplete(tab.id);
-    await sleep(1800);
+    tab = await openExistingGoogleDocTab(normalizedUrl, {
+      sourceUrl: conversation.sourceUrl || '',
+      active: true,
+      clearMissingLink: linkTarget
+    });
+    await sleep(900);
 
     const pasted = await pasteArchiveIntoGoogleDoc(
       tab.id,
