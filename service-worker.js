@@ -394,69 +394,77 @@ async function refreshCaptureJobHealth() {
 }
 
 async function listLinkedArchives() {
-  const keys = typeof chrome.storage.local.getKeys === 'function'
-    ? await chrome.storage.local.getKeys() : null;
-  const archiveKeys = keys?.filter(key => key.startsWith(STORAGE_KEYS.archivePrefix)) || null;
-  const result = archiveKeys
-    ? await chrome.storage.local.get([STORAGE_KEYS.archiveIndex, ...archiveKeys])
-    : await chrome.storage.local.get(null);
-  const index = result[STORAGE_KEYS.archiveIndex] || {};
-  const indexedIds = new Set(Object.values(index).filter(Boolean));
-  const archives = [];
+  // Never deserialize every archive just to render the popup. Large archives
+  // contain thousands of messages and can stall both UI polling and capture.
+  // The lightweight registries below are the authoritative references to
+  // user-visible archives.
+  const meta = await chrome.storage.local.get([
+    STORAGE_KEYS.archiveIndex,
+    STORAGE_KEYS.lastArchiveId,
+    STORAGE_KEYS.archiveDestinations,
+    STORAGE_KEYS.docExports,
+    STORAGE_KEYS.docLinks,
+    'fragmentLatestId'
+  ]);
 
-  for (const [key, value] of Object.entries(result || {})) {
-    if (!key.startsWith(STORAGE_KEYS.archivePrefix)) continue;
-    if (!value?.id || !value?.sourceUrl) continue;
-    archives.push(value);
-    indexedIds.add(value.id);
-  }
+  const index = meta[STORAGE_KEYS.archiveIndex] || {};
+  const destinations = meta[STORAGE_KEYS.archiveDestinations] || {};
+  const docExports = meta[STORAGE_KEYS.docExports] || {};
+  const docLinks = meta[STORAGE_KEYS.docLinks] || {};
 
-  for (const archiveId of Object.values(index)) {
-    if (!archiveId || archives.some(item => item.id === archiveId)) continue;
-    const archive = await getArchive(archiveId);
-    if (archive?.id && archive?.sourceUrl) archives.push(archive);
-  }
+  const ids = new Set([
+    ...Object.values(index),
+    meta[STORAGE_KEYS.lastArchiveId] || '',
+    meta.fragmentLatestId || '',
+    ...Object.keys(destinations),
+    ...Object.values(docExports).map(entry => entry?.archiveId || '')
+  ].filter(Boolean));
 
+  if (!ids.size) return [];
+
+  const archiveKeys = [...ids].map(id => STORAGE_KEYS.archivePrefix + id);
+  const stored = await chrome.storage.local.get(archiveKeys);
   const rows = [];
-  const seen = new Set();
-  const repairedIndex = { ...index };
-  let indexChanged = false;
 
-  for (const archive of archives) {
-    if (seen.has(archive.id)) continue;
-    seen.add(archive.id);
+  for (const id of ids) {
+    const archive = stored[STORAGE_KEYS.archivePrefix + id];
+    if (!archive?.id || !archive?.sourceUrl || archive.partial) continue;
 
-    // Partial snapshots are implementation details of unfinished captures.
-    // They are surfaced through the single unfinished-capture card instead of
-    // appearing as a second "saved chat" for the same conversation.
-    if (archive.partial) continue;
+    const sourceKey = conversationKey(archive.sourceUrl || '');
+    let linked = !archive.isFragment && sourceKey ? (docLinks[sourceKey] || null) : null;
 
-    const key = conversationKey(archive.sourceUrl || '');
-    if (!archive.isFragment && key && repairedIndex[key] !== archive.id) {
-      const indexedArchiveId = repairedIndex[key] || '';
-      const indexedArchive = indexedArchiveId ? await getArchive(indexedArchiveId) : null;
-      const canRepair = !archive.partial || !indexedArchive?.id || Boolean(indexedArchive.partial);
-      if (canRepair) {
-        repairedIndex[key] = archive.id;
-        indexChanged = true;
+    // Older installs may only have docExports, without a direct docLinks entry.
+    if (!linked && !archive.isFragment && sourceKey) {
+      const legacy = Object.entries(docExports).find(([, entry]) =>
+        entry?.conversationKey === sourceKey &&
+        entry?.linkEligible !== false
+      );
+      if (legacy) {
+        const [docId, entry] = legacy;
+        linked = {
+          url: entry.docUrl || ('https://docs.google.com/document/d/' + docId + '/edit'),
+          docId,
+          updatedAt: entry.updatedAt || 0
+        };
       }
     }
 
-    const linked = archive.isFragment ? null : await getLinkedDoc(archive.sourceUrl);
-    let destination = await getArchiveDestination(archive.id);
+    let destination = destinations[archive.id] || null;
     if (!destination && linked?.url) {
-      destination = await setArchiveDestination(archive.id, {
+      destination = {
         saved: true,
         url: linked.url,
         kind: 'google-doc',
-        label: 'Google Docs'
-      });
+        label: 'Google Docs',
+        updatedAt: linked.updatedAt || archive.capturedAt || ''
+      };
     }
+
     rows.push({
       id: archive.id,
       isFragment: Boolean(archive.isFragment),
-      partial: Boolean(archive.partial),
-      complete: archive.complete !== false && !archive.partial,
+      partial: false,
+      complete: archive.complete !== false,
       partialSourceDraftId: archive.partialSourceDraftId || '',
       capturePhase: archive.capturePhase || '',
       title: archive.title || 'Архив ChatGPT',
@@ -468,10 +476,6 @@ async function listLinkedArchives() {
       destination,
       updatedAt: destination?.updatedAt || linked?.updatedAt || archive.capturedAt || ''
     });
-  }
-
-  if (indexChanged) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.archiveIndex]: repairedIndex });
   }
 
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
