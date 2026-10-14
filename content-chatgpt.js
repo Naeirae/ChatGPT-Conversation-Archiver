@@ -2552,6 +2552,18 @@
         messages = preserved.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
       }
     }
+    if (!state.cancel) {
+      const missingImages = messages.filter(item => (item.images || []).some(image =>
+        image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+      ));
+      if (missingImages.length) {
+        await hydrateMessageImages(missingImages, {
+          onlyMissing: true,
+          reportProgress: false
+        }).catch(() => {});
+      }
+    }
+
     const draft = {
       id: draftId,
       kind: 'capture-draft',
