@@ -1654,6 +1654,7 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     draftCount: 0,
     captureTabId: captureTab.id,
     captureBoundary: boundary,
+    captureRange: failedJob.captureRange || null,
     autoRecoveryPending: false,
     message: 'Продолжаю путь к началу в той же рабочей вкладке…',
     startedAt: Date.now(),
@@ -1663,7 +1664,8 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
   try {
     await ensureChatGptContentScript(captureTab.id, jobId, {
       mode: failedJob.captureMode,
-      fixedCaptureBoundary: boundary
+      fixedCaptureBoundary: boundary,
+      captureRange: failedJob.captureRange || null
     });
   } catch (error) {
     await setJob({
@@ -1996,6 +1998,7 @@ async function resumeFailedCaptureFromWorkingTab() {
     recoveryAvailable: false,
     autoRecoveryPending: false,
     captureTabId: captureTab.id,
+    captureRange: draft.captureRange || failedJob.captureRange || null,
     message: resumeNavigation
       ? 'Продолжаю навигацию вверх от сохранённого места…'
       : resumeMode === 'resume-draft'
@@ -2013,7 +2016,8 @@ async function resumeFailedCaptureFromWorkingTab() {
       resumeTailSignatures,
       existingDraftId: draft.id,
       fixedCaptureBoundary: boundary,
-      resumeNavigation
+      resumeNavigation,
+      captureRange: draft.captureRange || failedJob.captureRange || null
     });
   } catch (error) {
     const message = error?.message || String(error);
@@ -2330,6 +2334,46 @@ async function deleteLocalArchive(archiveId = '') {
   }
 
   return { ok: true, removed: true, archiveId: archive.id };
+}
+
+async function hydrateUnfinishedDraftImages(passId = '') {
+  const draft = await getDraft(passId);
+  if (!draft?.messages?.length) {
+    throw new Error('Сохранённый незавершённый проход не найден.');
+  }
+
+  let tab = null;
+  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
+  if (recovery.available) {
+    tab = recovery.tab;
+  } else {
+    const active = await getActiveTab();
+    if (active?.id &&
+        conversationKey(active.url || '') === conversationKey(draft.sourceUrl || '')) {
+      tab = active;
+    }
+  }
+  if (!tab?.id) {
+    throw new Error('Откройте исходный чат или сохранённую рабочую вкладку, чтобы добрать изображения.');
+  }
+
+  const expectedVersion = chrome.runtime.getManifest().version;
+  let ping = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_PING' }).catch(() => null);
+  if (!ping?.ok || ping.version !== expectedVersion) {
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-chatgpt.js'] });
+    await sleep(80);
+    ping = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_PING' }).catch(() => null);
+  }
+  if (!ping?.ok || ping.version !== expectedVersion) {
+    throw new Error('Обновите страницу исходного чата после обновления Архиватора.');
+  }
+
+  const result = await chrome.tabs.sendMessage(tab.id, {
+    type: 'ARCHIVER_HYDRATE_DRAFT_IMAGES',
+    draftId: passId
+  });
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения незавершённого сбора.');
+  return { ok: true, ...result, draftId: passId };
 }
 
 async function compareUnfinishedPass(passId = '') {
@@ -4166,6 +4210,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await checkForUpdate();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
         return await startCapture({ mode: 'fragment', captureTarget: message.captureTarget || 'copy' });
+      case 'ARCHIVER_CAPTURE_MANUAL_FULL':
+        return await startCapture({ mode: 'manual-full', captureTarget: message.captureTarget || 'copy' });
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
@@ -4284,6 +4330,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_COMPARE_UNFINISHED_PASS':
         return await compareUnfinishedPass(message.passId || message.draftId || '');
+      case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES':
+        return await hydrateUnfinishedDraftImages(message.passId || message.draftId || '');
       case 'ARCHIVER_GET_LAST':
         return { ok: true, archive: summarize(await getLastArchive()) };
       case 'ARCHIVER_CONFIRM_TOP':
