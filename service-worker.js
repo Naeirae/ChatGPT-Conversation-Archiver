@@ -1031,7 +1031,7 @@ function makeJobId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
-async function ensureBoundaryMarkingScript(tabId) {
+async function ensureBoundaryMarkingScript(tabId, { enable = true } = {}) {
   const expectedVersion = chrome.runtime.getManifest().version;
   let ping = null;
   try {
@@ -1050,6 +1050,8 @@ async function ensureBoundaryMarkingScript(tabId) {
     );
   }
 
+  if (!enable) return ping;
+
   const result = await chrome.tabs.sendMessage(tabId, {
     type: 'ARCHIVER_SET_FRAGMENT_SELECTION',
     enabled: true
@@ -1058,6 +1060,29 @@ async function ensureBoundaryMarkingScript(tabId) {
     throw new Error(result?.error || 'Не удалось включить режим разметки.');
   }
   return result;
+}
+
+async function toggleBoundaryMarkingCurrent() {
+  const tab = await getActiveTab();
+  if (!tab?.id || !isConversationUrl(tab.url || '')) {
+    throw new Error('Откройте переписку ChatGPT в активной вкладке.');
+  }
+
+  const currentJob = await getJob();
+  if (currentJob && ['starting', 'running', 'paused'].includes(currentJob.status)) {
+    throw new Error('Во время активного сбора границы менять нельзя.');
+  }
+
+  await ensureBoundaryMarkingScript(tab.id, { enable: false });
+  const current = await chrome.tabs.sendMessage(tab.id, {
+    type: 'ARCHIVER_GET_FRAGMENT_SELECTION'
+  });
+  const next = await chrome.tabs.sendMessage(tab.id, {
+    type: 'ARCHIVER_SET_FRAGMENT_SELECTION',
+    enabled: !current?.enabled
+  });
+  if (!next?.ok) throw new Error('Не удалось переключить режим разметки.');
+  return { ok: true, enabled: Boolean(next.enabled), tabId: tab.id };
 }
 
 async function openBoundaryMarkingTab() {
@@ -4591,6 +4616,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case 'ARCHIVER_CHECK_UPDATE':
         return await checkForUpdate();
+      case 'ARCHIVER_TOGGLE_MARKING_CURRENT':
+        return await toggleBoundaryMarkingCurrent();
       case 'ARCHIVER_OPEN_MARKING_TAB':
         return await openBoundaryMarkingTab();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
