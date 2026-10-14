@@ -235,12 +235,14 @@ async function reconcileUnfinishedPrefix(draft) {
       !['walk', 'finalizing'].includes(draft.capturePhase || '')) return draft;
   const source = conversationKey(draft.sourceUrl || '');
   const boundary = unfinishedBoundaryKey(draft);
+  const range = unfinishedRangeKey(draft);
   if (!source || boundary === 'legacy') return draft;
   const others = (await listDrafts()).filter(item =>
     item?.id !== draft.id &&
     ['walk', 'finalizing'].includes(item.capturePhase || '') &&
     conversationKey(item.sourceUrl || '') === source &&
     unfinishedBoundaryKey(item) === boundary &&
+    unfinishedRangeKey(item) === range &&
     item.messages?.length
   );
   const matchingMessage = storedMessagesMatch;
@@ -264,12 +266,17 @@ async function reconcileUnfinishedPrefix(draft) {
   });
   const imageReadyCount = message =>
     (message?.images || []).filter(storedImageReady).length;
-  const changed = draft.messages.length !== messages.length ||
-    messages.some((item, i) =>
-      (item.images?.length || 0) !== (draft.messages[i]?.images?.length || 0) ||
-      imageReadyCount(item) !== imageReadyCount(draft.messages[i]) ||
-      Boolean(item.reasoningText) !== Boolean(draft.messages[i]?.reasoningText));
-  if (!changed) return draft;
+  const newest = [...compatible].sort((a, b) =>
+    String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+  )[0] || draft;
+  const pendingDocSource = [...compatible]
+    .sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')))
+    .find(item => item.pendingDocUrl) || null;
+  const partialSource = [...compatible]
+    .sort((a, b) => String(b.partialSavedAt || b.capturedAt || '')
+      .localeCompare(String(a.partialSavedAt || a.capturedAt || '')))
+    .find(item => item.partialSaveEnabled || item.partialArchiveId) || null;
+
   const updated = {
     ...draft,
     messages,
@@ -280,6 +287,22 @@ async function reconcileUnfinishedPrefix(draft) {
     imageBinaryFailed: messages.reduce((n, item) =>
       n + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
     capturePhase: 'walk',
+    captureRange: longest.captureRange || newest.captureRange || draft.captureRange || null,
+    navigationHighWater: Math.max(...compatible.map(item => Number(item.navigationHighWater || 0)), 0),
+    resumeWindowSignatures: Array.isArray(longest.resumeWindowSignatures)
+      ? longest.resumeWindowSignatures
+      : (newest.resumeWindowSignatures || draft.resumeWindowSignatures || []),
+    lastScrollDirection:
+      longest.lastScrollDirection || newest.lastScrollDirection || draft.lastScrollDirection || 'down',
+    pendingDocUrl: pendingDocSource?.pendingDocUrl || draft.pendingDocUrl || '',
+    pendingDocMode: pendingDocSource?.pendingDocMode || draft.pendingDocMode || '',
+    partialSaveEnabled: Boolean(
+      draft.partialSaveEnabled || partialSource?.partialSaveEnabled
+    ),
+    partialArchiveId:
+      partialSource?.partialArchiveId || draft.partialArchiveId || '',
+    partialSavedAt:
+      partialSource?.partialSavedAt || draft.partialSavedAt || '',
     recoveredFromDraftIds: [...new Set([
       ...(draft.recoveredFromDraftIds || []),
       ...compatible.map(item => item.id)
