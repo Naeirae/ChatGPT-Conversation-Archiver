@@ -137,6 +137,69 @@ function unfinishedBoundaryKey(item) {
   return kind && key ? String(kind) + ':' + String(key) : 'legacy';
 }
 
+// Merge only verified chronological prefixes from the same conversation and
+// snapshot boundary. Never concatenate unrelated fragments or delete backups.
+async function reconcileUnfinishedPrefix(draft) {
+  if (!draft?.id || !draft.messages?.length ||
+      !['walk', 'finalizing'].includes(draft.capturePhase || '')) return draft;
+  const source = conversationKey(draft.sourceUrl || '');
+  const boundary = unfinishedBoundaryKey(draft);
+  if (!source || boundary === 'legacy') return draft;
+  const others = (await listDrafts()).filter(item =>
+    item?.id !== draft.id &&
+    ['walk', 'finalizing'].includes(item.capturePhase || '') &&
+    conversationKey(item.sourceUrl || '') === source &&
+    unfinishedBoundaryKey(item) === boundary &&
+    item.messages?.length
+  );
+  const matchingMessage = (a, b) => {
+    if (!a || !b || a.role !== b.role) return false;
+    if (a.id && b.id && a.id === b.id) return true;
+    return Boolean(a.text && b.text &&
+      messageSignature(a.role, a.text) === messageSignature(b.role, b.text));
+  };
+  const compatible = [draft, ...others.filter(candidate => {
+    const n = Math.min(draft.messages.length, candidate.messages.length);
+    // Require at least two matching turns and all available overlap in order.
+    return n >= 2 && Array.from({ length: n }, (_, i) => i)
+      .every(i => matchingMessage(draft.messages[i], candidate.messages[i]));
+  })];
+  if (compatible.length < 2) return draft;
+  const longest = compatible.reduce((best, item) =>
+    item.messages.length > best.messages.length ? item : best, draft);
+  const messages = longest.messages.map((message, i) => {
+    let enriched = message;
+    for (const candidate of compatible) {
+      const alternate = candidate.messages[i];
+      if (!alternate || !matchingMessage(message, alternate)) continue;
+      const originalImages = enriched.images || [];
+      const newImages = alternate.images || [];
+      if (newImages.length > originalImages.length) {
+        enriched = { ...enriched, images: newImages,
+          html: alternate.html || enriched.html };
+      }
+    }
+    return enriched;
+  });
+  const changed = draft.messages.length !== messages.length ||
+    messages.some((item, i) =>
+      (item.images?.length || 0) !== (draft.messages[i]?.images?.length || 0));
+  if (!changed) return draft;
+  const updated = {
+    ...draft,
+    messages,
+    chronologicalCount: messages.length,
+    imageCount: messages.reduce((n, item) => n + (item.images?.length || 0), 0),
+    capturePhase: 'walk',
+    recoveredFromDraftIds: [...new Set([
+      ...(draft.recoveredFromDraftIds || []),
+      ...compatible.map(item => item.id)
+    ])]
+  };
+  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + draft.id]: updated });
+  return updated;
+}
+
 async function buildUnfinishedCaptureGroups(drafts = []) {
   const groups = new Map();
 
@@ -1705,6 +1768,7 @@ async function resumeFailedCaptureFromWorkingTab() {
     draft = await getDraft(failedJob.recoveryDraftId);
   }
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  draft = await reconcileUnfinishedPrefix(draft);
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
   if (!captureTab?.id ||
@@ -1927,6 +1991,7 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
 
 async function resumeUnfinishedInSavedTab(passId = '') {
   let draft = await getDraft(passId);
+  draft = await reconcileUnfinishedPrefix(draft);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
 
   // 0.3.91 could relabel a chronological walk draft as "top" when a fresh
@@ -2001,7 +2066,7 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
       (activeJob.draftId === passId || activeJob.recoveryDraftId === passId)) {
     return resumeFailedCaptureFromWorkingTab();
   }
-  const draft = await getDraft(passId);
+  const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
   if (!isConversationUrl(draft.sourceUrl || '')) {
     throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
