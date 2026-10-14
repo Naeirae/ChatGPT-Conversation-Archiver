@@ -193,7 +193,7 @@ Images are treated as data, not as remote URLs:
 
 The archive keeps separate counters for detected, prepared and inserted images because those are different failure stages.
 
-Incomplete checkpoints use the same distinction. Detected images are prepared incrementally before a checkpoint is persisted when possible; a separate unfinished-draft action can retry binaries that were detected but not prepared. Completed-archive image recovery additionally re-walks the chat to discover image records that an earlier pass did not observe.
+Incomplete checkpoints use the same distinction. Detected images are prepared incrementally before a checkpoint is persisted when possible. The unfinished-draft image action re-walks the already saved chronological prefix from the conversation start through its last saved message, can discover image records that the original pass never observed, and then retries unresolved binaries. This repair is transactional: intermediate image-scan checkpoints must not overwrite the canonical unfinished text. Completed-archive image recovery similarly re-walks the fixed chat snapshot to discover missing image records.
 
 ## Trust and permission boundary
 
@@ -218,8 +218,9 @@ These invariants are regression-sensitive and must be kept aligned across popup,
 4. **Unfinished chains do not cross boundaries.** User-facing unfinished groups are keyed by conversation, snapshot boundary and explicit range. A resume candidate from one snapshot must never be paired with export/count data from another.
 5. **Resume counters have distinct meanings.** `resumeBaseCount` is immutable for one recovery run; `draftCount` is the latest cumulative persisted checkpoint; `count` is live progress of the current physical pass. UI must not infer totals by blindly adding mutable counters.
 6. **Richer data wins.** Message reconciliation preserves reasoning and prepared image binaries. Equal image counts do not imply equal image readiness.
-7. **Mutating reconciliation is fail-closed.** Reconcile-and-fill changes the canonical archive only after ordered compatibility is proven. The legacy compare route remains diagnostic/non-mutating.
-8. **Google Docs is not canonical storage.** Repairing a local archive does not silently rewrite a linked document; document updates remain explicit or verified continuation deltas.
+7. **Unfinished image repair is transactional.** The `images-draft` scan may rediscover image metadata across the saved prefix, but it must not replace unfinished message text or write intermediate scan snapshots over the canonical draft.
+8. **Mutating reconciliation is fail-closed.** Reconcile-and-fill changes the canonical archive only after ordered compatibility is proven. The legacy compare route remains diagnostic/non-mutating.
+9. **Google Docs is not canonical storage.** Repairing a local archive does not silently rewrite a linked document; document updates remain explicit or verified continuation deltas.
 
 ## Known technical debt
 
