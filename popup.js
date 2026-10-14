@@ -1284,6 +1284,9 @@ function render(data) {
   // A failed new capture must not hide or disable the previously completed
   // local archive. Export is disabled only while a capture is actively running.
   $('newDoc').disabled = Boolean(running || !archive);
+  $('activeDoc').textContent = linkedUrl
+    ? 'Добавить в связанный документ Google Docs'
+    : 'Добавить в открытый документ Google Docs';
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
   $('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue);
@@ -2029,26 +2032,40 @@ $('newDoc').onclick = async () => {
 
 $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
-  setStatus('Проверяю, что уже вставлено в этот документ Google Docs…');
+  const linked = Boolean(state?.linkedDoc?.url);
+  setStatus(linked
+    ? 'Открываю связанный документ Google Docs и проверяю, что уже вставлено…'
+    : 'Проверяю, что уже вставлено в открытый документ Google Docs…');
   try {
-    const result = await exportToDoc('ARCHIVER_EXPORT_ACTIVE_DOC', { archiveId: state?.archive?.id || '' });
+    const result = await exportToDoc(
+      linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
+      { archiveId: state?.archive?.id || '' }
+    );
+    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
+      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+      : '';
+
     if (result.noChanges) {
-      setStatus('В этом документе Google Docs уже есть все сообщения из локального архива.');
-    } else if (result.exportMode === 'delta') {
-      const imagePart = (result.imageInsertedCount || result.imageFailedCount)
-        ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
-        : '';
+      setStatus(
+        linked
+          ? 'Связанный документ Google Docs открыт. Новых сообщений и изображений для добавления нет.'
+          : 'В этом документе Google Docs уже есть все сообщения из локального архива.'
+      );
+    } else if (result.addedCount) {
       setStatus(`Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` + imagePart);
+    } else if (result.imageInsertedCount || result.imageFailedCount) {
+      setStatus(
+        `Готово. Сообщения не дублировались. Изображения: ${result.imageInsertedCount || 0} вставлено, ` +
+        `${result.imageFailedCount || 0} ошибок.`
+      );
     } else {
-      const imagePart = (result.imageInsertedCount || result.imageFailedCount)
-        ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
-        : '';
-      setStatus(`Готово. В документ вставлен полный архив: ${result.addedCount || 0} сообщений.` + imagePart);
+      setStatus('Связанный документ Google Docs открыт и проверен.');
     }
     await getState();
     await showWhatsNewIfNeeded();
   } catch (error) {
     setStatus(error.message || String(error), true);
+    await getState().catch(() => {});
   } finally {
     $('activeDoc').disabled = false;
   }
