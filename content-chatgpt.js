@@ -3569,7 +3569,8 @@
         }
       }
 
-      if ((chronologicalStarted || current.phase === 'top') && map.size > 0) {
+      if (mode !== 'images-draft' &&
+          (chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
         let existingRecoveryDraft = null;
