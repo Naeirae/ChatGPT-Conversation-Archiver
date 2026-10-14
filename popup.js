@@ -1176,6 +1176,7 @@ function render(data) {
   $('captureFragment').disabled = Boolean(running);
   $('captureManualFull').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
+  $('openMarkingTab').disabled = Boolean(running);
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
     ? (isFragmentRun
@@ -1449,28 +1450,34 @@ $('markFragment').onclick = async () => {
   const button = $('markFragment');
   button.disabled = true;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(tab.url || '')) {
-      throw new Error('Откройте переписку ChatGPT в активной вкладке.');
-    }
-    let current;
-    try {
-      current = await chrome.tabs.sendMessage(tab.id, { type: 'ARCHIVER_GET_FRAGMENT_SELECTION' });
-    } catch (_) {
-      throw new Error('Обновите страницу ChatGPT после обновления Архиватора.');
-    }
-    const next = await chrome.tabs.sendMessage(tab.id, {
-      type: 'ARCHIVER_SET_FRAGMENT_SELECTION',
-      enabled: !current?.enabled
+    const next = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_TOGGLE_MARKING_CURRENT'
     });
-    if (!next?.ok) throw new Error('Не удалось переключить режим разметки.');
-    button.textContent = next.enabled ? 'Закончить разметку' : 'Отметить фрагмент';
+    if (!next?.ok) throw new Error(next?.error || 'Не удалось переключить режим разметки.');
+    button.textContent = next.enabled ? 'Закончить разметку' : 'Отметить границы в текущей вкладке';
     $('fragmentHint').textContent = next.enabled
-      ? 'Режим разметки включён. Наведите курсор на нужную реплику.'
+      ? 'Разметка включена. Закройте popup, кликните по нужной реплике и используйте постоянную панель «Начало / Конец».'
       : 'Режим разметки выключен. Выбранные границы сохранены.';
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
+    button.disabled = false;
+  }
+};
+
+$('openMarkingTab').onclick = async () => {
+  const button = $('openMarkingTab');
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OPEN_MARKING_TAB' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть рабочую вкладку для разметки.');
+    await saveSettings({ captureTarget: 'current' }, null);
+    $('captureTarget').value = 'current';
+    updateCaptureTargetHint('current');
+    $('fragmentHint').textContent =
+      'Рабочая вкладка открыта. Там кликните по реплике, отметьте «Начало» и «Конец», затем снова откройте Архиватор и запустите полный диапазон.';
+  } catch (error) {
+    setStatus(error.message || String(error), true);
     button.disabled = false;
   }
 };

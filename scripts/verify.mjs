@@ -77,6 +77,14 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
     fail('capture runtime: missing manual full-range route');
   }
+  if (!contentSource.includes('resolveFragmentTurnFromTarget') ||
+      !contentSource.includes("document.addEventListener('click'") ||
+      !contentSource.includes("'archiver-fragment-overlay'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_TOGGLE_MARKING_CURRENT'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_OPEN_MARKING_TAB'") ||
+      !serviceWorkerSource.includes('ensureBoundaryMarkingScript')) {
+    fail('boundary marking: missing persistent click-selection/working-tab flow');
+  }
   if (!contentSource.includes("'images-draft'") ||
       !contentSource.includes("current.captureMode === 'images-draft'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES'") ||
@@ -172,7 +180,7 @@ try {
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');
   }
-  for (const id of ['captureManualFull', 'reconcileArchive', 'recoverImages']) {
+  for (const id of ['captureManualFull', 'openMarkingTab', 'reconcileArchive', 'recoverImages']) {
     if (!popupHtml.includes('id="' + id + '"')) {
       fail('popup.html: missing capture-recovery control ' + id);
     }
@@ -242,7 +250,9 @@ try {
       !popupJs.includes('function normalizeInterfaceAppearance')) {
     fail('popup.js: missing interface appearance layer');
   }
-  if (!popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
+  if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
+      !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
+      !popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
       !popupJs.includes('ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE') ||
