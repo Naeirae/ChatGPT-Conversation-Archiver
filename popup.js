@@ -1013,9 +1013,9 @@ function render(data) {
   const done = job?.status === 'done' && archive;
 
   renderCaptureState(job);
-  renderHistory(state.history || []);
+  if (Array.isArray(state.history)) renderHistory(state.history);
   renderUnfinishedPasses(state.unfinishedPasses || []);
-  renderSavedArchives(state.savedArchives || []);
+  if (Array.isArray(state.savedArchives)) renderSavedArchives(state.savedArchives);
   const hasUnfinished = Boolean((state.unfinishedPasses || []).length);
   const unfinishedPanel = $('unfinishedPassesPanel');
   unfinishedPanel?.classList.toggle('hidden', !hasUnfinished);
@@ -1047,8 +1047,9 @@ function render(data) {
   }
   // Keep pause visible even while the worker is preparing a new run.
   const canConfirmTop = Boolean(
-    job?.status === 'running' &&
+    ['starting', 'running'].includes(job?.status || '') &&
     job?.phase === 'top' &&
+    job?.captureTabId != null &&
     ['full', 'images', 'retry-walk'].includes(job?.captureMode || '')
   );
   $('confirmTop').classList.toggle('hidden', !canConfirmTop);
@@ -2041,11 +2042,20 @@ $('reloadExtension').addEventListener('click', () => {
     updateCaptureTargetHint($('captureTarget').value);
     renderInterfaceAppearanceControls(settings);
     applyInterfaceAppearance(settings);
-    await refreshUpdateNotice();
-    await showWhatsNewIfNeeded();
+
+    // Active capture state is tiny and must win the startup race. Load it before
+    // the archive library, update check, tour metadata, or any other heavy UI data.
+    const live = await getLiveState().catch(() => null);
+    if (live?.job && ['starting', 'running', 'paused'].includes(live.job.status)) {
+      startPolling();
+    }
+
     const result = await getState();
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
+
+    void refreshUpdateNotice().catch(() => {});
+    void showWhatsNewIfNeeded().catch(() => {});
 
     const introState = await chrome.storage.local.get(TOUR_STORAGE_KEY);
     if (!introState[TOUR_STORAGE_KEY]) {
