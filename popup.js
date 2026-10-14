@@ -1304,13 +1304,6 @@ function render(data) {
   $('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue);
   $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
   $('deleteArchive').disabled = Boolean(running || !archive);
-  $('patchRecoveredImages').disabled = Boolean(
-    running ||
-    !archive ||
-    !state.linkedDoc?.url ||
-    !(archive.recoveredImagePendingPatchCount || archive.lastImageRecoveredCount)
-  );
-
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
   } else if (job?.status === 'error' && job?.captureMode === 'images-draft') {
@@ -1932,40 +1925,6 @@ $('archiveDocLink').onclick = async event => {
     await getState().catch(() => {});
   } finally {
     link.removeAttribute('aria-disabled');
-  }
-};
-
-$('patchRecoveredImages').onclick = async () => {
-  if (!state?.archive) {
-    setStatus('Нет локального архива для довставки картинок.', true);
-    return;
-  }
-  if (!state?.linkedDoc?.url) {
-    setStatus('У этого чата нет связанного документа Google Docs.', true);
-    return;
-  }
-
-  $('patchRecoveredImages').disabled = true;
-  setStatus('Ищу сообщения в связанном документе Google Docs и довставляю только добранные картинки…');
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_PATCH_RECOVERED_IMAGES',
-      archiveId: state.archive.id
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось довставить изображения.');
-    if (result.noChanges) {
-      setStatus('Новых добранных картинок для этого документа Google Docs нет.');
-    } else {
-      setStatus(
-        `Довставка завершена: ${result.inserted || 0} изображений вставлено` +
-        (result.failed ? `, ${result.failed} не вставлено.` : '.')
-      );
-    }
-    await getState();
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('patchRecoveredImages').disabled = false;
   }
 };
 
