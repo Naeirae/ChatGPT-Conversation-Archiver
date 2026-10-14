@@ -784,7 +784,9 @@ function renderHistory(history = []) {
     continue: 'Добор нового',
     compare: 'Сверка',
     sync: 'Восстановление',
-    images: 'Добор изображений',
+    images: 'Сверка и добор изображений',
+    reconcile: 'Сверка и добор сообщений',
+    'manual-full': 'Ручной полный диапазон',
     'retry-walk': 'Повтор прохода вниз'
   };
 
@@ -1108,7 +1110,7 @@ function render(data) {
     ['starting', 'running'].includes(job?.status || '') &&
     job?.phase === 'top' &&
     job?.captureTabId != null &&
-    ['full', 'images', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
+    ['full', 'images', 'reconcile', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
   );
   $('confirmTop').classList.toggle('hidden', !canConfirmTop);
   $('confirmTop').disabled = !canConfirmTop;
@@ -1167,6 +1169,7 @@ function render(data) {
   $('newDoc').disabled = Boolean(running || !archive);
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
+  $('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue);
   $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
   $('deleteArchive').disabled = Boolean(running || !archive);
   $('patchRecoveredImages').disabled = Boolean(
@@ -1197,6 +1200,13 @@ function render(data) {
       added
         ? `Сверка завершена: ${added} новых сообщений относительно локального архива. Архив не изменён.`
         : 'Сверка завершена: новых сообщений относительно локального архива нет. Архив не изменён.'
+    );
+  } else if (job?.status === 'done' && job?.captureMode === 'reconcile') {
+    const repaired = Number(job.addedCount || archive?.lastCaptureAddedCount || 0);
+    setStatus(
+      repaired
+        ? 'Сверка завершена: восстановлено ' + repaired + ' сообщений. Локальный архив обновлён.'
+        : 'Сверка завершена: пропущенных сообщений не найдено.'
     );
   } else if (job?.status === 'done' && job?.captureMode === 'images') {
     const recovered = Number(job.imageRecoveredCount || archive?.lastImageRecoveredCount || 0);
@@ -1530,8 +1540,14 @@ $('retryCurrent').onclick = async () => {
         docUrl: $('docUrl').value.trim(),
         captureTarget: 'current'
       });
+    } else if (previousMode === 'reconcile') {
+      setStatus('Повторяю сверку и добор сообщений в текущей вкладке…');
+      result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_RECONCILE_CURRENT',
+        captureTarget: 'current'
+      });
     } else if (previousMode === 'images') {
-      setStatus('Повторяю добор изображений в текущей вкладке…');
+      setStatus('Повторяю сверку и добор изображений в текущей вкладке…');
       result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
         captureTarget: 'current'
@@ -1661,13 +1677,40 @@ $('clearHistory').onclick = async () => {
     $('clearHistory').disabled = false;
   }
 };
+$('reconcileArchive').onclick = async () => {
+  if (!state?.archive) {
+    setStatus('Сначала нужен локальный архив этого чата.', true);
+    return;
+  }
+  $('reconcileArchive').disabled = true;
+  setStatus('Сверяю весь текущий чат с локальным архивом и добираю пропущенные сообщения…');
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_RECONCILE_CURRENT',
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку архива.');
+    render({
+      ...state,
+      job: result.job,
+      archive: state?.archive || null,
+      unfinishedPass: null,
+      canContinue: true
+    });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('reconcileArchive').disabled = false;
+  }
+};
+
 $('recoverImages').onclick = async () => {
   if (!state?.archive) {
     setStatus('Сначала нужен локальный архив этого чата.', true);
     return;
   }
   $('recoverImages').disabled = true;
-  setStatus('Повторно прохожу чат и добираю только изображения…');
+  setStatus('Сверяю изображения по всему чату и добираю недостающие…');
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
