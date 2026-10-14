@@ -125,16 +125,107 @@ async function resolveDraftRecoveryTab(draftId, sourceUrl = '') {
   return { available: true, record, tab };
 }
 
-function unfinishedGroupKey(item) {
-  return conversationKey(item?.sourceUrl || '') ||
-    String(item?.sourceUrl || '') ||
-    String(item?.id || '');
-}
-
 function unfinishedBoundaryKey(item) {
   const kind = item?.boundaryKind || item?.captureBoundary?.kind || '';
   const key = item?.boundaryKey || item?.captureBoundary?.key || '';
   return kind && key ? String(kind) + ':' + String(key) : 'legacy';
+}
+
+function unfinishedRangeKey(item) {
+  const mode = String(item?.captureMode || '');
+  if (!['fragment', 'manual-full'].includes(mode)) return 'full-range';
+  const range = item?.captureRange || item?.manualFullRange || item?.fragmentMarkers || {};
+  const start = range?.start || {};
+  const startKey = String(start.id || start.signature || '');
+  return mode + ':start:' + (startKey || 'unknown');
+}
+
+function unfinishedGroupKey(item) {
+  const source = conversationKey(item?.sourceUrl || '') ||
+    String(item?.sourceUrl || '') ||
+    String(item?.id || '');
+  return [source, unfinishedBoundaryKey(item), unfinishedRangeKey(item)].join('|');
+}
+
+function storedImageReady(image) {
+  return Boolean(image?.binaryStatus === 'ready' && image?.dataUrl);
+}
+
+function mergeStoredImageRecords(primaryImages = [], alternateImages = []) {
+  const merged = primaryImages.map(image => ({ ...image }));
+  const bySrc = new Map();
+  merged.forEach((image, index) => {
+    const src = String(image?.src || '');
+    if (src && !bySrc.has(src)) bySrc.set(src, index);
+  });
+
+  for (const alternate of alternateImages || []) {
+    const src = String(alternate?.src || '');
+    if (!src) continue;
+    const index = bySrc.get(src);
+    if (index == null) {
+      bySrc.set(src, merged.length);
+      merged.push({ ...alternate, index: merged.length });
+      continue;
+    }
+
+    const current = merged[index] || {};
+    if (storedImageReady(alternate) && !storedImageReady(current)) {
+      merged[index] = { ...current, ...alternate, index };
+      continue;
+    }
+
+    merged[index] = {
+      ...current,
+      alt: current.alt || alternate?.alt || '',
+      width: current.width || alternate?.width || null,
+      height: current.height || alternate?.height || null,
+      placement: current.placement || alternate?.placement || '',
+      mimeType: current.mimeType || alternate?.mimeType || '',
+      byteSize: current.byteSize || alternate?.byteSize || 0,
+      dataUrl: current.dataUrl || alternate?.dataUrl || '',
+      binaryStatus: storedImageReady(current)
+        ? 'ready'
+        : (alternate?.binaryStatus || current.binaryStatus || 'pending'),
+      binaryError: storedImageReady(current)
+        ? ''
+        : (current.binaryError || alternate?.binaryError || ''),
+      index
+    };
+  }
+
+  merged.forEach((image, index) => { image.index = index; });
+  return merged;
+}
+
+function mergeStoredMessageCapture(primary, alternate) {
+  if (!primary) return alternate;
+  if (!alternate) return primary;
+  const primaryImages = primary.images || [];
+  const mergedImages = mergeStoredImageRecords(primaryImages, alternate.images || []);
+  const merged = { ...primary, images: mergedImages };
+
+  if (!primary.reasoningText && alternate.reasoningText) {
+    merged.reasoningText = alternate.reasoningText;
+    merged.reasoningHtml = alternate.reasoningHtml;
+    merged.reasoningLabel = alternate.reasoningLabel;
+    merged.reasoningStatus = alternate.reasoningStatus;
+    merged.reasoningCount = alternate.reasoningCount;
+  }
+
+  if (mergedImages.length > primaryImages.length && alternate.html) {
+    merged.html = alternate.html;
+  }
+  return merged;
+}
+
+function storedMessagesMatch(a, b) {
+  if (!a || !b || a.role !== b.role) return false;
+  if (a.id && b.id && a.id === b.id) return true;
+  return Boolean(
+    a.text && b.text &&
+    messageSignature(a.role, a.text) === messageSignature(b.role, b.text)
+  );
 }
 
 // Merge only verified chronological prefixes from the same conversation and
@@ -152,12 +243,7 @@ async function reconcileUnfinishedPrefix(draft) {
     unfinishedBoundaryKey(item) === boundary &&
     item.messages?.length
   );
-  const matchingMessage = (a, b) => {
-    if (!a || !b || a.role !== b.role) return false;
-    if (a.id && b.id && a.id === b.id) return true;
-    return Boolean(a.text && b.text &&
-      messageSignature(a.role, a.text) === messageSignature(b.role, b.text));
-  };
+  const matchingMessage = storedMessagesMatch;
   const compatible = [draft, ...others.filter(candidate => {
     const n = Math.min(draft.messages.length, candidate.messages.length);
     // Require at least two matching turns and all available overlap in order.
@@ -172,12 +258,7 @@ async function reconcileUnfinishedPrefix(draft) {
     for (const candidate of compatible) {
       const alternate = candidate.messages[i];
       if (!alternate || !matchingMessage(message, alternate)) continue;
-      const originalImages = enriched.images || [];
-      const newImages = alternate.images || [];
-      if (newImages.length > originalImages.length) {
-        enriched = { ...enriched, images: newImages,
-          html: alternate.html || enriched.html };
-      }
+      enriched = mergeStoredMessageCapture(enriched, alternate);
     }
     return enriched;
   });
@@ -190,6 +271,10 @@ async function reconcileUnfinishedPrefix(draft) {
     messages,
     chronologicalCount: messages.length,
     imageCount: messages.reduce((n, item) => n + (item.images?.length || 0), 0),
+    imageBinaryReady: messages.reduce((n, item) =>
+      n + (item.images || []).filter(storedImageReady).length, 0),
+    imageBinaryFailed: messages.reduce((n, item) =>
+      n + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
     capturePhase: 'walk',
     recoveredFromDraftIds: [...new Set([
       ...(draft.recoveredFromDraftIds || []),
@@ -263,7 +348,7 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
     // Export is independent from the current recovery attempt: if an older
     // technical attempt already contains a valid top-to-bottom prefix, keep
     // offering it even when the newest attempt is travelling back to the top.
-    const exportCandidate = [...members]
+    const exportCandidate = [...chain]
       .filter(item => item.canExportPrefix)
       .sort((a, b) =>
         Number(b.messageCount || 0) - Number(a.messageCount || 0) ||
@@ -280,8 +365,8 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       exportPassId: exportCandidate?.id || '',
       copyPassId: contentCandidate?.id || primary.id,
       viewPassId: contentCandidate?.id || primary.id,
-      passIds: members.map(item => item.id),
-      technicalPassCount: members.length,
+      passIds: chain.map(item => item.id),
+      technicalPassCount: chain.length,
       messageCount: Number(contentCandidate?.messageCount || 0),
       imageCount: Number(contentCandidate?.imageCount || 0),
       chronologicalCount: Number(contentCandidate?.chronologicalCount || 0),
@@ -322,7 +407,9 @@ function liveUnfinishedSummary(job) {
     sourceUrl: job.sourceUrl || '',
     capturedAt: new Date(Number(job.updatedAt || Date.now())).toISOString(),
     messageCount: Number(job.draftCount || 0),
-    imageCount: 0,
+    imageCount: Number(job.imageCount || 0),
+    imageBinaryReady: Number(job.imageBinaryReady || 0),
+    imageBinaryFailed: Number(job.imageBinaryFailed || 0),
     captureMode: job.captureMode || '',
     capturePhase: job.phase || '',
     hasBoundary: Boolean(boundary?.kind && boundary?.key),
