@@ -77,6 +77,10 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
     fail('capture runtime: missing manual full-range route');
   }
+  if (!contentSource.includes("mode !== 'manual-full' && boundary && !boundaryIsVisible(boundary)") ||
+      !contentSource.includes("closeSelection.textContent = 'Завершить разметку'")) {
+    fail('manual full range: explicit end marker must not trigger a pre-scan and marking exit must be visible');
+  }
   if (!contentSource.includes('resolveFragmentTurnFromTarget') ||
       !contentSource.includes("document.addEventListener('click'") ||
       !contentSource.includes("'archiver-fragment-overlay'") ||
@@ -105,6 +109,13 @@ try {
       !serviceWorkerSource.includes('pendingDocSource') ||
       !contentSource.includes("pendingDocUrl: current.pendingDocUrl || ''")) {
     fail('unfinished recovery: range and pending-document metadata are not preserved');
+  }
+  if (!serviceWorkerSource.includes('draftId: draft.id') ||
+      !serviceWorkerSource.includes('const redundantIds = compatible') ||
+      !contentSource.includes("current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId)") ||
+      !contentSource.includes('canonicalRecoveryDraft?.captureMode') ||
+      !contentSource.includes('canonicalRecoveryDraft?.captureRange')) {
+    fail('unfinished recovery: retries must update one canonical draft and preserve original capture identity');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||

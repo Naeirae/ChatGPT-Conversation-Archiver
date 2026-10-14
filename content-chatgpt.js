@@ -2617,6 +2617,12 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
+
+    const canonicalRecoveryDraftId =
+      current.draftId || current.recoveryDraftId || '';
+    const canonicalRecoveryDraft = canonicalRecoveryDraftId
+      ? (await chrome.storage.local.get('draft:' + canonicalRecoveryDraftId))['draft:' + canonicalRecoveryDraftId]
+      : null;
     // On a resumed downward pass, every checkpoint must include the already
     // saved prefix; otherwise a second failure exposes only the new tail.
     if (current.recoveryDraftId && current.phase !== 'top') {
@@ -2663,7 +2669,10 @@
       title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'Переписка ChatGPT',
       sourceUrl: location.href,
       capturedAt: new Date().toISOString(),
-      captureMode: current.captureMode || 'full',
+      captureMode:
+        canonicalRecoveryDraft?.captureMode ||
+        current.captureMode ||
+        'full',
       capturePhase: current.phase || 'walk',
       captureBoundary: current.captureBoundary || boundary,
       navigationHighWater: Number(current.navigationHighWater || 0),
@@ -2680,9 +2689,10 @@
         sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
       complete: false,
       error: '',
-      captureRange: (current.captureMode === 'fragment' || current.captureMode === 'manual-full')
-        ? (current.captureRange || null)
-        : null,
+      captureRange:
+        canonicalRecoveryDraft?.captureRange ||
+        current.captureRange ||
+        null,
       pendingDocUrl: current.pendingDocUrl || '',
       pendingDocMode: current.pendingDocMode || '',
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
@@ -3060,10 +3070,12 @@
           order.length = 0;
           await reachTopWithoutCapture(0, { fullCapture: true });
         } else {
-          // Rich upward scans must begin at the fixed lower boundary. The active
-          // tab may currently be below or above an older manual/draft boundary;
-          // locate it first without accumulating out-of-range messages.
-          if (boundary && !boundaryIsVisible(boundary)) {
+          // Rich upward scans normally begin at the fixed lower boundary. Manual
+          // full-range capture is different: the user already chose an explicit
+          // end marker, so travelling to that marker before finding the start
+          // only adds a redundant down/up pass. Start from the explicit start
+          // marker and let the chronological walk stop at the saved end marker.
+          if (mode !== 'manual-full' && boundary && !boundaryIsVisible(boundary)) {
             await locateBoundaryForUpwardScan(boundary);
           }
           map.clear();
@@ -3714,7 +3726,9 @@
               await hydrateMessageImages(withImages, { onlyMissing: true }).catch(() => {});
             }
           }
-          draftId = 'draft-' + jobId;
+          // A resumed capture continues one logical unfinished pass. Reuse the
+          // canonical draft ID instead of exposing every retry as a new draft.
+          draftId = current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId);
           draftCount = draftMessages.length;
           const recoveryCapturePhase = chronologicalStarted
             ? 'walk'
@@ -3741,7 +3755,11 @@
               sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
             imageBinaryFailed: draftMessages.reduce((sum, item) =>
               sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
-            captureRange: (mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null,
+            captureRange:
+              existingRecoveryDraft?.captureRange ||
+              ((mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null) ||
+              current.captureRange ||
+              null,
             pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
             pendingDocMode: existingRecoveryDraft?.pendingDocMode || current.pendingDocMode || '',
             complete: false,
@@ -4007,11 +4025,11 @@
 
   const closeSelection = document.createElement('button');
   closeSelection.type = 'button';
-  closeSelection.textContent = '×';
-  closeSelection.title = 'Закончить разметку';
-  closeSelection.setAttribute('aria-label', 'Закончить разметку');
+  closeSelection.textContent = 'Завершить разметку';
+  closeSelection.title = 'Выключить режим разметки и оставить выбранные границы';
+  closeSelection.setAttribute('aria-label', 'Завершить разметку');
   closeSelection.style.cssText =
-    'border:0;border-radius:5px;background:#435766;color:white;padding:5px 9px;cursor:pointer';
+    'border:0;border-radius:5px;background:#435766;color:white;padding:7px 9px;cursor:pointer';
   closeSelection.addEventListener('click', () => {
     fragmentSelectionActive = false;
     clearSelectedFragmentTurn();
