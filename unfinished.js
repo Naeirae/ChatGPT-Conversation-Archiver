@@ -12,7 +12,9 @@ const MODE_NAMES = {
   fragment: 'фрагмент',
   continue: 'продолжение архива',
   sync: 'восстановление по документу Google Docs',
-  images: 'добор изображений',
+  images: 'сверка и добор изображений',
+  reconcile: 'сверка и добор сообщений',
+  'manual-full': 'ручной полный диапазон',
   'resume-draft': 'продолжение незавершённого сбора',
   'retry-walk': 'повтор прохода сверху вниз'
 };
@@ -81,6 +83,8 @@ async function load() {
     'Сохранено: ' + formatDate(pass.capturedAt),
     'Сообщений: ' + ((pass.messages || []).length),
     'Изображений: ' + (pass.imageCount || 0),
+    'Подготовлено изображений: ' + (pass.imageBinaryReady || 0),
+    'Не подготовлено изображений: ' + (pass.imageBinaryFailed || 0),
     'Этап сбора: ' + (PHASE_NAMES[pass.capturePhase] || '—'),
     'Режим: ' + (MODE_NAMES[pass.captureMode] || 'обычный сбор'),
     'Найдено на первом этапе: ' + (pass.navigationHighWater || 0),
@@ -104,9 +108,12 @@ async function load() {
   $('resume').classList.toggle('hidden', !canResume);
   $('resume').textContent = 'Продолжить';
   $('openCapture').classList.toggle('hidden', !hasSavedRecoveryTab);
-  $('exportDoc').classList.toggle(
+  const isChronologicalPrefix = ['walk', 'finalizing'].includes(pass.capturePhase || '');
+  $('exportDoc').classList.toggle('hidden', !isChronologicalPrefix);
+  $('reconcileArchive').classList.toggle('hidden', !isChronologicalPrefix);
+  $('hydrateImages').classList.toggle(
     'hidden',
-    !['walk', 'finalizing'].includes(pass.capturePhase || '')
+    Number(pass.imageCount || 0) <= Number(pass.imageBinaryReady || 0)
   );
 
   const compared = await chrome.runtime.sendMessage({
@@ -132,6 +139,47 @@ async function load() {
     $('compare').textContent = compared?.error || 'Сверку выполнить не удалось.';
   }
 }
+
+$('reconcileArchive').onclick = async () => {
+  const passId = passIdFromUrl();
+  $('reconcileArchive').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_RECONCILE_UNFINISHED_PASS',
+      passId
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить незавершённый сбор.');
+    $('compare').textContent =
+      'Локальный архив обновлён: было ' + Number(result.previousMessageCount || 0) +
+      ', стало ' + Number(result.messageCount || 0) +
+      ', восстановлено ' + Number(result.addedCount || 0) + ' сообщений.';
+  } catch (error) {
+    alert(error.message || String(error));
+  } finally {
+    $('reconcileArchive').disabled = false;
+  }
+};
+
+$('hydrateImages').onclick = async () => {
+  const passId = passIdFromUrl();
+  $('hydrateImages').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES',
+      passId
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
+    alert(
+      'Изображения проверены: ' + Number(result.imageBinaryReady || 0) +
+      ' подготовлено, ' + Number(result.imageBinaryFailed || 0) + ' не подготовлено.'
+    );
+    location.reload();
+  } catch (error) {
+    alert(error.message || String(error));
+  } finally {
+    $('hydrateImages').disabled = false;
+  }
+};
 
 $('copy').onclick = async () => {
   const passId = passIdFromUrl();
