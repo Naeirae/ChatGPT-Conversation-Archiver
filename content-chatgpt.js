@@ -3874,98 +3874,189 @@
   }).observe(document.documentElement, {subtree:true,childList:true});
   loadFragmentMarkers().catch(() => {});
 
-  // A fixed overlay lives outside React-controlled turn DOM. This works even when
-  // ChatGPT virtualizes or replaces individual message nodes.
+  // Boundary marking uses a persistent toolbar outside React-controlled DOM.
+  // Selecting a message is click-based rather than hover-only, so changes in
+  // ChatGPT's nested message markup do not make the controls disappear.
   let fragmentSelectionActive = false;
+  let selectedFragmentTurn = null;
+
   const fragmentOverlay = document.createElement('div');
   fragmentOverlay.id = 'archiver-fragment-overlay';
   fragmentOverlay.setAttribute('data-archiver-ui', 'true');
-  fragmentOverlay.style.cssText = 'position:fixed;z-index:2147483646;display:none;align-items:center;gap:5px;padding:5px;background:#182a36;color:white;border-radius:9px;box-shadow:0 3px 14px #0005;font:12px system-ui;pointer-events:auto';
+  fragmentOverlay.style.cssText = [
+    'position:fixed',
+    'z-index:2147483646',
+    'display:none',
+    'right:16px',
+    'top:72px',
+    'max-width:360px',
+    'align-items:center',
+    'gap:6px',
+    'padding:9px 10px',
+    'background:#182a36',
+    'color:white',
+    'border-radius:10px',
+    'box-shadow:0 3px 16px #0006',
+    'font:12px system-ui',
+    'pointer-events:auto'
+  ].join(';');
+
   const overlayButtons = {};
-  let hoveredFragmentTurn = null;
-  function updateFragmentOverlay() {
-    if (!fragmentSelectionActive || state.running || !hoveredFragmentTurn?.isConnected) {
-      fragmentOverlay.style.display = 'none';
-      return;
+  const selectionStatus = document.createElement('span');
+  selectionStatus.style.cssText = 'font-size:11px;line-height:1.3;min-width:150px';
+
+  function clearSelectedFragmentTurn() {
+    if (selectedFragmentTurn?.isConnected) {
+      selectedFragmentTurn.style.removeProperty('outline');
+      selectedFragmentTurn.style.removeProperty('outline-offset');
     }
-    const rect = hoveredFragmentTurn.getBoundingClientRect();
-    if (rect.bottom < 0 || rect.top > window.innerHeight || rect.width < 10) {
-      fragmentOverlay.style.display = 'none';
-      return;
-    }
-    const anchor = fragmentAnchor(hoveredFragmentTurn);
-    if (!anchor) return;
-    for (const kind of ['start', 'end']) {
-      const selected = fragmentMarkers[kind];
-      overlayButtons[kind].style.background = selected &&
-        (selected.id && selected.id === anchor.id || !selected.id && selected.signature === anchor.signature)
-        ? '#a2e4bd' : '#fff';
-    }
-    fragmentOverlay.style.display = 'flex';
-    fragmentOverlay.style.top = Math.max(8, Math.min(window.innerHeight - 45, rect.top + 6)) + 'px';
-    fragmentOverlay.style.left = Math.max(8, Math.min(window.innerWidth - 240, rect.right - 228)) + 'px';
+    selectedFragmentTurn = null;
   }
+
+  function resolveFragmentTurnFromTarget(target) {
+    const node = target?.nodeType === 1 ? target : target?.parentElement;
+    if (!node) return null;
+
+    const shell = node.closest?.(TURN_SHELL_SELECTOR);
+    if (shell && roleOf(shell)) return shell;
+
+    const roleNode = node.closest?.(ROLE_SELECTOR);
+    if (roleNode && roleOf(roleNode)) {
+      const wrapper = roleNode.closest?.(TURN_SHELL_SELECTOR);
+      return wrapper && roleOf(wrapper) ? wrapper : roleNode;
+    }
+
+    const turns = orderedTurns();
+    return turns.find(turn => turn === node || turn.contains(node)) || null;
+  }
+
+  function markerMatchesTurn(kind, turn) {
+    if (!turn) return false;
+    const anchor = fragmentAnchor(turn);
+    const selected = fragmentMarkers[kind];
+    if (!anchor || !selected) return false;
+    return Boolean(
+      (selected.id && selected.id === anchor.id) ||
+      (!selected.id && selected.signature === anchor.signature)
+    );
+  }
+
+  function updateFragmentOverlay() {
+    if (!fragmentSelectionActive || state.running) {
+      fragmentOverlay.style.display = 'none';
+      return;
+    }
+
+    fragmentOverlay.style.display = 'flex';
+    fragmentOverlay.style.flexWrap = 'wrap';
+
+    const hasTurn = Boolean(selectedFragmentTurn?.isConnected && fragmentAnchor(selectedFragmentTurn));
+    const marked = [
+      fragmentMarkers.start ? 'начало ✓' : 'начало —',
+      fragmentMarkers.end ? 'конец ✓' : 'конец —'
+    ].join(' · ');
+    selectionStatus.textContent = hasTurn
+      ? 'Реплика выбрана. ' + marked
+      : 'Кликните по реплике. ' + marked;
+
+    for (const kind of ['start', 'end']) {
+      const button = overlayButtons[kind];
+      if (!button) continue;
+      button.disabled = !hasTurn;
+      button.style.opacity = hasTurn ? '1' : '.55';
+      button.style.background = markerMatchesTurn(kind, selectedFragmentTurn)
+        ? '#a2e4bd'
+        : '#fff';
+    }
+  }
+
   for (const [kind, label] of [['start', '⟦ Начало'], ['end', 'Конец ⟧']]) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
-    button.title = kind === 'start' ? 'Начать фрагмент с этой реплики' : 'Закончить фрагмент на этой реплике';
-    button.style.cssText = 'font:12px system-ui;background:#fff;color:#222;border:0;border-radius:5px;padding:7px 9px;cursor:pointer';
+    button.title = kind === 'start'
+      ? 'Сделать выбранную реплику началом диапазона'
+      : 'Сделать выбранную реплику концом диапазона';
+    button.style.cssText =
+      'font:12px system-ui;background:#fff;color:#222;border:0;border-radius:5px;padding:7px 9px;cursor:pointer';
     button.addEventListener('click', async event => {
       event.preventDefault();
       event.stopPropagation();
-      const anchor = fragmentAnchor(hoveredFragmentTurn);
+
+      const anchor = fragmentAnchor(selectedFragmentTurn);
       if (!anchor) return;
+
       const old = fragmentMarkers[kind];
-      if (old && (old.id && old.id === anchor.id || !old.id && old.signature === anchor.signature)) {
+      if (old && (
+        (old.id && old.id === anchor.id) ||
+        (!old.id && old.signature === anchor.signature)
+      )) {
         delete fragmentMarkers[kind];
       } else {
         fragmentMarkers[kind] = anchor;
       }
+
       await chrome.storage.local.set({ [fragmentStorageKey()]: fragmentMarkers });
       updateFragmentOverlay();
     });
     overlayButtons[kind] = button;
     fragmentOverlay.appendChild(button);
   }
-  const selectionStatus = document.createElement('span');
-  selectionStatus.textContent = 'Архиватор';
-  selectionStatus.style.cssText = 'font-size:10px;opacity:.75';
+
   fragmentOverlay.appendChild(selectionStatus);
+
   const closeSelection = document.createElement('button');
   closeSelection.type = 'button';
   closeSelection.textContent = '×';
   closeSelection.title = 'Закончить разметку';
   closeSelection.setAttribute('aria-label', 'Закончить разметку');
-  closeSelection.style.cssText = 'border:0;border-radius:5px;background:#435766;color:white;padding:5px 9px;cursor:pointer';
+  closeSelection.style.cssText =
+    'border:0;border-radius:5px;background:#435766;color:white;padding:5px 9px;cursor:pointer';
   closeSelection.addEventListener('click', () => {
     fragmentSelectionActive = false;
-    hoveredFragmentTurn = null;
-    fragmentOverlay.style.display = 'none';
+    clearSelectedFragmentTurn();
+    updateFragmentOverlay();
   });
   fragmentOverlay.appendChild(closeSelection);
+
   function attachFragmentOverlay() {
     if (!document.body) return;
     if (!fragmentOverlay.isConnected) document.body.appendChild(fragmentOverlay);
   }
+
   attachFragmentOverlay();
-  document.addEventListener('pointermove', event => {
+
+  document.addEventListener('click', event => {
     if (!fragmentSelectionActive || state.running || fragmentOverlay.contains(event.target)) return;
-    const target = event.target?.nodeType === 1 ? event.target : event.target?.parentElement;
-    const shell = target?.closest?.(TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR);
-    if (shell && roleOf(shell)) hoveredFragmentTurn = shell;
-    else if (event.clientX < window.innerWidth - 250) hoveredFragmentTurn = null;
+
+    const turn = resolveFragmentTurnFromTarget(event.target);
+    if (!turn || !roleOf(turn)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    clearSelectedFragmentTurn();
+    selectedFragmentTurn = turn;
+    selectedFragmentTurn.style.setProperty('outline', '2px solid #38bdf8', 'important');
+    selectedFragmentTurn.style.setProperty('outline-offset', '4px', 'important');
     updateFragmentOverlay();
-  }, {passive:true});
-  document.addEventListener('scroll', updateFragmentOverlay, {passive:true,capture:true});
-  window.addEventListener('resize', updateFragmentOverlay, {passive:true});
+  }, true);
+
+  document.addEventListener('scroll', () => {
+    if (fragmentSelectionActive) updateFragmentOverlay();
+  }, { passive: true, capture: true });
+
+  window.addEventListener('resize', () => {
+    if (fragmentSelectionActive) updateFragmentOverlay();
+  }, { passive: true });
 
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message && message.type === 'ARCHIVER_SET_FRAGMENT_SELECTION') {
       fragmentSelectionActive = Boolean(message.enabled);
-      hoveredFragmentTurn = null;
-      fragmentOverlay.style.display = 'none';
+      clearSelectedFragmentTurn();
+      attachFragmentOverlay();
+      updateFragmentOverlay();
       sendResponse({ ok: true, enabled: fragmentSelectionActive });
       return false;
     }
