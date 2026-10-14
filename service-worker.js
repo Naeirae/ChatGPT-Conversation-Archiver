@@ -369,6 +369,8 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       technicalPassCount: chain.length,
       messageCount: Number(contentCandidate?.messageCount || 0),
       imageCount: Number(contentCandidate?.imageCount || 0),
+      imageBinaryReady: Number(contentCandidate?.imageBinaryReady || 0),
+      imageBinaryFailed: Number(contentCandidate?.imageBinaryFailed || 0),
       chronologicalCount: Number(contentCandidate?.chronologicalCount || 0),
       canExportCurrent: Boolean(exportCandidate?.id),
       exportMessageCount: Number(exportCandidate?.messageCount || 0),
