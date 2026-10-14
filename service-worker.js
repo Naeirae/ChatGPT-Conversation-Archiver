@@ -348,10 +348,9 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
 
-    // One user-facing card per chat. Internally there may be several recovery
-    // attempts, sometimes even from older snapshot boundaries. Choose one
-    // current chain for resume/export and keep the rest hidden as technical
-    // history instead of rendering competing cards.
+    // One user-facing card per logical capture chain (conversation + fixed
+    // snapshot boundary + manual range). Internally there may still be several
+    // technical recovery attempts; choose one current attempt for resume/export.
     const resumeCandidate = [...members]
       .filter(item => item.recoveryTabAvailable)
       .sort((a, b) =>
