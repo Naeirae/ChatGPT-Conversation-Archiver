@@ -2747,6 +2747,13 @@
     let navigationSequence = [];
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
+    const savedBaseCount = (mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId
+      ? Number(((await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId])?.messages?.length || 0)
+      : 0;
+    const displayCount = count =>
+      savedBaseCount && (mode === 'resume-draft' || mode === 'retry-walk')
+        ? Math.max(savedBaseCount, savedBaseCount + Number(count || 0))
+        : Number(count || 0);
 
     try {
       const settings = await getSettings();
@@ -2977,7 +2984,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images') {
+      if (mode === 'full' || mode === 'images' || mode === 'fragment' || mode === 'manual-full') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3051,7 +3058,7 @@
         }
       }
 
-      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment') {
+      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment' && mode !== 'manual-full') {
         const anchorIndex = capturedMessages.findIndex(item =>
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
@@ -3727,7 +3734,8 @@
           ...draft,
           imageCount: allImages.length,
           imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
-          imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length
+          imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length,
+          capturedAt: new Date().toISOString()
         };
         await chrome.storage.local.set({ [key]: next });
         return {
