@@ -3080,22 +3080,37 @@
         if (!existing?.messages?.length) throw new Error('Сохранённый незавершённый проход недоступен.');
 
         previousCount = existing.messages.length;
-        const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-        const existingSignatures = new Set(
-          existing.messages
-            .filter(item => cleanMessageText(item.text || '', item.role || ''))
-            .map(messageTextSignature)
-        );
 
-        const delta = capturedMessages.filter(item => {
-          if (item.id && existingIds.has(item.id)) return false;
-          const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
-          if (hasText && existingSignatures.has(messageTextSignature(item))) return false;
-          return true;
-        });
+        if (mode === 'retry-walk') {
+          // retry-walk has just rebuilt the prefix chronologically from the real
+          // top to the fixed lower boundary. Treat that pass as canonical;
+          // concatenating the old prefix here can duplicate or reorder messages
+          // when ChatGPT regenerated turn IDs.
+          messages = capturedMessages.map(current => {
+            const previous = existing.messages.find(item =>
+              sameNavigationRef(navigationRef(item), navigationRef(current))
+            );
+            return previous ? mergeRicherCapture(current, previous) : current;
+          });
+          addedCount = Math.max(0, messages.length - previousCount);
+        } else {
+          const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+          const existingSignatures = new Set(
+            existing.messages
+              .filter(item => cleanMessageText(item.text || '', item.role || ''))
+              .map(messageTextSignature)
+          );
 
-        addedCount = delta.length;
-        messages = existing.messages.concat(delta);
+          const delta = capturedMessages.filter(item => {
+            if (item.id && existingIds.has(item.id)) return false;
+            const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
+            if (hasText && existingSignatures.has(messageTextSignature(item))) return false;
+            return true;
+          });
+
+          addedCount = delta.length;
+          messages = existing.messages.concat(delta);
+        }
       } else if (mode === 'images') {
         if (!existingArchiveId) throw new Error('Для добора изображений нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
@@ -3238,6 +3253,60 @@
       let draftId = '';
       let draftCount = 0;
 
+      // Image recovery is additive and safe to persist incrementally. If a full
+      // image pass fails after finding some lazy-loaded images, merge and embed
+      // what was already discovered instead of throwing all that work away.
+      if (mode === 'images' && existingArchiveId && status !== 'cancelled') {
+        try {
+          const storedArchive = await chrome.storage.local.get('archive:' + existingArchiveId);
+          const existingArchive = storedArchive['archive:' + existingArchiveId];
+          if (existingArchive?.messages?.length) {
+            const partialScan = [];
+            const partialByRef = new Map();
+            for (const candidate of [...navigationMessages, ...order.map(id => map.get(id)).filter(Boolean)]) {
+              const ref = navigationRef(candidate);
+              const key = ref.id || ref.signature || ref.externalSignature;
+              if (!key) continue;
+              const previous = partialByRef.get(key);
+              if (!previous) {
+                partialByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
+                continue;
+              }
+              const union = mergeImageRecords(previous.images || [], candidate.images || []);
+              previous.images = union.images;
+            }
+            partialScan.push(...partialByRef.values());
+
+            const salvaged = mergeRecoveredImagesIntoArchive(existingArchive.messages, partialScan);
+            if (salvaged.recovered.length) {
+              const changedMessages = salvaged.messages.filter(message =>
+                salvaged.recovered.some(ref =>
+                  (ref.messageId && ref.messageId === message.id) ||
+                  (ref.messageSignature && ref.messageSignature === messageTextSignature(message))
+                )
+              );
+              await hydrateMessageImages(changedMessages, { onlyMissing: true }).catch(() => {});
+              const allImages = salvaged.messages.flatMap(item => item.images || []);
+              await chrome.storage.local.set({
+                ['archive:' + existingArchiveId]: {
+                  ...existingArchive,
+                  messages: salvaged.messages,
+                  imageCount: allImages.length,
+                  imageBinaryReady: allImages.filter(image => image.binaryStatus === 'ready' && image.dataUrl).length,
+                  imageBinaryFailed: allImages.filter(image => image.binaryStatus === 'failed').length,
+                  lastImageRecoveredCount: salvaged.recovered.length,
+                  lastRecoveredImageRefs: salvaged.recovered,
+                  lastCaptureMode: 'images-partial',
+                  capturedAt: new Date().toISOString()
+                }
+              });
+            }
+          }
+        } catch (_) {
+          // Preserve the original capture failure; partial image salvage is best effort.
+        }
+      }
+
       if ((chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
@@ -3279,6 +3348,14 @@
         }
 
         if (draftMessages.length) {
+          if (status !== 'cancelled') {
+            const withImages = draftMessages.filter(item => (item.images || []).some(image =>
+              image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+            ));
+            if (withImages.length) {
+              await hydrateMessageImages(withImages, { onlyMissing: true }).catch(() => {});
+            }
+          }
           draftId = 'draft-' + jobId;
           draftCount = draftMessages.length;
           const recoveryCapturePhase = chronologicalStarted
