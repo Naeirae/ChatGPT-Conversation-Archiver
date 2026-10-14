@@ -1320,14 +1320,22 @@
   function navigationRef(message) {
     return {
       id: String(message?.id || ''),
-      signature: message ? messageTextSignature(message) : ''
+      signature: message ? messageTextSignature(message) : '',
+      externalSignature: message
+        ? externalMatchSignature(message?.role || 'unknown', message?.text || '')
+        : ''
     };
   }
 
   function sameNavigationRef(a, b) {
     if (!a || !b) return false;
     if (a.id && b.id && a.id === b.id) return true;
-    return Boolean(a.signature && b.signature && a.signature === b.signature);
+    if (a.signature && b.signature && a.signature === b.signature) return true;
+    return Boolean(
+      a.externalSignature &&
+      b.externalSignature &&
+      a.externalSignature === b.externalSignature
+    );
   }
 
   function recordNavigationWindow(windows, settings) {
@@ -2910,7 +2918,8 @@
             knownSignatures,
             existingPass.messages.map(item => ({
               id: String(item?.id || ''),
-              signature: externalMatchSignature(item?.role || 'unknown', item?.text || '')
+              signature: messageTextSignature(item),
+              externalSignature: externalMatchSignature(item?.role || 'unknown', item?.text || '')
             })),
             existingPass.resumeWindowSignatures || [],
             existingPass.lastScrollDirection ||
@@ -3130,7 +3139,7 @@
         const scanByRef = new Map();
         for (const candidate of [...navigationMessages, ...capturedMessages]) {
           const ref = navigationRef(candidate);
-          const key = ref.id || ref.signature;
+          const key = ref.id || ref.signature || ref.externalSignature;
           if (!key) continue;
           const previous = scanByRef.get(key);
           if (!previous) {
