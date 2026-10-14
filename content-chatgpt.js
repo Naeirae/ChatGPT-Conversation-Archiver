@@ -491,6 +491,17 @@
     return top + height >= total - Math.max(24, Math.round(height * 0.04));
   }
 
+  function physicalScrollStartVisible() {
+    const turns = orderedTurns();
+    const first = turns[0] || null;
+    const scroller = findScrollContainer(first);
+    if (!scroller) return false;
+    const top = Number(scroller.scrollTop || 0);
+    const height = Number(scroller.clientHeight || 0);
+    if (!height) return false;
+    return top <= Math.max(24, Math.round(height * 0.04));
+  }
+
   function boundaryIsVisible(boundary) {
     return Boolean(boundary && orderedTurns().some(turn => matchesBoundary(turn, boundary)));
   }
@@ -1857,7 +1868,7 @@
           topIdleConfirmations: confirmedIdle + 1
         });
 
-        await sleep(2600);
+        await sleep(900);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
@@ -1889,9 +1900,12 @@
       previousSize = nextSize;
       firstVisibleKey = firstAfter;
 
-      // Five separately confirmed idle probes means roughly tens of seconds
-      // with repeated upward wheel input and no newly loaded older turns.
-      if (confirmedIdle >= 3 && !visibleRetryButton()) {
+      // At the physical top, two unchanged probes are enough. If the page is
+      // not physically at the top, keep the stricter lazy-load protection.
+      const topConfirmed = physicalScrollStartVisible()
+        ? confirmedIdle >= 2
+        : confirmedIdle >= 3;
+      if (topConfirmed && !visibleRetryButton()) {
         if (startAnchor) throw new Error('Не удалось найти отмеченное начало фрагмента: достигнуто начало переписки.');
         await progress('Этап 1/3: начало подтверждено повторными проверками · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
@@ -2000,7 +2014,7 @@
           }
         );
 
-        await sleep(1400);
+        await sleep(700);
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
         const afterWaitFirst = turnsAfter.length
@@ -2023,7 +2037,10 @@
       previousSignature = nextSignature;
       firstVisibleKey = firstAfter;
 
-      if (confirmedIdle >= 3 && !visibleRetryButton()) {
+      const topConfirmed = physicalScrollStartVisible()
+        ? confirmedIdle >= 2
+        : confirmedIdle >= 3;
+      if (topConfirmed && !visibleRetryButton()) {
         await progress(
           fullCapture
             ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
