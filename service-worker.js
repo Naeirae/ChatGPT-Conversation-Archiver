@@ -620,10 +620,22 @@ async function captureSavedArchive(archiveId = '', mode = 'continue', captureTar
   await waitForChatTabComplete(sourceTab.id);
   await waitForChatDomReady(sourceTab.id, 45000);
 
+  const repairOnly = mode === 'reconcile' || mode === 'images';
+  let restoreCanonicalArchiveId = '';
+  let restoreLastArchiveId = '';
+  if (repairOnly) {
+    const canonical = await getArchiveForUrl(archive.sourceUrl || '');
+    const last = await getLastArchive();
+    restoreCanonicalArchiveId = canonical?.id && canonical.id !== archive.id ? canonical.id : '';
+    restoreLastArchiveId = last?.id && last.id !== archive.id ? last.id : '';
+  }
+
   return await startCapture({
     mode,
     existingArchive: archive,
-    captureTarget
+    captureTarget,
+    restoreCanonicalArchiveId,
+    restoreLastArchiveId
   });
 }
 
@@ -1242,6 +1254,8 @@ async function startCapture({
   resumeTailSignatures = [],
   resumeNavigation = false,
   captureRange = null,
+  restoreCanonicalArchiveId = '',
+  restoreLastArchiveId = '',
   captureTarget = 'copy'
 } = {}) {
   const sourceTab = await getActiveTab();
@@ -1347,6 +1361,8 @@ async function startCapture({
     resumeBaseCount: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
     captureBoundary: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
     captureRange,
+    restoreCanonicalArchiveId: String(restoreCanonicalArchiveId || ''),
+    restoreLastArchiveId: String(restoreLastArchiveId || ''),
     pendingDocUrl,
     pendingDocMode,
     count: 0,
@@ -1411,6 +1427,8 @@ async function startCapture({
       partialArchiveId: existingDraft?.partialArchiveId || '',
       captureBoundary: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
       captureRange,
+      restoreCanonicalArchiveId: String(restoreCanonicalArchiveId || ''),
+      restoreLastArchiveId: String(restoreLastArchiveId || ''),
       pendingDocUrl,
       pendingDocMode,
       message: mode === 'manual-full'
@@ -2676,6 +2694,18 @@ async function handleCaptureComplete(message) {
   } else if (message.mode !== 'compare' && message.mode !== 'fragment') {
     await indexArchive(archive);
   }
+
+  if (job.restoreCanonicalArchiveId) {
+    const canonical = await getArchive(job.restoreCanonicalArchiveId);
+    if (canonical?.id) await indexArchive(canonical);
+  }
+  if (job.restoreLastArchiveId) {
+    const previousLast = await getArchive(job.restoreLastArchiveId);
+    if (previousLast?.id) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: previousLast.id });
+    }
+  }
+
   const completedDraftIds = new Set([
     job.draftId || '',
     job.recoveryDraftId || ''
