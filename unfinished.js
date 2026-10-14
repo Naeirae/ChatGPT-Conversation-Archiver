@@ -13,6 +13,7 @@ const MODE_NAMES = {
   continue: 'продолжение архива',
   sync: 'восстановление по документу Google Docs',
   images: 'сверка и добор изображений',
+  'images-draft': 'сверка изображений незавершённой части',
   reconcile: 'сверка и добор сообщений',
   'manual-full': 'ручной полный диапазон',
   'resume-draft': 'продолжение незавершённого сбора',
@@ -169,11 +170,7 @@ $('hydrateImages').onclick = async () => {
       passId
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
-    alert(
-      'Изображения проверены: ' + Number(result.imageBinaryReady || 0) +
-      ' подготовлено, ' + Number(result.imageBinaryFailed || 0) + ' не подготовлено.'
-    );
-    location.reload();
+    alert('Сверка изображений сохранённой части запущена. Прогресс виден в основном окне Архиватора.');
   } catch (error) {
     alert(error.message || String(error));
   } finally {
