@@ -3194,7 +3194,23 @@
               const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
               return !hasText || !seenSignatures.has(messageTextSignature(item));
             });
-            draftMessages = existing.messages.concat(delta);
+            // A retry may encounter the same text before lazy images load.
+            // Preserve the richer saved version and union newly found images.
+            const refreshed = existing.messages.map(previous => {
+              const newer = draftMessages.find(item =>
+                (previous.id && item.id === previous.id) ||
+                sameNavigationRef(navigationRef(previous), navigationRef(item))
+              );
+              if (!newer) return previous;
+              const merged = mergeRicherCapture(newer, previous);
+              const extra = mergeImageRecords(previous.images || [], newer.images || []);
+              if (extra.added.length) {
+                merged.images = extra.images;
+                merged.html = appendRecoveredImageMarkup(merged.html, extra.images, extra.added);
+              }
+              return merged;
+            });
+            draftMessages = refreshed.concat(delta);
           }
         }
 
