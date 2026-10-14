@@ -2833,7 +2833,7 @@
     state.manualTopConfirmed = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'images-draft', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -2872,9 +2872,11 @@
           ? 'Этап 1/3: фиксирую конец снимка…'
           : mode === 'reconcile'
             ? 'Этап 1/3: фиксирую текущий конец для сверки и добора…'
-          : mode === 'images'
-            ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
-            : mode === 'retry-walk'
+          : mode === 'images-draft'
+            ? 'Этап 1/3: фиксирую границу сохранённой части и готовлю сверку изображений…'
+            : mode === 'images'
+              ? 'Этап 1/3: фиксирую конец и готовлю добор изображений…'
+              : mode === 'retry-walk'
               ? 'Повторяю только второй этап: возвращаюсь к началу без пересчёта сообщений…'
               : mode === 'resume-draft'
                 ? 'Этап 1/3: восстанавливаю место незавершённого прохода…'
@@ -2915,7 +2917,7 @@
 
       collect(map, order, settings, boundary);
 
-      if (mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
@@ -3037,7 +3039,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -3086,7 +3088,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3123,7 +3125,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment' || mode === 'manual-full') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3193,7 +3195,7 @@
         }
         capturedMessages = capturedMessages.slice(startAt, endAt + 1);
       }
-      if ((mode === 'full' || mode === 'images' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
+      if ((mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -3241,6 +3243,35 @@
           addedCount = delta.length;
           messages = existing.messages.concat(delta);
         }
+      } else if (mode === 'images-draft') {
+        if (!existingDraftId) throw new Error('Для сверки изображений нужен сохранённый незавершённый проход.');
+        const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+        const existing = stored['draft:' + existingDraftId];
+        if (!existing?.messages?.length) {
+          throw new Error('Сохранённый незавершённый проход недоступен.');
+        }
+
+        previousCount = existing.messages.length;
+        const scanPool = [];
+        const scanByRef = new Map();
+        for (const candidate of [...navigationMessages, ...capturedMessages]) {
+          const ref = navigationRef(candidate);
+          const key = ref.id || ref.signature || ref.externalSignature;
+          if (!key) continue;
+          const previous = scanByRef.get(key);
+          if (!previous) {
+            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
+            continue;
+          }
+          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
+          previous.images = merged.images;
+        }
+        scanPool.push(...scanByRef.values());
+
+        const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
+        messages = merged.messages;
+        recoveredImageRefs = merged.recovered;
+        addedCount = 0;
       } else if (mode === 'reconcile') {
         if (!existingArchiveId) throw new Error('Для сверки и добора нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
@@ -3339,6 +3370,10 @@
 
       const binaryTargetMessages = (mode === 'full' || mode === 'fragment' || mode === 'manual-full')
         ? messages
+        : mode === 'images-draft'
+          ? messages.filter(message => (message.images || []).some(image =>
+              image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+            ))
         : mode === 'reconcile'
           ? messages.filter(message => (message.images || []).some(image =>
               image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
@@ -3368,7 +3403,7 @@
         : [];
 
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'images' || mode === 'reconcile'
+        onlyMissing: mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
       });
 
       if (mode === 'images' && unresolvedBeforeHydration.length) {
@@ -3391,6 +3426,41 @@
       }
 
       const allImages = messages.flatMap(item => item.images || []);
+
+      if (mode === 'images-draft') {
+        const stored = await chrome.storage.local.get('draft:' + existingDraftId);
+        const existing = stored['draft:' + existingDraftId];
+        if (!existing?.messages?.length) {
+          throw new Error('Сохранённый незавершённый проход исчез во время сверки изображений.');
+        }
+        const nextDraft = {
+          ...existing,
+          messages,
+          chronologicalCount: messages.length,
+          imageCount: allImages.length,
+          imageBinaryReady: allImages.filter(image =>
+            image.binaryStatus === 'ready' && image.dataUrl
+          ).length,
+          imageBinaryFailed: allImages.filter(image =>
+            image.binaryStatus === 'failed'
+          ).length,
+          capturedAt: new Date().toISOString()
+        };
+        await chrome.storage.local.set({ ['draft:' + existingDraftId]: nextDraft });
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_DRAFT_IMAGES_COMPLETE',
+            jobId,
+            draftId: existingDraftId,
+            count: messages.length,
+            imageCount: nextDraft.imageCount,
+            imageBinaryReady: nextDraft.imageBinaryReady,
+            imageBinaryFailed: nextDraft.imageBinaryFailed
+          });
+        } catch (_) {}
+        return;
+      }
+
       const conversation = {
         title: (mode === 'fragment' ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
         sourceUrl: location.href,
