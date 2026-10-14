@@ -3060,10 +3060,12 @@
           order.length = 0;
           await reachTopWithoutCapture(0, { fullCapture: true });
         } else {
-          // Rich upward scans must begin at the fixed lower boundary. The active
-          // tab may currently be below or above an older manual/draft boundary;
-          // locate it first without accumulating out-of-range messages.
-          if (boundary && !boundaryIsVisible(boundary)) {
+          // Rich upward scans normally begin at the fixed lower boundary. Manual
+          // full-range capture is different: the user already chose an explicit
+          // end marker, so travelling to that marker before finding the start
+          // only adds a redundant down/up pass. Start from the explicit start
+          // marker and let the chronological walk stop at the saved end marker.
+          if (mode !== 'manual-full' && boundary && !boundaryIsVisible(boundary)) {
             await locateBoundaryForUpwardScan(boundary);
           }
           map.clear();
@@ -3714,7 +3716,9 @@
               await hydrateMessageImages(withImages, { onlyMissing: true }).catch(() => {});
             }
           }
-          draftId = 'draft-' + jobId;
+          // A resumed capture continues one logical unfinished pass. Reuse the
+          // canonical draft ID instead of exposing every retry as a new draft.
+          draftId = current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId);
           draftCount = draftMessages.length;
           const recoveryCapturePhase = chronologicalStarted
             ? 'walk'
@@ -4007,11 +4011,11 @@
 
   const closeSelection = document.createElement('button');
   closeSelection.type = 'button';
-  closeSelection.textContent = '×';
-  closeSelection.title = 'Закончить разметку';
-  closeSelection.setAttribute('aria-label', 'Закончить разметку');
+  closeSelection.textContent = 'Завершить разметку';
+  closeSelection.title = 'Выключить режим разметки и оставить выбранные границы';
+  closeSelection.setAttribute('aria-label', 'Завершить разметку');
   closeSelection.style.cssText =
-    'border:0;border-radius:5px;background:#435766;color:white;padding:5px 9px;cursor:pointer';
+    'border:0;border-radius:5px;background:#435766;color:white;padding:7px 9px;cursor:pointer';
   closeSelection.addEventListener('click', () => {
     fragmentSelectionActive = false;
     clearSelectedFragmentTurn();
