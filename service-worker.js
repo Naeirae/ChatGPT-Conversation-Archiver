@@ -1331,6 +1331,7 @@ async function startCapture({
     recoveryDraftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
     draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
     draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
+    resumeBaseCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
     captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
     captureRange,
     pendingDocUrl,
@@ -1997,6 +1998,7 @@ async function resumeFailedCaptureFromWorkingTab() {
     // Its own checkpoints use a fresh draft ID.
     draftId: 'draft-' + jobId,
     draftCount: draft.messages.length,
+    resumeBaseCount: draft.messages.length,
     partialSaveEnabled: Boolean(draft.partialSaveEnabled),
     partialArchiveId: draft.partialArchiveId || '',
     recoveryAvailable: false,
@@ -2227,6 +2229,7 @@ async function resumeUnfinishedInSavedTab(passId = '') {
     draftId: passId,
     recoveryDraftId: passId,
     draftCount: draft.messages.length,
+    resumeBaseCount: draft.messages.length,
     recoveryAvailable: true,
     captureTabId: recovery.tab.id,
     sourceTabId: recovery.record.sourceTabId ?? recovery.tab.id,
