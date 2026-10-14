@@ -382,9 +382,9 @@ function renderUnfinishedPasses(items = []) {
       secondary.appendChild(reconcileSaved);
     }
 
-    if (item.copyPassId && Number(item.imageCount || 0) > Number(item.imageBinaryReady || 0)) {
+    if (item.copyPassId && item.canExportCurrent) {
       const hydrateImages = document.createElement('button');
-      hydrateImages.textContent = 'Добрать изображения';
+      hydrateImages.textContent = 'Сверить и добрать изображения';
       hydrateImages.onclick = async () => {
         hydrateImages.disabled = true;
         setStatus('Добираю изображения в сохранённой части незавершённого сбора…');
