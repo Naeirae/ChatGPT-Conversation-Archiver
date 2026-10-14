@@ -2983,38 +2983,9 @@ async function handleCaptureComplete(message) {
 
   if (message.mode === 'images') {
     const recovered = Number(message.imageRecoveredCount || archive.lastImageRecoveredCount || 0);
-    let linkedPatch = null;
-    let linkedPatchError = '';
-
-    if (recovered > 0) {
-      const linked = await getLinkedDoc(archive.sourceUrl || '');
-      if (linked?.url) {
-        try {
-          linkedPatch = await patchRecoveredImagesToLinkedDoc(archive.id);
-        } catch (error) {
-          linkedPatchError = error?.message || String(error);
-        }
-      }
-    }
-
-    let finalMessage = recovered
-      ? ('Добор изображений завершён: +' + recovered + '. Локальный архив обновлён; текст не пересобирался.')
+    const finalMessage = recovered
+      ? ('Добор изображений завершён: +' + recovered + '. Локальный архив обновлён; документ Google Docs не изменялся.')
       : 'Добор изображений завершён: новых изображений не найдено.';
-
-    if (linkedPatch) {
-      if (linkedPatch.noChanges) {
-        finalMessage += ' Для связанного документа новых изображений для вставки нет.';
-      } else {
-        finalMessage += ' В связанный документ Google Docs вставлено ' +
-          Number(linkedPatch.inserted || 0) + ' изображений';
-        if (linkedPatch.failed) {
-          finalMessage += ', ' + Number(linkedPatch.failed || 0) + ' не вставлено';
-        }
-        finalMessage += '.';
-      }
-    } else if (linkedPatchError) {
-      finalMessage += ' Изображения в связанный документ не вставлены: ' + linkedPatchError;
-    }
 
     const next = await appendRunLog({
       status: 'done',
@@ -3026,8 +2997,6 @@ async function handleCaptureComplete(message) {
       imageRecoveredCount: recovered,
       imageCount: archive.imageCount || 0,
       archiveId: archive.id,
-      docUrl: linkedPatch?.docUrl || '',
-      docExportError: linkedPatchError,
       finishedAt: Date.now(),
       captureTabId: null
     }, {
@@ -4284,14 +4253,23 @@ function recoveredImageItems(archive) {
   return items;
 }
 
-async function patchRecoveredImagesToLinkedDoc(archiveId = '') {
+async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages = [] } = {}) {
   const archive = await getArchive(archiveId) || await getLastArchive();
   if (!archive) throw new Error('Нет локального архива.');
   const linked = await getLinkedDoc(archive.sourceUrl || '');
   const docUrl = normalizeGoogleDocUrl(linked?.url || '');
   if (!docUrl) throw new Error('Для этого архива не найден связанный документ Google Docs.');
 
-  const allItems = recoveredImageItems(archive);
+  const excludedIds = new Set(
+    (excludeMessages || []).map(item => String(item?.id || '')).filter(Boolean)
+  );
+  const excludedSignatures = new Set(
+    (excludeMessages || []).map(item => messageSignature(item?.role, item?.text)).filter(Boolean)
+  );
+  const allItems = recoveredImageItems(archive).filter(item =>
+    !excludedIds.has(String(item?.message?.id || '')) &&
+    !excludedSignatures.has(messageSignature(item?.message?.role, item?.message?.text))
+  );
   if (!allItems.length) {
     return { docUrl, inserted: 0, failed: 0, noChanges: true, failures: [] };
   }
@@ -4472,39 +4450,76 @@ async function exportConversationToLinkedDoc(archiveId = '') {
   }
 
   const delta = messages.slice(anchorIndex + 1);
+  let messageResult = {
+    docUrl,
+    addedCount: 0,
+    noChanges: true,
+    imageInsertedCount: 0,
+    imageFailedCount: 0,
+    failedImages: []
+  };
+
   if (delta.length) {
-    return appendMessagesToGoogleDocUrl(
+    messageResult = await appendMessagesToGoogleDocUrl(
       conversation,
       delta,
       docUrl,
       null,
       { linkTarget: true }
     );
+  } else {
+    // Still validate/open the linked document during a manual export even when
+    // there are no new text messages.
+    await openLinkedGoogleDoc({ archiveId: conversation.id });
   }
 
-  const pendingImages = recoveredImageItems(conversation);
-  if (pendingImages.length) {
-    const patched = await patchRecoveredImagesToLinkedDoc(conversation.id);
-    return {
-      docUrl,
-      addedCount: 0,
-      noChanges: Boolean(patched.noChanges),
-      linkedDoc: await getLinkedDoc(conversation.sourceUrl || ''),
-      imageInsertedCount: Number(patched.inserted || 0),
-      imageFailedCount: Number(patched.failed || 0),
-      failedImages: patched.failures || []
-    };
-  }
-
-  const opened = await openLinkedGoogleDoc({ archiveId: conversation.id });
-  return {
-    docUrl: opened.docUrl,
-    addedCount: 0,
+  // Recovered images can belong to messages that were exported long before
+  // their binary data became available. Patch those older messages during the
+  // same manual export action. Do not re-patch images from delta messages:
+  // pasteArchiveIntoGoogleDoc already inserted those in sequence with the text.
+  let patchResult = {
+    docUrl,
+    inserted: 0,
+    failed: 0,
     noChanges: true,
-    linkedDoc: opened.linkedDoc,
-    imageInsertedCount: 0,
-    imageFailedCount: 0,
-    failedImages: []
+    failures: []
+  };
+  const oldRecoveredItems = recoveredImageItems(conversation).filter(item => {
+    const index = messages.findIndex(message =>
+      (item?.message?.id && message.id === item.message.id) ||
+      messageSignature(message.role, message.text) === messageSignature(item?.message?.role, item?.message?.text)
+    );
+    return index >= 0 && index <= anchorIndex;
+  });
+
+  if (oldRecoveredItems.length) {
+    patchResult = await patchRecoveredImagesToLinkedDoc(conversation.id, {
+      excludeMessages: delta
+    });
+  }
+
+  const imageInsertedCount =
+    Number(messageResult.imageInsertedCount || 0) +
+    Number(patchResult.inserted || 0);
+  const imageFailedCount =
+    Number(messageResult.imageFailedCount || 0) +
+    Number(patchResult.failed || 0);
+  const failedImages = [
+    ...(messageResult.failedImages || []),
+    ...(patchResult.failures || [])
+  ];
+
+  return {
+    docUrl: messageResult.docUrl || patchResult.docUrl || docUrl,
+    linkedDoc: await getLinkedDoc(conversation.sourceUrl || ''),
+    addedCount: Number(messageResult.addedCount || 0),
+    noChanges: !delta.length && !imageInsertedCount && !imageFailedCount,
+    imageInsertedCount,
+    imageFailedCount,
+    failedImages,
+    recoveredImagePatchAttempted: Boolean(oldRecoveredItems.length),
+    recoveredImagePatchInserted: Number(patchResult.inserted || 0),
+    recoveredImagePatchFailed: Number(patchResult.failed || 0)
   };
 }
 
