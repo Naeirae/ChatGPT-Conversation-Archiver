@@ -77,9 +77,11 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
     fail('capture runtime: missing manual full-range route');
   }
-  if (!contentSource.includes("message.type === 'ARCHIVER_HYDRATE_DRAFT_IMAGES'") ||
-      !serviceWorkerSource.includes("case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES'")) {
-    fail('capture runtime: missing unfinished image hydration route');
+  if (!contentSource.includes("'images-draft'") ||
+      !contentSource.includes("current.captureMode === 'images-draft'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_DRAFT_IMAGES_COMPLETE'")) {
+    fail('capture runtime: missing transactional unfinished image reconciliation');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||
