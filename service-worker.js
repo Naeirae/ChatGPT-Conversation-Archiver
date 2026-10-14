@@ -1073,7 +1073,7 @@ async function openBoundaryMarkingTab() {
 
   const tab = await chrome.tabs.create({
     url: sourceTab.url,
-    active: true
+    active: false
   });
   if (!tab?.id) throw new Error('Не удалось открыть рабочую вкладку.');
 
@@ -1081,6 +1081,20 @@ async function openBoundaryMarkingTab() {
   await waitForChatTabComplete(tab.id);
   await waitForChatDomReady(tab.id, 45000);
   await ensureBoundaryMarkingScript(tab.id);
+
+  const stored = await chrome.storage.local.get('archiverSettings');
+  await chrome.storage.local.set({
+    archiverSettings: {
+      ...DEFAULT_SETTINGS,
+      ...(stored.archiverSettings || {}),
+      captureTarget: 'current'
+    }
+  });
+
+  await chrome.tabs.update(tab.id, { active: true });
+  if (tab.windowId != null) {
+    await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  }
 
   return {
     ok: true,
