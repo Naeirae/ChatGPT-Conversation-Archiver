@@ -5009,9 +5009,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const tab = await getActiveTab();
         let currentArchive = null;
         let linkedDoc = null;
+        let captureRange = null;
         if (tab?.url && isConversationUrl(tab.url)) {
           currentArchive = await getArchiveForUrl(tab.url);
           linkedDoc = await getLinkedDoc(tab.url);
+          try {
+            const source = new URL(tab.url);
+            const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
+            captureRange = (await chrome.storage.local.get(markersKey))[markersKey] || null;
+          } catch (_) {}
         }
         const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
         const archive = activeIsConversation
@@ -5078,6 +5084,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           unfinishedPass: activeUnfinished,
           unfinishedPasses,
           linkedDoc,
+          captureRange,
           savedArchives: await listLinkedArchives(),
           canContinue: Boolean(currentArchive?.messages?.length),
           history: await getRunHistory()
