@@ -3207,7 +3207,38 @@
               );
             })
           : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
+
+      const unresolvedBeforeHydration = mode === 'images'
+        ? binaryTargetMessages.flatMap(message =>
+            (message.images || [])
+              .filter(image => image?.src && !(image.binaryStatus === 'ready' && image.dataUrl))
+              .map(image => ({
+                message,
+                src: image.src
+              }))
+          )
+        : [];
+
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, { onlyMissing: mode === 'images' });
+
+      if (mode === 'images' && unresolvedBeforeHydration.length) {
+        const knownRecovered = new Set(recoveredImageRefs.map(ref =>
+          String(ref.messageId || ref.messageSignature || '') + '|' + String(ref.src || '')
+        ));
+        for (const item of unresolvedBeforeHydration) {
+          const image = (item.message.images || []).find(candidate => candidate?.src === item.src);
+          if (!image?.dataUrl || image.binaryStatus !== 'ready') continue;
+          const ref = {
+            messageId: item.message.id || '',
+            messageSignature: messageTextSignature(item.message),
+            src: item.src
+          };
+          const key = String(ref.messageId || ref.messageSignature || '') + '|' + String(ref.src || '');
+          if (knownRecovered.has(key)) continue;
+          knownRecovered.add(key);
+          recoveredImageRefs.push(ref);
+        }
+      }
 
       const allImages = messages.flatMap(item => item.images || []);
       const conversation = {
