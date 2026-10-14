@@ -212,15 +212,15 @@ See [SECURITY.md](SECURITY.md) for user-facing security notes.
 
 These invariants are regression-sensitive and must be kept aligned across popup, service worker, content adapter and storage:
 
-1. **Worker-owned job state.** The service worker is the only owner of `activeCaptureJob`; page scripts report progress/checkpoints but do not overwrite job state.
+1. **Worker-owned job state.** The service worker is the only owner of `activeCaptureJob`; page scripts report progress/checkpoints but do not overwrite job state. Creating a new `jobId` replaces the prior job record instead of merging with it; only updates inside the same job are merge operations.
 2. **Fixed lower boundary.** A run captures only through the bottom message fixed at start, unless an explicit manual end marker defines an earlier boundary. Rich upward scans must first locate that lower boundary without accumulating data, then collect only at/before it; otherwise newer messages below an older boundary contaminate reconciliation.
 3. **Manual ranges travel with the draft.** Fragment/manual-full start/end anchors are persisted in `captureRange` and reused during recovery.
 4. **Unfinished chains do not cross boundaries.** User-facing unfinished groups are keyed by conversation, snapshot boundary and explicit range. A resume candidate from one snapshot must never be paired with export/count data from another.
 5. **Resume counters have distinct meanings.** `resumeBaseCount` is immutable for one recovery run; `draftCount` is the latest cumulative persisted checkpoint; `count` is live progress of the current physical pass. UI must not infer totals by blindly adding mutable counters.
 6. **Richer data wins.** Message reconciliation preserves reasoning and prepared image binaries. Equal image counts do not imply equal image readiness.
 7. **Unfinished image repair is transactional.** The `images-draft` scan may rediscover image metadata across the saved prefix, but it must not replace unfinished message text or write intermediate scan snapshots over the canonical draft.
-8. **Mutating reconciliation is fail-closed.** Reconcile-and-fill changes the canonical archive only after ordered compatibility is proven. The legacy compare route remains diagnostic/non-mutating.
-9. **Google Docs is not canonical storage.** Repairing a local archive does not silently rewrite a linked document; document updates remain explicit or verified continuation deltas.
+8. **Mutating reconciliation is fail-closed.** Reconcile-and-fill changes the canonical archive only after ordered compatibility is proven. The legacy compare route remains diagnostic/non-mutating. Repairing a specifically selected historical library archive must not silently replace the previous canonical conversation index or last-archive pointer.
+9. **Google Docs is not canonical storage.** Repairing a local archive does not silently rewrite a linked document; document updates remain explicit or verified continuation deltas. If a verified continuation/sync becomes an unfinished draft, its pending Google Doc target travels with the draft so a later recovery can append the same verified delta instead of silently dropping the document step.
 
 ## Known technical debt
 
