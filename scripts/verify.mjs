@@ -109,8 +109,10 @@ try {
   }
   if (!contentSource.includes('trimMessagesThroughBoundary') ||
       !contentSource.includes('captureBoundaryKey') ||
-      !contentSource.includes("collect(map, order, settings, boundary)")) {
-    fail('content-chatgpt.js: missing fixed bottom snapshot boundary');
+      !contentSource.includes("collect(map, order, settings, boundary)") ||
+      !contentSource.includes('locateBoundaryForUpwardScan') ||
+      !contentSource.includes('recordNavigationWindow(navigationWindows, settings, checkpointBoundary)')) {
+    fail('content-chatgpt.js: missing fixed bottom snapshot boundary or bounded rich traversal');
   }
   if (!contentSource.includes("'resume-draft'") ||
       !contentSource.includes('allowDownwardFallback') ||
