@@ -2022,22 +2022,31 @@ $('activeDoc').onclick = async () => {
       linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
       { archiveId: state?.archive?.id || '' }
     );
-    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
-      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+    const imageInserted = Number(result.imageInsertedCount || 0);
+    const imageFailed = Number(result.imageFailedCount || 0);
+    const imageAttempted = Number(result.recoveredImagePatchCandidateCount || 0);
+    const failureReason = String(result.firstImageFailure || '').trim();
+    const imagePart = (imageInserted || imageFailed || imageAttempted)
+      ? ` Изображения: ${imageInserted} вставлено отдельно через debugger` +
+        (imageFailed ? `, ${imageFailed} не вставлено` : '') +
+        (failureReason ? `. Причина: ${failureReason}` : '') + '.'
       : '';
 
     if (result.noChanges) {
       setStatus(
         linked
-          ? 'Связанный документ Google Docs открыт. Новых сообщений и изображений для добавления нет.'
+          ? 'Связанный документ Google Docs открыт. Новых сообщений и невставленных сохранённых изображений нет.'
           : 'В этом документе Google Docs уже есть все сообщения из локального архива.'
       );
     } else if (result.addedCount) {
-      setStatus(`Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` + imagePart);
-    } else if (result.imageInsertedCount || result.imageFailedCount) {
       setStatus(
-        `Готово. Сообщения не дублировались. Изображения: ${result.imageInsertedCount || 0} вставлено, ` +
-        `${result.imageFailedCount || 0} ошибок.`
+        `Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` +
+        imagePart
+      );
+    } else if (imageInserted || imageFailed || imageAttempted) {
+      setStatus(
+        'Текст повторно не вставлялся.' + imagePart,
+        Boolean(imageFailed && !imageInserted)
       );
     } else {
       setStatus('Связанный документ Google Docs открыт и проверен.');
