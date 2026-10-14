@@ -1440,9 +1440,12 @@
       merged.reasoningStatus = fallback.reasoningStatus;
       merged.reasoningCount = fallback.reasoningCount;
     }
-    if ((fallback.images?.length || 0) > (base.images?.length || 0)) {
-      merged.images = fallback.images;
-      merged.html = fallback.html;
+    const imageMerge = mergeImageRecords(base.images || [], fallback.images || []);
+    if (imageMerge.images.length) {
+      merged.images = imageMerge.images;
+      if (imageMerge.added.length && fallback.html) {
+        merged.html = fallback.html;
+      }
     }
     return merged;
   }
@@ -1559,22 +1562,47 @@
 
   function mergeImageRecords(existingImages, scannedImages) {
     const merged = (existingImages || []).map(image => ({ ...image }));
-    const seen = new Set(merged.map(image => String(image?.src || '')).filter(Boolean));
+    const bySrc = new Map();
+    merged.forEach((image, index) => {
+      const src = String(image?.src || '');
+      if (src && !bySrc.has(src)) bySrc.set(src, index);
+    });
     const added = [];
 
     for (const image of scannedImages || []) {
       const src = String(image?.src || '');
-      if (!src || seen.has(src)) continue;
-      seen.add(src);
-      const next = {
-        ...image,
-        index: merged.length,
-        dataUrl: image?.dataUrl || '',
-        binaryStatus: image?.binaryStatus || 'pending',
-        binaryError: image?.binaryError || ''
+      if (!src) continue;
+      const index = bySrc.get(src);
+      if (index == null) {
+        const next = {
+          ...image,
+          index: merged.length,
+          dataUrl: image?.dataUrl || '',
+          binaryStatus: image?.binaryStatus || 'pending',
+          binaryError: image?.binaryError || ''
+        };
+        bySrc.set(src, merged.length);
+        merged.push(next);
+        added.push(next);
+        continue;
+      }
+
+      const current = merged[index] || {};
+      const currentReady = current.binaryStatus === 'ready' && current.dataUrl;
+      const incomingReady = image?.binaryStatus === 'ready' && image?.dataUrl;
+      merged[index] = {
+        ...current,
+        alt: current.alt || image?.alt || '',
+        width: current.width || image?.width || null,
+        height: current.height || image?.height || null,
+        placement: current.placement || image?.placement || '',
+        mimeType: currentReady ? current.mimeType : (image?.mimeType || current.mimeType || ''),
+        byteSize: currentReady ? current.byteSize : (image?.byteSize || current.byteSize || 0),
+        dataUrl: currentReady ? current.dataUrl : (incomingReady ? image.dataUrl : (current.dataUrl || '')),
+        binaryStatus: currentReady ? 'ready' : (incomingReady ? 'ready' : (image?.binaryStatus || current.binaryStatus || 'pending')),
+        binaryError: currentReady || incomingReady ? '' : (current.binaryError || image?.binaryError || ''),
+        index
       };
-      merged.push(next);
-      added.push(next);
     }
 
     merged.forEach((image, index) => { image.index = index; });
@@ -2497,6 +2525,10 @@
       resumeWindowSignatures: currentResumeWindowSignatures(6),
       messages,
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+      imageBinaryReady: messages.reduce((sum, item) =>
+        sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
+      imageBinaryFailed: messages.reduce((sum, item) =>
+        sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
       complete: false,
       error: '',
       captureRange: (current.captureMode === 'fragment' || current.captureMode === 'manual-full')
