@@ -169,6 +169,20 @@ try {
       !serviceWorkerSource.includes('DOC_IMAGE_PATCHES_KEY')) {
     fail('service-worker.js: missing recovered-image patch action');
   }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_OPEN_LINKED_DOC'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_EXPORT_LINKED_DOC'") ||
+      !serviceWorkerSource.includes('inspectGoogleDocAvailability') ||
+      !serviceWorkerSource.includes('clearLinkedDocumentState') ||
+      !serviceWorkerSource.includes('clearLinkedDoc')) {
+    fail('linked Google Docs: missing validated open/append or stale-link invalidation');
+  }
+  const imageRecoveryBlock = serviceWorkerSource.slice(
+    serviceWorkerSource.indexOf("if (message.mode === 'images')"),
+    serviceWorkerSource.indexOf('let docResult = null;')
+  );
+  if (!imageRecoveryBlock.includes('patchRecoveredImagesToLinkedDoc')) {
+    fail('image recovery: recovered images must auto-patch a linked Google Doc');
+  }
   if (!serviceWorkerSource.includes("type: 'ARCHIVER_PING'") ||
       !serviceWorkerSource.includes('ping.version !== expectedVersion') ||
       !contentSource.includes("message.type === 'ARCHIVER_PING'")) {
@@ -260,6 +274,10 @@ try {
   if (!popupJs.includes('function applyInterfaceAppearance') ||
       !popupJs.includes('function normalizeInterfaceAppearance')) {
     fail('popup.js: missing interface appearance layer');
+  }
+  if (!popupJs.includes('ARCHIVER_OPEN_LINKED_DOC') ||
+      !popupJs.includes('ARCHIVER_EXPORT_LINKED_DOC')) {
+    fail('popup.js: linked Google Doc must open/append through validated worker routes');
   }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
