@@ -1757,6 +1757,7 @@
 
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
+      if (sharedConversationStartVisible()) return;
 
       if (await recoverVisibleLoadError('top', map.size)) {
         confirmedIdle = 0;
@@ -1788,6 +1789,7 @@
       // Push harder than a single viewport. ChatGPT may sit visually at the top
       // while an older virtualized chunk is still loading.
       await physicalScroll('up', confirmedIdle > 0 ? 12 : 9);
+      if (sharedConversationStartVisible()) return;
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -1855,7 +1857,7 @@
 
       // Five separately confirmed idle probes means roughly tens of seconds
       // with repeated upward wheel input and no newly loaded older turns.
-      if (confirmedIdle >= 5) {
+      if (confirmedIdle >= 3 && !visibleRetryButton()) {
         if (startAnchor) throw new Error('Не удалось найти отмеченное начало фрагмента: достигнуто начало переписки.');
         await progress('Этап 1/3: начало подтверждено повторными проверками · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
