@@ -2499,6 +2499,9 @@
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       complete: false,
       error: '',
+      captureRange: (current.captureMode === 'fragment' || current.captureMode === 'manual-full')
+        ? (current.captureRange || null)
+        : null,
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
       partialArchiveId: current.partialArchiveId || '',
       partialSavedAt: current.partialSavedAt || ''
@@ -2747,19 +2750,14 @@
     let navigationSequence = [];
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
-    const savedBaseCount = (mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId
-      ? Number(((await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId])?.messages?.length || 0)
-      : 0;
-    const displayCount = count =>
-      savedBaseCount && (mode === 'resume-draft' || mode === 'retry-walk')
-        ? Math.max(savedBaseCount, savedBaseCount + Number(count || 0))
-        : Number(count || 0);
 
     try {
       const settings = await getSettings();
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
       const selectedFragment = (mode === 'fragment' || mode === 'manual-full')
-        ? (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] || {}
+        ? (options.captureRange ||
+          (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] ||
+          {})
         : null;
       if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) {
         throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
@@ -3445,6 +3443,11 @@
             resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
+            imageBinaryReady: draftMessages.reduce((sum, item) =>
+              sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
+            imageBinaryFailed: draftMessages.reduce((sum, item) =>
+              sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
+            captureRange: (mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null,
             complete: false,
             error: message,
             partialSaveEnabled: Boolean(existingRecoveryDraft?.partialSaveEnabled || current.partialSaveEnabled),
@@ -3703,7 +3706,8 @@
         fixedCaptureBoundary: message.fixedCaptureBoundary,
         resumeAnchorSignature: message.resumeAnchorSignature,
         resumeTailSignatures: message.resumeTailSignatures,
-        resumeNavigation: Boolean(message.resumeNavigation)
+        resumeNavigation: Boolean(message.resumeNavigation),
+        captureRange: message.captureRange || null
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
