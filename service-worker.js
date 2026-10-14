@@ -991,6 +991,7 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     existingArchiveId: options.existingArchiveId || '',
     existingDraftId: options.existingDraftId || '',
     fixedCaptureBoundary: options.fixedCaptureBoundary || null,
+    captureRange: options.captureRange || null,
     resumeAnchorSignature: options.resumeAnchorSignature || '',
     resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : [],
     resumeNavigation: Boolean(options.resumeNavigation)
@@ -1225,6 +1226,7 @@ async function startCapture({
   fixedCaptureBoundary = null,
   resumeTailSignatures = [],
   resumeNavigation = false,
+  captureRange = null,
   captureTarget = 'copy'
 } = {}) {
   const sourceTab = await getActiveTab();
@@ -1259,12 +1261,18 @@ async function startCapture({
   }
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
-  if (mode === 'fragment') {
+  if (mode === 'fragment' || mode === 'manual-full') {
     const source = new URL(inspection.href);
     const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
-    const markers = (await chrome.storage.local.get(markersKey))[markersKey] || {};
-    if (!markers.start && !markers.end) {
+    const markers = captureRange ||
+      (await chrome.storage.local.get(markersKey))[markersKey] ||
+      {};
+    captureRange = markers;
+    if (mode === 'fragment' && !markers.start && !markers.end) {
       throw new Error('Сначала отметьте начало и/или конец фрагмента в переписке.');
+    }
+    if (mode === 'manual-full' && (!markers.start || !markers.end)) {
+      throw new Error('Для ручного полного диапазона отметьте и начало, и конец.');
     }
   }
   let existingArchive = providedArchive;
@@ -1322,6 +1330,7 @@ async function startCapture({
     draftId: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.id || '') : '',
     draftCount: (mode === 'resume-draft' || resumeNavigation) ? (existingDraft?.messages?.length || 0) : 0,
     captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+    captureRange,
     pendingDocUrl,
     pendingDocMode,
     count: 0,
@@ -1351,7 +1360,7 @@ async function startCapture({
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
-    const modeLabel = mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'compare'
+    const modeLabel = mode === 'manual-full' ? 'ручной полный диапазон' : mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'compare'
       ? 'сверка с локальным архивом'
       : mode === 'sync'
         ? 'восстановление по документу Google Docs'
@@ -1381,11 +1390,14 @@ async function startCapture({
       partialSaveEnabled: Boolean(existingDraft?.partialSaveEnabled),
       partialArchiveId: existingDraft?.partialArchiveId || '',
       captureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
+      captureRange,
       pendingDocUrl,
       pendingDocMode,
-      message: mode === 'fragment'
-        ? 'Рабочая вкладка готова; ищу выбранную границу начала фрагмента…'
-        : mode === 'full'
+      message: mode === 'manual-full'
+        ? 'Рабочая вкладка готова; ищу отмеченное начало полного диапазона…'
+        : mode === 'fragment'
+          ? 'Рабочая вкладка готова; ищу выбранную границу начала фрагмента…'
+          : mode === 'full'
         ? (captureTarget === 'current'
             ? 'Текущая вкладка готова; иду к началу…'
             : 'Рабочая копия загружена; иду к началу…')
@@ -1444,7 +1456,8 @@ async function startCapture({
       existingArchiveId: existingArchive?.id || '',
       existingDraftId: existingDraft?.id || '',
       fixedCaptureBoundary: (mode === 'resume-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
-      resumeNavigation
+      resumeNavigation,
+      captureRange
     });
 
     if (captureTarget === 'copy') {
@@ -1558,7 +1571,7 @@ async function cancelCapture() {
     job.phase === 'top' &&
     job.captureBoundary?.kind &&
     job.captureBoundary?.key &&
-    ['full', 'fragment'].includes(job.captureMode)
+    ['full', 'fragment', 'manual-full'].includes(job.captureMode)
   );
   const canRecover = Boolean(
     job.captureTabId != null &&
@@ -1618,7 +1631,7 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     throw new Error('Не сохранена нижняя метка снимка; безопасно продолжить этот проход нельзя.');
   }
 
-  if (!['full', 'fragment'].includes(failedJob.captureMode)) {
+  if (!['full', 'fragment', 'manual-full'].includes(failedJob.captureMode)) {
     throw new Error('Этот этап нельзя безопасно продолжить без сохранённого черновика.');
   }
 
@@ -1777,7 +1790,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     job.phase === 'top' &&
     boundary?.kind &&
     boundary?.key &&
-    ['full', 'fragment'].includes(job.captureMode)
+    ['full', 'fragment', 'manual-full'].includes(job.captureMode)
   );
 
   let preservedCaptureTabId = null;
@@ -1959,7 +1972,7 @@ async function resumeFailedCaptureFromWorkingTab() {
 
   const jobId = makeJobId();
   const resumeNavigation = draft.capturePhase === 'top' &&
-    ['full', 'fragment'].includes(draft.captureMode);
+    ['full', 'fragment', 'manual-full'].includes(draft.captureMode);
   const resumeMode = resumeNavigation
     ? draft.captureMode
     : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
@@ -2271,12 +2284,13 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
 
 
   return startCapture({
-    mode: draft.capturePhase === 'top' && ['full', 'fragment'].includes(draft.captureMode)
+    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'manual-full'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
     resumeNavigation: draft.capturePhase === 'top',
     resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
+    captureRange: draft.captureRange || null,
     captureTarget
   });
 }
