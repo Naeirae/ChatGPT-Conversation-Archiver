@@ -2788,7 +2788,7 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
-  async function walkDown(map, order, settings, boundary, { bursts = 3 } = {}) {
+  async function walkDown(map, order, settings, boundary, { bursts = 3, requireBoundary = false } = {}) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -2888,6 +2888,12 @@
       previousSize = map.size;
 
       if (stable >= 2 && physicalScrollEndVisible()) {
+        if (requireBoundary) {
+          throw new Error(
+            'Достигнут физический конец, но отмеченная нижняя граница не найдена. ' +
+            'Ручной диапазон не сохранён, чтобы не выдать локальное окно за полный участок.'
+          );
+        }
         await progress(
           'Этап 2/3: достигнут физический конец переписки; сохраняю непрерывно собранный результат.',
           map.size,
@@ -3082,7 +3088,7 @@
           // end marker, so travelling to that marker before finding the start
           // only adds a redundant down/up pass. Start from the explicit start
           // marker and let the chronological walk stop at the saved end marker.
-          if (mode !== 'manual-full' && boundary && !boundaryIsVisible(boundary)) {
+          if (boundary && !boundaryIsVisible(boundary)) {
             await locateBoundaryForUpwardScan(boundary);
           }
           map.clear();
@@ -3176,7 +3182,10 @@
       order.length = 0;
       chronologicalStarted = true;
 
-      const walkResult = await walkDown(map, order, settings, boundary, { bursts: 3 });
+      const walkResult = await walkDown(map, order, settings, boundary, {
+        bursts: 3,
+        requireBoundary: mode === 'manual-full'
+      });
 
       await progress(
         mode === 'compare'
@@ -3839,12 +3848,24 @@
     const id = turnStableKey(turn);
     return role && (id || signature) ? { id, signature, role } : null;
   }
+  function markerIdentityMatches(anchor, candidate) {
+    if (!anchor || !candidate) return false;
+    if (anchor.id && candidate.id && anchor.id === candidate.id) return true;
+    const anchorSignature = String(anchor.signature || '');
+    const candidateSignature = String(candidate.signature || '');
+    if (!anchorSignature || !candidateSignature || anchorSignature !== candidateSignature) return false;
+    const anchorRole = String(anchor.role || '');
+    const candidateRole = String(candidate.role || '');
+    return !anchorRole || !candidateRole || anchorRole === candidateRole;
+  }
+
   function anchorMatches(message, anchor) {
     if (!anchor || !message) return false;
-    if (anchor.id && message.id === anchor.id) return true;
-    // A changed stable ID must not silently degrade into an ambiguous text match.
-    if (anchor.id) return false;
-    return Boolean(anchor.signature && messageTextSignature(message) === anchor.signature);
+    return markerIdentityMatches(anchor, {
+      id: String(message.id || ''),
+      signature: messageTextSignature(message),
+      role: String(message.role || '')
+    });
   }
   async function loadFragmentMarkers() {
     const record = await chrome.storage.local.get(fragmentStorageKey());
@@ -3960,10 +3981,7 @@
     const anchor = fragmentAnchor(turn);
     const selected = fragmentMarkers[kind];
     if (!anchor || !selected) return false;
-    return Boolean(
-      (selected.id && selected.id === anchor.id) ||
-      (!selected.id && selected.signature === anchor.signature)
-    );
+    return markerIdentityMatches(selected, anchor);
   }
 
   function updateFragmentOverlay() {
@@ -4012,10 +4030,7 @@
       if (!anchor) return;
 
       const old = fragmentMarkers[kind];
-      if (old && (
-        (old.id && old.id === anchor.id) ||
-        (!old.id && old.signature === anchor.signature)
-      )) {
+      if (old && markerIdentityMatches(old, anchor)) {
         delete fragmentMarkers[kind];
       } else {
         fragmentMarkers[kind] = anchor;
@@ -4088,6 +4103,17 @@
     if (message && message.type === 'ARCHIVER_GET_FRAGMENT_SELECTION') {
       sendResponse({ ok: true, enabled: fragmentSelectionActive });
       return false;
+    }
+    if (message && message.type === 'ARCHIVER_CLEAR_FRAGMENT_MARKERS') {
+      fragmentMarkers = {};
+      clearSelectedFragmentTurn();
+      chrome.storage.local.remove(fragmentStorageKey()).then(() => {
+        updateFragmentOverlay();
+        sendResponse({ ok: true, cleared: true });
+      }).catch(error => {
+        sendResponse({ ok: false, error: error?.message || String(error) });
+      });
+      return true;
     }
     if (message && message.type === 'ARCHIVER_PING') {
       sendResponse({ ok: true, version: EXTENSION_VERSION });
