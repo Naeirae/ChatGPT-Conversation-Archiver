@@ -110,8 +110,12 @@ function renderCaptureProgress(job, running) {
   const imageFailed = Number(job?.imageBinaryFailed || 0);
   if (imageTotal || job?.phase === 'finalizing') {
     parts.push('изображений найдено: ' + imageTotal);
-    parts.push('сохранено бинарно: ' + imageReady);
-    if (imageFailed) parts.push('ошибок изображений: ' + imageFailed);
+    if (job?.phase === 'finalizing') {
+      parts.push('сохранено бинарно: ' + imageReady);
+      if (imageFailed) parts.push('ошибок изображений: ' + imageFailed);
+    } else if (imageTotal) {
+      parts.push('бинарное сохранение: на этапе 3');
+    }
   }
   if (job?.startedAt) {
     parts.push(formatDuration(Date.now() - job.startedAt));
