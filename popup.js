@@ -105,6 +105,14 @@ function renderCaptureProgress(job, running) {
   } else {
     parts.push((job?.count || 0) + ' сообщений');
   }
+  const imageTotal = Number(job?.imageCount || 0);
+  const imageReady = Number(job?.imageBinaryReady || 0);
+  const imageFailed = Number(job?.imageBinaryFailed || 0);
+  if (imageTotal || job?.phase === 'finalizing') {
+    parts.push('изображений найдено: ' + imageTotal);
+    parts.push('сохранено бинарно: ' + imageReady);
+    if (imageFailed) parts.push('ошибок изображений: ' + imageFailed);
+  }
   if (job?.startedAt) {
     parts.push(formatDuration(Date.now() - job.startedAt));
   }
@@ -152,6 +160,12 @@ function renderRunLog(job) {
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
   meta.push((job.count || 0) + ' собрано');
+  if (Number(job.imageCount || 0)) {
+    meta.push(
+      Number(job.imageCount || 0) + ' изображений · ' +
+      Number(job.imageBinaryReady || 0) + ' бинарно'
+    );
+  }
   if (job.draftCount) meta.push(job.draftCount + ' в незавершённом сборе');
   if (job.startedAt && (job.finishedAt || !['starting', 'running', 'paused'].includes(job.status))) {
     meta.push(formatDuration((job.finishedAt || Date.now()) - job.startedAt));
