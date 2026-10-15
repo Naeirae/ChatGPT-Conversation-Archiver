@@ -2923,6 +2923,114 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
+  async function walkDownFullLegacy(map, order, settings, boundary) {
+    let stable = 0;
+    let previousSignature = '';
+    let previousSize = -1;
+
+    // This is the proven full-capture hot path from the early binary-image
+    // releases: capture the current virtual window, move by a normal physical
+    // wheel step, and let the next iteration capture the replacement window.
+    // Recovery logic is deliberately NOT executed on every viewport.
+    for (let i = 0; i < 900; i++) {
+      await waitIfPaused();
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+
+      if (boundaryIsVisible(boundary)) {
+        const stats = capturedImageStats([...map.values()]);
+        await progress(
+          'Этап 2/3: достигнут конец снимка · ' +
+            map.size + ' сообщений · ' + stats.total + ' изображений найдено',
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            imageCount: stats.total,
+            imageBinaryReady: stats.ready,
+            imageBinaryFailed: stats.failed,
+            force: true
+          }
+        );
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        return { boundaryReached: true, physicalEndReached: false };
+      }
+
+      const signature = visibleTurnSignature();
+      const stats = capturedImageStats([...map.values()]);
+      await progress(
+        'Этап 2/3: физически прохожу вниз · ' +
+          map.size + ' сообщений · ' + stats.total + ' изображений найдено',
+        map.size,
+        {
+          phase: 'walk',
+          iteration: i + 1,
+          chronologicalCount: map.size,
+          imageCount: stats.total,
+          imageBinaryReady: stats.ready,
+          imageBinaryFailed: stats.failed
+        }
+      );
+
+      // Keep resumability, but checkpoint persistence is internally throttled
+      // (time + message delta) and therefore does not become part of every step.
+      await saveRecoveryCheckpoint(map, order, boundary);
+
+      // Historical working cadence: seven physical wheel bursts followed by a
+      // short DOM-settle window. Do not run overlap recovery unless this path
+      // actually stalls at the end.
+      await physicalScroll('down', 7, {
+        settleTimeout: 1600,
+        quietWindow: 360
+      });
+
+      const nextSignature = visibleTurnSignature();
+      if (
+        nextSignature &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        map.size === previousSize
+      ) {
+        stable++;
+      } else {
+        stable = 0;
+      }
+
+      previousSignature = nextSignature;
+      previousSize = map.size;
+
+      if (stable >= 4) {
+        // Only now, after a real stall, inspect whether ChatGPT exposed an
+        // actual local loading error. Never pay this cost on healthy steps.
+        if (await recoverVisibleLoadError('walk', map.size)) {
+          stable = 0;
+          previousSignature = '';
+          previousSize = -1;
+          continue;
+        }
+        break;
+      }
+    }
+
+    await expandVisible();
+    if (settings.includeReasoning) await expandReasoningVisible();
+    collect(map, order, settings, boundary);
+
+    if (boundaryIsVisible(boundary)) {
+      await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+      return { boundaryReached: true, physicalEndReached: false };
+    }
+
+    throw new Error(
+      'Не удалось дойти до зафиксированного конца снимка. ' +
+      'Собранная непрерывная часть сохранена как незавершённый проход.'
+    );
+  }
+
   async function walkDown(map, order, settings, boundary, { bursts = 3, requireBoundary = false } = {}) {
     let stable = 0;
     let previousSignature = '';
@@ -3353,10 +3461,12 @@
       order.length = 0;
       chronologicalStarted = true;
 
-      const walkResult = await walkDown(map, order, settings, boundary, {
-        bursts: 3,
-        requireBoundary: mode === 'manual-full'
-      });
+      const walkResult = mode === 'full'
+        ? await walkDownFullLegacy(map, order, settings, boundary)
+        : await walkDown(map, order, settings, boundary, {
+            bursts: 3,
+            requireBoundary: mode === 'manual-full'
+          });
 
       await progress(
         mode === 'compare'
