@@ -1964,8 +1964,14 @@
   }
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
+    let confirmedIdle = 0;
+    let previousSignature = '';
+    let previousSize = -1;
+    let firstVisibleKey = '';
+
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
+
       if (state.manualTopConfirmed) {
         await progress('Этап 1/3: начало подтверждено вручную. Начинаю сохранение сверху вниз…', map.size, {
           phase: 'walk',
@@ -1974,10 +1980,14 @@
         });
         return;
       }
+
       if (sharedConversationStartVisible()) return;
 
       if (await recoverVisibleLoadError('top', map.size)) {
-        // Continue from the current viewport after ChatGPT recovers.
+        confirmedIdle = 0;
+        previousSignature = '';
+        previousSize = -1;
+        firstVisibleKey = '';
       }
 
       await expandVisible();
@@ -1986,19 +1996,31 @@
       recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
       if (startAnchor && orderedTurns().some(turn =>
-        anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
+        anchorMatches({
+          id: turnStableKey(turn),
+          role: roleOf(turn),
+          text: turnMessageText(turn)
+        }, startAnchor))) return;
 
       const turnsBefore = orderedTurns();
+      const signature = visibleTurnSignature();
       const firstBefore = turnsBefore.length
         ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
         : '';
 
       await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
-        iteration: i + 1
+        iteration: i + 1,
+        topIdleConfirmations: confirmedIdle
       });
 
-      await physicalScroll('up', 10, { settleTimeout: 2500, quietWindow: 350 });
+      // Do not infer the real conversation top from scrollTop of a virtualized
+      // inner container. Keep physically probing upward and require several
+      // unchanged message windows, as the pre-0.3.98 collector did.
+      await physicalScroll('up', confirmedIdle > 0 ? 12 : 9, {
+        settleTimeout: 4500,
+        quietWindow: 450
+      });
 
       if (state.manualTopConfirmed) {
         await progress('Этап 1/3: начало подтверждено вручную. Начинаю сохранение сверху вниз…', map.size, {
@@ -2008,6 +2030,7 @@
         });
         return;
       }
+
       if (sharedConversationStartVisible()) return;
 
       await expandVisible();
@@ -2016,50 +2039,85 @@
       recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
       if (startAnchor && orderedTurns().some(turn =>
-        anchorMatches({ id: turnStableKey(turn), role: roleOf(turn), text: turnMessageText(turn) }, startAnchor))) return;
+        anchorMatches({
+          id: turnStableKey(turn),
+          role: roleOf(turn),
+          text: turnMessageText(turn)
+        }, startAnchor))) return;
 
-      const turnsAfter = orderedTurns();
-      const firstAfter = turnsAfter.length
+      let nextSignature = visibleTurnSignature();
+      let turnsAfter = orderedTurns();
+      let firstAfter = turnsAfter.length
         ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
         : '';
+      let nextSize = map.size;
 
-      // At the real top only the first turn matters. Virtualized tail nodes may
-      // keep changing and must not reset top detection forever.
-      if (physicalScrollStartVisible() && firstBefore && firstAfter === firstBefore && !visibleRetryButton()) {
-        await progress('Этап 1/3: проверяю начало одним коротким контрольным ожиданием…', map.size, {
+      const unchanged =
+        Boolean(nextSignature) &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        nextSize === previousSize &&
+        firstAfter === firstBefore &&
+        firstAfter === firstVisibleKey;
+
+      if (unchanged) {
+        await progress('Этап 1/3: проверяю, не догружается ли начало…', map.size, {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: 1,
-          force: true
+          topIdleConfirmations: confirmedIdle + 1
         });
 
-        await sleep(450);
+        await sleep(1400);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings, checkpointBoundary);
         recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
-        const firstAfterWaitTurn = orderedTurns()[0] || null;
-        const firstAfterWait = firstAfterWaitTurn
-          ? (turnStableKey(firstAfterWaitTurn) || turnTextSignature(firstAfterWaitTurn))
+        const afterWaitSignature = visibleTurnSignature();
+        turnsAfter = orderedTurns();
+        const afterWaitFirst = turnsAfter.length
+          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
           : '';
 
-        if (physicalScrollStartVisible() && firstAfterWait === firstAfter && !visibleRetryButton()) {
-          if (startAnchor) {
-            throw new Error('Не удалось найти отмеченное начало фрагмента: достигнуто начало переписки.');
-          }
-          await progress('Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз', map.size, {
-            phase: 'walk',
-            iteration: i + 1,
-            topIdleConfirmations: 1,
-            force: true
-          });
-          return;
+        if (
+          afterWaitSignature === nextSignature &&
+          map.size === nextSize &&
+          afterWaitFirst === firstAfter
+        ) {
+          confirmedIdle++;
+        } else {
+          confirmedIdle = 0;
+          nextSignature = afterWaitSignature;
+          firstAfter = afterWaitFirst;
+          nextSize = map.size;
         }
+      } else {
+        confirmedIdle = 0;
+      }
+
+      previousSignature = nextSignature;
+      previousSize = nextSize;
+      firstVisibleKey = firstAfter;
+
+      if (confirmedIdle >= 3 && !visibleRetryButton()) {
+        if (startAnchor) {
+          throw new Error('Не удалось найти отмеченное начало: достигнуто начало переписки.');
+        }
+        await progress('Этап 1/3: начало подтверждено повторными проверками · собрано ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          topIdleConfirmations: confirmedIdle,
+          force: true
+        });
+        return;
       }
     }
 
-    throw new Error(startAnchor ? 'Не удалось найти отмеченное начало фрагмента.' : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки.');
+    throw new Error(
+      startAnchor
+        ? 'Не удалось найти отмеченное начало.'
+        : 'Не удалось надежно подтвердить начало переписки после повторных попыток прокрутки и ожидания догрузки.'
+    );
   }
 
   function sharedConversationStartVisible() {
@@ -2076,6 +2134,9 @@
       timeoutMs = 2 * 60 * 60 * 1000
     } = {}
   ) {
+    let confirmedIdle = 0;
+    let previousSignature = '';
+    let firstVisibleKey = '';
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2087,23 +2148,35 @@
             ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
             : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
           existingCount,
-          { phase: 'walk', manualTopConfirmed: true, retryWalkOnly: !fullCapture, force: true }
+          {
+            phase: 'walk',
+            manualTopConfirmed: true,
+            retryWalkOnly: !fullCapture,
+            force: true
+          }
         );
         return;
       }
 
-      await recoverVisibleLoadError('top', existingCount);
+      if (await recoverVisibleLoadError('top', existingCount)) {
+        confirmedIdle = 0;
+        previousSignature = '';
+        firstVisibleKey = '';
+      }
 
       if (sharedConversationStartVisible()) {
         await progress('Начало опубликованной переписки подтверждено.', existingCount, {
-          phase: 'walk', force: true, sharedStartDetected: true
+          phase: 'walk',
+          force: true,
+          sharedStartDetected: true
         });
         return;
       }
 
-      const firstBeforeTurn = orderedTurns()[0] || null;
-      const firstBefore = firstBeforeTurn
-        ? (turnStableKey(firstBeforeTurn) || turnTextSignature(firstBeforeTurn))
+      const turnsBefore = orderedTurns();
+      const signature = visibleTurnSignature();
+      const firstBefore = turnsBefore.length
+        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
         : '';
 
       await progress(
@@ -2114,12 +2187,18 @@
         {
           phase: 'top',
           iteration: i + 1,
+          topIdleConfirmations: confirmedIdle,
           retryWalkOnly: !fullCapture,
           manualAssistAllowed: true
         }
       );
 
-      await physicalScroll('up', 24, { settleTimeout: 2500, quietWindow: 300 });
+      // This phase is navigation only. Give ChatGPT enough time to replace the
+      // virtualized message window before deciding that upward motion is over.
+      await physicalScroll('up', 24, {
+        settleTimeout: 4500,
+        quietWindow: 450
+      });
 
       if (state.manualTopConfirmed) {
         await progress(
@@ -2127,56 +2206,88 @@
             ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
             : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
           existingCount,
-          { phase: 'walk', manualTopConfirmed: true, retryWalkOnly: !fullCapture, force: true }
+          {
+            phase: 'walk',
+            manualTopConfirmed: true,
+            retryWalkOnly: !fullCapture,
+            force: true
+          }
         );
         return;
       }
 
       if (sharedConversationStartVisible()) {
         await progress('Начало опубликованной переписки найдено.', existingCount, {
-          phase: 'walk', force: true, sharedStartDetected: true
+          phase: 'walk',
+          force: true,
+          sharedStartDetected: true
         });
         return;
       }
 
-      const firstAfterTurn = orderedTurns()[0] || null;
-      const firstAfter = firstAfterTurn
-        ? (turnStableKey(firstAfterTurn) || turnTextSignature(firstAfterTurn))
+      let nextSignature = visibleTurnSignature();
+      let turnsAfter = orderedTurns();
+      let firstAfter = turnsAfter.length
+        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
         : '';
 
-      if (physicalScrollStartVisible() && firstBefore && firstAfter === firstBefore && !visibleRetryButton()) {
-        await progress('Этап 1/3: проверяю начало одним коротким контрольным ожиданием…', existingCount, {
-          phase: 'top',
-          iteration: i + 1,
-          topIdleConfirmations: 1,
-          retryWalkOnly: !fullCapture,
-          manualAssistAllowed: true,
-          force: true
-        });
+      const unchanged =
+        Boolean(nextSignature) &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        firstAfter === firstBefore &&
+        firstAfter === firstVisibleKey;
 
-        await sleep(450);
-        const firstAfterWaitTurn = orderedTurns()[0] || null;
-        const firstAfterWait = firstAfterWaitTurn
-          ? (turnStableKey(firstAfterWaitTurn) || turnTextSignature(firstAfterWaitTurn))
+      if (unchanged) {
+        await progress(
+          'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
+          existingCount,
+          {
+            phase: 'top',
+            iteration: i + 1,
+            topIdleConfirmations: confirmedIdle + 1,
+            retryWalkOnly: !fullCapture,
+            manualAssistAllowed: true
+          }
+        );
+
+        await sleep(1400);
+        const afterWaitSignature = visibleTurnSignature();
+        turnsAfter = orderedTurns();
+        const afterWaitFirst = turnsAfter.length
+          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
           : '';
 
-        if (physicalScrollStartVisible() && firstAfterWait === firstAfter && !visibleRetryButton()) {
-          await progress(
-            fullCapture
-              ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-              : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-            existingCount,
-            {
-              phase: 'walk',
-              iteration: i + 1,
-              topIdleConfirmations: 1,
-              retryWalkOnly: !fullCapture,
-              manualAssistAllowed: true,
-              force: true
-            }
-          );
-          return;
+        if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
+          confirmedIdle++;
+        } else {
+          confirmedIdle = 0;
+          nextSignature = afterWaitSignature;
+          firstAfter = afterWaitFirst;
         }
+      } else {
+        confirmedIdle = 0;
+      }
+
+      previousSignature = nextSignature;
+      firstVisibleKey = firstAfter;
+
+      if (confirmedIdle >= 3 && !visibleRetryButton()) {
+        await progress(
+          fullCapture
+            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
+          existingCount,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            topIdleConfirmations: confirmedIdle,
+            retryWalkOnly: !fullCapture,
+            manualAssistAllowed: true,
+            force: true
+          }
+        );
+        return;
       }
     }
 
@@ -2760,7 +2871,7 @@
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
-    for (let attempt = 0; attempt < 6; attempt++) {
+    for (let attempt = 0; attempt < 14; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
@@ -2778,7 +2889,7 @@
       await physicalScroll(
         'up',
         1,
-        { settleTimeout: 2200, quietWindow: 350 }
+        { settleTimeout: 4000, quietWindow: 650 }
       );
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -2835,7 +2946,7 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts, { settleTimeout: 2600, quietWindow: 380 });
+      await physicalScroll('down', bursts, { settleTimeout: 5000, quietWindow: 850 });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -2887,7 +2998,7 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 2 && physicalScrollEndVisible()) {
+      if (stable >= 3 && physicalScrollEndVisible()) {
         if (requireBoundary) {
           throw new Error(
             'Достигнут физический конец, но отмеченная нижняя граница не найдена. ' +
