@@ -1127,6 +1127,25 @@ async function toggleBoundaryMarkingCurrent() {
   return { ok: true, enabled: Boolean(next.enabled), tabId: tab.id };
 }
 
+async function clearBoundaryMarkersCurrent() {
+  const tab = await getActiveTab();
+  if (!tab?.id || !isConversationUrl(tab.url || '')) {
+    throw new Error('Откройте переписку ChatGPT в активной вкладке.');
+  }
+
+  const currentJob = await getJob();
+  if (currentJob && ['starting', 'running', 'paused'].includes(currentJob.status)) {
+    throw new Error('Во время активного сбора границы менять нельзя.');
+  }
+
+  await ensureBoundaryMarkingScript(tab.id, { enable: false });
+  const result = await chrome.tabs.sendMessage(tab.id, {
+    type: 'ARCHIVER_CLEAR_FRAGMENT_MARKERS'
+  });
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось очистить ручные границы.');
+  return { ok: true, cleared: true, tabId: tab.id };
+}
+
 async function openBoundaryMarkingTab() {
   const sourceTab = await getActiveTab();
   if (!sourceTab?.id || !isConversationUrl(sourceTab.url || '')) {
@@ -4963,6 +4982,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await checkForUpdate();
       case 'ARCHIVER_TOGGLE_MARKING_CURRENT':
         return await toggleBoundaryMarkingCurrent();
+      case 'ARCHIVER_CLEAR_MARKERS_CURRENT':
+        return await clearBoundaryMarkersCurrent();
       case 'ARCHIVER_OPEN_MARKING_TAB':
         return await openBoundaryMarkingTab();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
