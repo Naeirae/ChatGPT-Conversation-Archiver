@@ -1178,15 +1178,11 @@ function render(data) {
   const done = job?.status === 'done' && archive;
   const hasManualRange = Boolean(state?.captureRange?.start && state?.captureRange?.end);
 
-  $('captureTitle').textContent = hasManualRange
-    ? 'Собрать отмеченный диапазон'
-    : 'Собрать чат целиком';
-  $('capture').textContent = hasManualRange
-    ? 'Собрать отмеченный диапазон'
-    : 'Собрать чат';
+  $('captureTitle').textContent = 'Собрать чат целиком';
+  $('capture').textContent = 'Собрать чат';
   if (!running && hasManualRange) {
     $('fragmentHint').textContent =
-      'Начало и конец отмечены. Главная кнопка соберёт именно этот диапазон.';
+      'Начало и конец отмечены. Они используются только отдельными ручными режимами ниже; обычный «Собрать чат» всегда собирает весь чат.';
   }
 
   renderCaptureState(job);
@@ -1212,6 +1208,7 @@ function render(data) {
   $('captureFragment').disabled = Boolean(running);
   $('captureManualFull').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
+  $('clearMarkers').disabled = Boolean(running);
   $('openMarkingTab').disabled = Boolean(running);
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
@@ -1456,24 +1453,17 @@ async function exportToDoc(type, payload = {}) {
 $('capture').onclick = async () => {
   $('capture').disabled = true;
   const captureTarget = $('captureTarget').value;
-  const hasManualRange = Boolean(state?.captureRange?.start && state?.captureRange?.end);
   setStatus(
-    hasManualRange
-      ? 'Запускаю сбор между отмеченными границами…'
-      : (captureTarget === 'copy'
-        ? 'Запускаю сбор в рабочей копии…'
-        : 'Запускаю сбор в текущей вкладке…')
+    captureTarget === 'copy'
+      ? 'Запускаю сбор в рабочей копии…'
+      : 'Запускаю сбор в текущей вкладке…'
   );
   try {
     const result = await chrome.runtime.sendMessage({
-      type: hasManualRange ? 'ARCHIVER_CAPTURE_MANUAL_FULL' : 'ARCHIVER_CAPTURE_CURRENT',
+      type: 'ARCHIVER_CAPTURE_CURRENT',
       captureTarget
     });
-    if (!result?.ok) throw new Error(
-      result?.error || (hasManualRange
-        ? 'Не удалось запустить сбор отмеченного диапазона.'
-        : 'Не удалось запустить сбор.')
-    );
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
     render({
       ...state,
       job: result.job,
@@ -1521,6 +1511,23 @@ $('markFragment').onclick = async () => {
       ? 'Разметка включена. Закройте popup, кликните по нужной реплике и используйте постоянную панель «Начало / Конец».'
       : 'Режим разметки выключен. Выбранные границы сохранены.';
     if (!next.enabled) await getState().catch(() => {});
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$('clearMarkers').onclick = async () => {
+  const button = $('clearMarkers');
+  button.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CLEAR_MARKERS_CURRENT'
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сбросить отметки.');
+    $('fragmentHint').textContent = 'Начало и конец сброшены.';
+    await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
