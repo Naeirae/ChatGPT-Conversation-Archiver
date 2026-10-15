@@ -1319,6 +1319,15 @@
     }
   }
 
+  function capturedImageStats(messages) {
+    const images = (messages || []).flatMap(item => item?.images || []);
+    return {
+      total: images.length,
+      ready: images.filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length,
+      failed: images.filter(image => image?.binaryStatus === 'failed').length
+    };
+  }
+
   function messageMatchesBoundary(message, boundary) {
     if (!message || !boundary) return false;
     if (boundary.kind === 'stable') return message.id === boundary.key;
@@ -2766,18 +2775,6 @@
         messages = preserved.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
       }
     }
-    if (!state.cancel) {
-      const missingImages = messages.filter(item => (item.images || []).some(image =>
-        image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
-      ));
-      if (missingImages.length) {
-        await hydrateMessageImages(missingImages, {
-          onlyMissing: true,
-          reportProgress: false
-        }).catch(() => {});
-      }
-    }
-
     const draft = {
       id: draftId,
       kind: 'capture-draft',
@@ -2889,7 +2886,7 @@
       await physicalScroll(
         'up',
         1,
-        { settleTimeout: 4000, quietWindow: 650 }
+        { settleTimeout: 2400, quietWindow: 400 }
       );
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -2924,42 +2921,72 @@
       const beforeRefs = visibleNavigationRefsLightweight();
 
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
+        const boundaryImageStats = capturedImageStats([...map.values()]);
+        await progress(
+          'Этап 2/3: достигнута метка конца снимка · ' +
+            map.size + ' сообщений · ' +
+            boundaryImageStats.total + ' изображений найдено',
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            imageCount: boundaryImageStats.total,
+            imageBinaryReady: boundaryImageStats.ready,
+            imageBinaryFailed: boundaryImageStats.failed,
+            force: true
+          }
+        );
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
         return { boundaryReached: true, physicalEndReached: false };
       }
 
       const signature = visibleTurnSignature();
-      await progress('Этап 2/3: физически прохожу вниз · хронологически собрано ' + map.size + ' сообщений', map.size, {
-        phase: 'walk',
-        iteration: i + 1,
-        chronologicalCount: map.size
-      });
+      const walkImageStats = capturedImageStats([...map.values()]);
+      await progress(
+        'Этап 2/3: физически прохожу вниз · ' +
+          map.size + ' сообщений · ' +
+          walkImageStats.total + ' изображений найдено',
+        map.size,
+        {
+          phase: 'walk',
+          iteration: i + 1,
+          chronologicalCount: map.size,
+          imageCount: walkImageStats.total,
+          imageBinaryReady: walkImageStats.ready,
+          imageBinaryFailed: walkImageStats.failed
+        }
+      );
       await saveRecoveryCheckpoint(map, order, boundary);
 
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts, { settleTimeout: 5000, quietWindow: 850 });
+      await physicalScroll('down', bursts, { settleTimeout: 2200, quietWindow: 380 });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
 
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнута метка конца снимка · хронологически собрано ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
+        const boundaryImageStats = capturedImageStats([...map.values()]);
+        await progress(
+          'Этап 2/3: достигнута метка конца снимка · ' +
+            map.size + ' сообщений · ' +
+            boundaryImageStats.total + ' изображений найдено',
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            imageCount: boundaryImageStats.total,
+            imageBinaryReady: boundaryImageStats.ready,
+            imageBinaryFailed: boundaryImageStats.failed,
+            force: true
+          }
+        );
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
         return { boundaryReached: true, physicalEndReached: false };
       }
@@ -3005,8 +3032,11 @@
             'Ручной диапазон не сохранён, чтобы не выдать локальное окно за полный участок.'
           );
         }
+        const endImageStats = capturedImageStats([...map.values()]);
         await progress(
-          'Этап 2/3: достигнут физический конец переписки; сохраняю непрерывно собранный результат.',
+          'Этап 2/3: достигнут физический конец переписки · ' +
+            map.size + ' сообщений · ' +
+            endImageStats.total + ' изображений найдено',
           map.size,
           {
             phase: 'walk',
@@ -3014,6 +3044,9 @@
             physicalEndReached: true,
             boundaryReached: false,
             chronologicalCount: map.size,
+            imageCount: endImageStats.total,
+            imageBinaryReady: endImageStats.ready,
+            imageBinaryFailed: endImageStats.failed,
             force: true
           }
         );
