@@ -191,9 +191,12 @@
   }
 
   function visibleRetryButton() {
-    const pattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
+    const buttonPattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
+    const errorPattern = /(?:something went wrong|there was an error|network error|failed to load|не удалось загрузить|произошла ошибка|ошибка сети|возникла ошибка)/i;
+
     return [...document.querySelectorAll('button, [role="button"]')].find(el => {
       if (!visible(el) || el.disabled) return false;
+
       const label = String(
         el.innerText ||
         el.textContent ||
@@ -201,31 +204,55 @@
         el.getAttribute?.('title') ||
         ''
       ).replace(/\s+/g, ' ').trim();
-      return pattern.test(label);
+
+      if (!buttonPattern.test(label)) return false;
+
+      // ChatGPT can keep generic Retry buttons in unrelated UI. Recovery is
+      // expensive, so only enter it when the same local region also contains
+      // an actual load/network error message.
+      let node = el;
+      for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+        const text = String(node.innerText || node.textContent || '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (text && errorPattern.test(text)) return true;
+      }
+      return false;
     }) || null;
   }
 
   async function recoverVisibleLoadError(phase = 'top', count = 0) {
-    // Retry the scroll, not ChatGPT's generic "Retry" button. The latter can
-    // belong to a different UI element and navigate away from this chat.
+    // Retry physical scrolling, not ChatGPT's generic button, and only after
+    // visibleRetryButton() has verified a real nearby load error.
     if (!visibleRetryButton()) return false;
+
     const direction = phase === 'walk' ? 'down' : 'up';
     const originalUrl = location.href;
     const before = visibleTurnSignature();
-    for (let attempt = 1; attempt <= 3; attempt++) {
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
       await waitIfPaused();
-      await progress('ChatGPT временно не догрузил участок · повторяю прокрутку (' +
-        attempt + '/3)…', count, { phase, retryVisible: true, force: true });
-      await physicalScroll(direction, 2);
+      await progress(
+        'ChatGPT не догрузил участок · повторяю прокрутку (' + attempt + '/2)…',
+        count,
+        { phase, retryVisible: true, force: true }
+      );
+
+      await physicalScroll(direction, 2, {
+        settleTimeout: 2200,
+        quietWindow: 380
+      });
+
       if (location.href !== originalUrl) {
         throw new Error('Переписка сменилась во время повторной прокрутки. Сбор остановлен.');
       }
-      await sleep(900);
+
+      await sleep(350);
       const after = visibleTurnSignature();
       if (after && after !== before) return true;
+      if (!visibleRetryButton()) return true;
     }
-    // Keep the collector's existing idle/stall handling rather than
-    // aborting immediately on an unrelated "Retry" control.
+
     return false;
   }
 
@@ -2076,7 +2103,7 @@
           topIdleConfirmations: confirmedIdle + 1
         });
 
-        await sleep(1400);
+        await sleep(700);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings, checkpointBoundary);
@@ -2108,7 +2135,7 @@
       previousSize = nextSize;
       firstVisibleKey = firstAfter;
 
-      if (confirmedIdle >= 3 && !visibleRetryButton()) {
+      if (confirmedIdle >= 2 && !visibleRetryButton()) {
         if (startAnchor) {
           throw new Error('Не удалось найти отмеченное начало: достигнуто начало переписки.');
         }
@@ -2260,7 +2287,7 @@
           }
         );
 
-        await sleep(1400);
+        await sleep(700);
         const afterWaitSignature = visibleTurnSignature();
         turnsAfter = orderedTurns();
         const afterWaitFirst = turnsAfter.length
@@ -2281,7 +2308,7 @@
       previousSignature = nextSignature;
       firstVisibleKey = firstAfter;
 
-      if (confirmedIdle >= 3 && !visibleRetryButton()) {
+      if (confirmedIdle >= 2 && !visibleRetryButton()) {
         await progress(
           fullCapture
             ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
