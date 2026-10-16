@@ -1010,8 +1010,8 @@ function render(data) {
   // local archive. Export is disabled only while a capture is actively running.
   $('newDoc').disabled = Boolean(running || !archive);
   $('activeDoc').textContent = linkedUrl
-    ? 'Добавить в связанный документ Google Docs'
-    : 'Добавить в открытый документ Google Docs';
+    ? 'Обновить Google Doc'
+    : 'В открытый Google Doc';
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
   $('continueArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
