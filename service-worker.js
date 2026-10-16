@@ -3208,8 +3208,8 @@ function escapeHtml(value) {
 }
 
 function speakerLabel(role, settings) {
-  if (role === 'user') return settings.userName ? `Пользователь / ${settings.userName}:` : 'Пользователь:';
-  return settings.assistantName ? `ChatGPT / ${settings.assistantName}:` : 'ChatGPT:';
+  if (role === 'user') return settings.userName ? `${settings.userName}:` : 'Пользователь:';
+  return settings.assistantName ? `${settings.assistantName}:` : 'ChatGPT:';
 }
 function messageHtmlForExport(message, { stripImages = false } = {}) {
   let html = String(message?.html || `<p>${escapeHtml(message?.text || '')}</p>`);
