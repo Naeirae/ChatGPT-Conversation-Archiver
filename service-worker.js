@@ -3217,6 +3217,10 @@ function messageHtmlForExport(message, {
 } = {}) {
   let html = String(message?.html || `<p>${escapeHtml(message?.text || '')}</p>`);
 
+  // Exact legacy path: before 34f7bcb the rich clipboard received the captured
+  // message HTML untouched, including its original absolute image URLs.
+  if (preferOriginalImageSrc && !stripImages) return html;
+
   html = html.replace(/<img\b[^>]*>/gi, tag => {
     const indexMatch = tag.match(/data-archiver-image-index=["']?(\d+)["']?/i);
     const index = indexMatch ? Number(indexMatch[1]) : -1;
