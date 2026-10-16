@@ -44,6 +44,57 @@ function writeWithExecCommand(html, text) {
 
 
 
+async function writeImageWithExecCommand(dataUrl, alt = '') {
+  const source = String(dataUrl || '');
+  if (!/^data:image\//i.test(source)) {
+    throw new Error('Нет подготовленных бинарных данных изображения.');
+  }
+
+  const host = document.createElement('div');
+  host.setAttribute('contenteditable', 'true');
+  host.setAttribute('aria-hidden', 'true');
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '0';
+  host.style.opacity = '0';
+
+  const img = document.createElement('img');
+  img.src = source;
+  img.alt = String(alt || '');
+  host.appendChild(img);
+  document.body.appendChild(host);
+
+  try {
+    if (img.decode) {
+      await img.decode();
+    } else if (!img.complete) {
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = () => reject(new Error('Изображение не декодировалось в offscreen clipboard.'));
+      });
+    }
+
+    const selection = getSelection();
+    const range = document.createRange();
+    range.selectNode(img);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const ok = document.execCommand('copy');
+    selection.removeAllRanges();
+    if (!ok) throw new Error('Chrome отклонил копирование изображения.');
+
+    return {
+      ok: true,
+      method: 'offscreen-image-selection',
+      size: source.length
+    };
+  } finally {
+    getSelection()?.removeAllRanges?.();
+    host.remove();
+  }
+}
+
 function readWithExecCommand() {
   const host = document.createElement('textarea');
   host.setAttribute('aria-hidden', 'true');
@@ -77,6 +128,13 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       // execCommand('copy') works with the extension clipboard permission.
       writeWithExecCommand(String(message.html || ''), String(message.text || ''));
       return { ok: true };
+    }
+
+    if (message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE') {
+      return await writeImageWithExecCommand(
+        String(message.dataUrl || ''),
+        String(message.alt || '')
+      );
     }
 
     if (message?.type === 'ARCHIVER_OFFSCREEN_READ') {
