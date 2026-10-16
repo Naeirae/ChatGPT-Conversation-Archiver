@@ -2965,6 +2965,21 @@ async function handleCaptureComplete(message) {
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
 
+  if (message.mode === 'fragment' && archive.sourceUrl) {
+    try {
+      const source = new URL(archive.sourceUrl);
+      const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
+      await chrome.storage.local.remove(markersKey);
+      const tabs = await chrome.tabs.query({});
+      for (const tab of tabs) {
+        if (!tab?.id || conversationKey(tab.url || '') !== conversationKey(archive.sourceUrl)) continue;
+        await chrome.tabs.sendMessage(tab.id, {
+          type: 'ARCHIVER_CLEAR_FRAGMENT_MARKERS'
+        }).catch(() => {});
+      }
+    } catch (_) {}
+  }
+
   if (message.mode === 'compare') {
     const finalMessage = addedCount
       ? ('Сверка завершена: +' + addedCount + ' новых сообщений относительно локального архива. Архив не изменён.')
