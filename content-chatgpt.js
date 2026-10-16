@@ -1296,6 +1296,28 @@
     return { embedded, failed, unique: total };
   }
 
+  async function hydrateSequentialImages(messages, attemptedSources) {
+    const attempted = attemptedSources instanceof Set ? attemptedSources : new Set();
+    const targets = [];
+
+    for (const message of messages || []) {
+      const pending = [];
+      for (const image of message?.images || []) {
+        const src = String(image?.src || '');
+        if (!src || attempted.has(src)) continue;
+        attempted.add(src);
+        pending.push(image);
+      }
+      if (pending.length) targets.push({ ...message, images: pending });
+    }
+
+    if (!targets.length) return { embedded: 0, failed: 0, unique: 0 };
+    return hydrateMessageImages(targets, {
+      onlyMissing: false,
+      reportProgress: false
+    });
+  }
+
   async function expandVisible() {
     let clicks = 0;
     for (const turn of orderedTurns()) {
@@ -1313,12 +1335,14 @@
 
   function collect(map, order, settings, stopBoundary = null) {
     const turns = orderedTurns();
+    const touchedIds = [];
 
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
       const message = captureTurn(turn, ordinal, settings);
 
       if (message) {
+        touchedIds.push(message.id);
         const existing = map.get(message.id);
         if (!existing) {
           order.push(message.id);
@@ -1348,6 +1372,8 @@
       // walking back down.
       if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
     }
+
+    return [...new Set(touchedIds)];
   }
 
   function capturedImageStats(messages) {
@@ -2952,7 +2978,7 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
-  async function reachTopFullLegacy(map, order, settings) {
+  async function reachTopFullLegacy(map, order, settings, navigationWindows = null, boundary = null) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -2972,10 +2998,11 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
+      collect(map, order, settings, boundary);
+      recordNavigationWindow(navigationWindows, settings, boundary);
 
       const signature = visibleTurnSignature();
-      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
+      await progress('Этап 1/3: первый проход вверх · собрано ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
@@ -2998,7 +3025,8 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
+      collect(map, order, settings, boundary);
+      recordNavigationWindow(navigationWindows, settings, boundary);
 
       const nextSignature = visibleTurnSignature();
       if (
@@ -3018,7 +3046,7 @@
       // This is intentionally the old conservative stop rule. If ChatGPT is
       // slow at the top, the user can press "I'm at the beginning".
       if (stable >= 4) {
-        await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
+        await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
           force: true
@@ -3030,7 +3058,7 @@
     throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
   }
 
-  async function walkDownFullLegacy(map, order, settings, boundary) {
+  async function walkDownFullLegacy(map, order, settings, boundary, { firstPassCount = 0, attemptedImageSources = new Set() } = {}) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -3040,25 +3068,54 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const touchedIds = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(
+        touchedIds.map(id => map.get(id)).filter(Boolean),
+        attemptedImageSources
+      );
 
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
+        const imageStats = capturedImageStats([...map.values()]);
+        const countMatch = Number(firstPassCount || 0) === map.size;
+        await progress(
+          'Этап 2/3: второй проход завершён · первый ' + Number(firstPassCount || 0) +
+            ' · второй ' + map.size + ' · количество ' + (countMatch ? 'совпало' : 'не совпало'),
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            firstPassCount: Number(firstPassCount || 0),
+            secondPassCount: map.size,
+            passCountMatch: countMatch,
+            comparisonComplete: true,
+            imageCount: imageStats.total,
+            imageBinaryReady: imageStats.ready,
+            imageBinaryFailed: imageStats.failed,
+            force: true
+          }
+        );
         return { boundaryReached: true, physicalEndReached: false };
       }
 
       const signature = visibleTurnSignature();
-      await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
-        phase: 'walk',
-        iteration: i + 1,
-        chronologicalCount: map.size
-      });
+      const imageStats = capturedImageStats([...map.values()]);
+      await progress(
+        'Этап 2/3: сверяю сверху вниз · ' + map.size +
+          (firstPassCount ? ' из ' + firstPassCount + ' сообщений первого прохода' : ' сообщений'),
+        map.size,
+        {
+          phase: 'walk',
+          iteration: i + 1,
+          chronologicalCount: map.size,
+          firstPassCount: Number(firstPassCount || 0),
+          secondPassCount: map.size,
+          imageCount: imageStats.total,
+          imageBinaryReady: imageStats.ready,
+          imageBinaryFailed: imageStats.failed
+        }
+      );
 
       // Stable pre-recovery path: one physical scroll request, then wait for the
       // virtualized window to settle. No checkpoint/storage/network/recovery work here.
@@ -3284,6 +3341,9 @@
     let navigationFirstSignature = '';
     let navigationMessages = [];
     let navigationSequence = [];
+    let firstPassCount = 0;
+    let secondPassCount = 0;
+    const sequentialImageSources = new Set();
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
 
@@ -3404,10 +3464,12 @@
         }
 
         if (mode === 'full') {
-          // Historical 0.3.14 behavior: the upward pass may inspect/capture
-          // visible turns, but it is navigation only. Throw it away before the
-          // real chronological save from top to bottom.
-          await reachTopFullLegacy(map, order, settings);
+          // The upward pass is a real first capture again. Keep its message set
+          // and navigation windows so the downward pass can prove coverage,
+          // recover a turn missed by either pass, and compare the two counts.
+          await reachTopFullLegacy(map, order, settings, navigationWindows, boundary);
+          navigationMessages = [...map.values()];
+          navigationSequence = buildNavigationSequence(navigationWindows);
         } else {
           // Rich upward scans normally begin at the fixed lower boundary. Manual
           // full-range capture is different: the user already chose an explicit
@@ -3485,24 +3547,22 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full') {
-        navigationHighWater = 0;
-        navigationMessages = [];
-        navigationSequence = [];
-      } else if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         navigationHighWater = map.size;
+        firstPassCount = navigationHighWater;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
         navigationFirstSignature = firstAtTop ? turnTextSignature(firstAtTop) : '';
         await progress(
           mode === 'full'
-            ? 'Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз'
+            ? 'Этап 1/3: первый проход вверх завершён · ' + navigationHighWater + ' сообщений'
             : 'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
           navigationHighWater,
           {
             phase: 'top',
             navigationHighWater,
-            navigationOnly: mode === 'full',
+            firstPassCount: navigationHighWater,
+            navigationOnly: false,
             force: true
           }
         );
@@ -3513,7 +3573,10 @@
       chronologicalStarted = true;
 
       const walkResult = mode === 'full'
-        ? await walkDownFullLegacy(map, order, settings, boundary)
+        ? await walkDownFullLegacy(map, order, settings, boundary, {
+            firstPassCount,
+            attemptedImageSources: sequentialImageSources
+          })
         : await walkDown(map, order, settings, boundary, {
             bursts: 3,
             requireBoundary: false
@@ -3533,7 +3596,13 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const finalTouchedIds = collect(map, order, settings, boundary);
+      if (mode === 'full') {
+        await hydrateSequentialImages(
+          finalTouchedIds.map(id => map.get(id)).filter(Boolean),
+          sequentialImageSources
+        );
+      }
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
@@ -3545,12 +3614,15 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
           navigationSequence
         );
+        secondPassCount = reconciliation.chronologicalCount;
+        firstPassCount = navigationHighWater;
+        const passCountMatch = firstPassCount === secondPassCount;
         capturedMessages = reconciliation.messages;
 
         // Keep the best first-pass result as the unfinished-pass source too. The old
@@ -3564,8 +3636,16 @@
         }
 
         await progress(
-          mode === 'full' && !navigationSequence.length
-            ? ('Хронологический проход завершён без разрывов · итог ' + capturedMessages.length)
+          mode === 'full'
+            ? (
+                'Сверка проходов: первый ' + firstPassCount +
+                ', второй ' + secondPassCount +
+                ' · количество ' + (passCountMatch ? 'совпало' : 'не совпало') +
+                (reconciliation.insertedCount
+                  ? ' · восстановлено ' + reconciliation.insertedCount + ' сообщений'
+                  : '') +
+                ' · итог ' + capturedMessages.length
+              )
             : reconciliation.insertedCount
               ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
                  ' пропущенных сообщений · итог ' + capturedMessages.length)
@@ -3575,14 +3655,18 @@
             phase: 'finalizing',
             navigationHighWater,
             chronologicalCount: reconciliation.chronologicalCount,
+            firstPassCount,
+            secondPassCount,
+            passCountMatch,
+            comparisonComplete: mode === 'full',
             reconciledInsertedCount: reconciliation.insertedCount,
             reconciledUnresolvedCount: reconciliation.unresolvedCount,
-            navigationOnly: mode === 'full' && !navigationSequence.length,
+            navigationOnly: false,
             force: true
           }
         );
 
-        if (mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
+        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3860,7 +3944,7 @@
         : [];
 
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
+        onlyMissing: mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
       });
 
       if (mode === 'images' && unresolvedBeforeHydration.length) {
@@ -3929,6 +4013,9 @@
         lastImageBinaryReady: binaryStats.embedded,
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
+        firstPassCount: mode === 'full' ? firstPassCount : undefined,
+        secondPassCount: mode === 'full' ? secondPassCount : undefined,
+        passCountMatch: mode === 'full' ? firstPassCount === secondPassCount : undefined,
         isFragment: mode === 'fragment',
         fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
         lastCaptureAddedCount: addedCount,
