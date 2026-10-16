@@ -704,29 +704,12 @@ function renderSavedArchives(items = []) {
     }
 
     if (item.docUrl) {
-      const open = document.createElement('button');
+      const open = document.createElement('a');
       open.className = 'archive-link-open';
-      open.type = 'button';
+      open.href = item.docUrl;
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
       open.textContent = 'Документ Google Docs ↗';
-      open.disabled = busy;
-      open.onclick = async () => {
-        open.disabled = true;
-        setStatus('Открываю и проверяю документ Google Docs этого архива…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_OPEN_LINKED_DOC',
-            archiveId: item.id,
-            sourceUrl: item.sourceUrl || ''
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть документ Google Docs.');
-          setStatus('Документ Google Docs открыт.');
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-          await getState().catch(() => {});
-        } finally {
-          open.disabled = false;
-        }
-      };
       actions.appendChild(open);
     } else if (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc') {
       const open = document.createElement('a');
