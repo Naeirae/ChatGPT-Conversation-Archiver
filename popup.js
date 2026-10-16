@@ -1014,7 +1014,11 @@ function render(data) {
     : 'Добавить в открытый документ Google Docs';
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
+  $('continueArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
   $('reconcileArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
+  $('editCurrentDoc').disabled = Boolean(running || !archive || !archive.sourceUrl);
+  $('currentDocUrl').value = linkedUrl || savedDocUrl || '';
+  $('clearCurrentDocLink').classList.toggle('hidden', !linkedUrl);
   $('deleteArchive').disabled = Boolean(running || !archive);
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
@@ -1615,6 +1619,98 @@ $('archiveDocLink').onclick = async event => {
     await getState().catch(() => {});
   } finally {
     link.removeAttribute('aria-disabled');
+  }
+};
+
+$('continueArchive').onclick = async () => {
+  const archive = state?.archive;
+  if (!archive?.id) {
+    setStatus('Сначала нужен локальный архив.', true);
+    return;
+  }
+  $('continueArchive').disabled = true;
+  setStatus('Открываю исходный чат и продолжаю с последнего сохранённого места…', false, true);
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
+      archiveId: archive.id,
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить чат.');
+    render({ ...state, job: result.job });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    $('continueArchive').disabled = false;
+  }
+};
+
+$('editCurrentDoc').onclick = () => {
+  const editor = $('currentDocEditor');
+  const nextOpen = editor.classList.contains('hidden');
+  editor.classList.toggle('hidden', !nextOpen);
+  $('editCurrentDoc').textContent = nextOpen ? 'Скрыть ссылку Google Doc' : 'Связать / сменить Google Doc';
+  if (nextOpen) $('currentDocUrl').focus();
+};
+
+$('cancelCurrentDocEdit').onclick = () => {
+  $('currentDocEditor').classList.add('hidden');
+  $('editCurrentDoc').textContent = 'Связать / сменить Google Doc';
+};
+
+$('saveCurrentDocLink').onclick = async () => {
+  const archive = state?.archive;
+  const docUrl = $('currentDocUrl').value.trim();
+  if (!archive?.id || !archive.sourceUrl) {
+    setStatus('Не удалось определить локальный архив.', true);
+    return;
+  }
+  if (!docUrl) {
+    setStatus('Вставьте ссылку на Google Doc.', true);
+    $('currentDocUrl').focus();
+    return;
+  }
+
+  $('saveCurrentDocLink').disabled = true;
+  setStatus('Проверяю и сохраняю ссылку на Google Doc…', false, true);
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_REPLACE_LINKED_DOC',
+      archiveId: archive.id,
+      sourceUrl: archive.sourceUrl,
+      docUrl
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить ссылку Google Doc.');
+    await getState();
+    $('currentDocEditor').classList.add('hidden');
+    $('editCurrentDoc').textContent = 'Связать / сменить Google Doc';
+    setStatus('Связанный Google Doc сохранён. Перед дописыванием Архиватор проверит точку продолжения.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('saveCurrentDocLink').disabled = false;
+  }
+};
+
+$('clearCurrentDocLink').onclick = async () => {
+  const archive = state?.archive;
+  if (!archive?.id || !archive.sourceUrl) return;
+  $('clearCurrentDocLink').disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CLEAR_LINKED_DOC',
+      archiveId: archive.id,
+      sourceUrl: archive.sourceUrl
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось отвязать Google Doc.');
+    await getState();
+    $('currentDocEditor').classList.add('hidden');
+    $('editCurrentDoc').textContent = 'Связать / сменить Google Doc';
+    setStatus('Связь с Google Doc удалена. Сам документ не изменён.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    $('clearCurrentDocLink').disabled = false;
   }
 };
 
