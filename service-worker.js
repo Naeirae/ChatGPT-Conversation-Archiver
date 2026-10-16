@@ -556,6 +556,10 @@ function docExportCoversArchive(entry, archive) {
   const last = messages[messages.length - 1] || null;
   if (!entry || !last) return false;
 
+  if (Number(archive?.imageCount || 0) > 0 && entry.imageComplete !== true) {
+    return false;
+  }
+
   if (entry.lastMessageId && last.id && entry.lastMessageId === last.id) return true;
 
   const lastSignature = messageSignature(last.role, last.text);
