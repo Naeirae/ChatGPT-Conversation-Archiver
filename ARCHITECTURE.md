@@ -145,7 +145,9 @@ A Google Doc is an export target/baseline, not the canonical in-browser archive.
 
 ### Full capture
 
-`ChatGPT tab -> content adapter -> local archive -> optional manual export`
+`fixed bottom snapshot -> upward capture -> top-to-bottom verification capture -> coverage reconciliation -> local archive -> optional manual export`
+
+A full rebuild uses two real capture passes. The upward pass keeps the messages it observes. The top-to-bottom pass independently captures the same fixed snapshot, compares first-pass and second-pass counts, restores provable gaps from either pass, and fetches image binaries in chronological order as messages are revisited. Count mismatch is diagnostic evidence, not permission to discard either pass; unresolved ordering still fails closed.
 
 A full rebuild refreshes the local archive only. It must not silently append the rebuilt archive to a previously linked Google Doc.
 
@@ -160,6 +162,8 @@ This uses the same message-anchored marking mechanism as fragment capture, but b
 `existing local archive -> verified last anchor -> capture delta -> merge -> linked Google Doc delta`
 
 Only messages after the verified anchor may be appended.
+
+For an unfinished chronological pass, recovery is directional rather than edge-seeking: unknown content searches for known saved evidence, known content advances toward the saved frontier, and a known-to-unknown transition while moving down is treated as a frontier crossing that reverses and narrows the step. One stalled direction is not a reason to abort; the opposite direction is checked before recovery is considered unprovable. User pause/resume is separate from recovery and must not launch hidden scrolling.
 
 ### Reconcile and fill
 

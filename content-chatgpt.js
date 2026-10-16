@@ -1296,6 +1296,28 @@
     return { embedded, failed, unique: total };
   }
 
+  async function hydrateSequentialImages(messages, attemptedSources) {
+    const attempted = attemptedSources instanceof Set ? attemptedSources : new Set();
+    const targets = [];
+
+    for (const message of messages || []) {
+      const pending = [];
+      for (const image of message?.images || []) {
+        const src = String(image?.src || '');
+        if (!src || attempted.has(src)) continue;
+        attempted.add(src);
+        pending.push(image);
+      }
+      if (pending.length) targets.push({ ...message, images: pending });
+    }
+
+    if (!targets.length) return { embedded: 0, failed: 0, unique: 0 };
+    return hydrateMessageImages(targets, {
+      onlyMissing: false,
+      reportProgress: false
+    });
+  }
+
   async function expandVisible() {
     let clicks = 0;
     for (const turn of orderedTurns()) {
@@ -1313,12 +1335,14 @@
 
   function collect(map, order, settings, stopBoundary = null) {
     const turns = orderedTurns();
+    const touchedIds = [];
 
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
       const message = captureTurn(turn, ordinal, settings);
 
       if (message) {
+        touchedIds.push(message.id);
         const existing = map.get(message.id);
         if (!existing) {
           order.push(message.id);
@@ -1348,6 +1372,8 @@
       // walking back down.
       if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
     }
+
+    return [...new Set(touchedIds)];
   }
 
   function capturedImageStats(messages) {
@@ -2540,11 +2566,8 @@
     //   saved prefix is found, then turn down toward the exact checkpoint.
     if (capturePhase === 'walk') {
       let prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
-
-      // A preserved working tab normally remains very close to the failure
-      // frontier. If the viewport already contains one of the last saved turns,
-      // resume immediately instead of searching toward the conversation top.
       const frontierSlack = Math.max(0, (savedRefs || []).length - 12);
+
       if (prefixEvidence.known && prefixEvidence.savedIndex >= frontierSlack) {
         await progress('Последняя сохранённая часть уже видна. Продолжаю прямо отсюда.', map.size, {
           phase: 'top',
@@ -2559,21 +2582,25 @@
           frontierMatched: true
         };
       }
-      let knownVisible = prefixEvidence.known;
-      let direction = knownVisible ? 'down' : 'up';
-      let enteredSavedPrefix = knownVisible;
-      let overshotFrontier = false;
-      let unchanged = 0;
-      let previousSignature = '';
 
-      for (let i = 0; i < 48; i++) {
+      let knownVisible = prefixEvidence.known;
+      let unknownSearchDirection = 'up';
+      let direction = knownVisible ? 'down' : unknownSearchDirection;
+      let enteredSavedPrefix = knownVisible;
+      let crossedFrontier = false;
+      let previousSignature = '';
+      let unchanged = 0;
+      let sameDirectionStalls = 0;
+      let reversals = 0;
+
+      for (let i = 0; i < 360; i++) {
         await waitIfPaused();
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
 
         if (checkpointWindowVisible(checkpointSignatures)) {
-          await progress('Найдена сохранённая контрольная точка.', map.size, {
+          await progress('Найдена сохранённая контрольная точка. Продолжаю с неё.', map.size, {
             phase: 'top',
             iteration: i + 1,
             anchorReached: true,
@@ -2622,12 +2649,13 @@
         if (!enteredSavedPrefix) {
           if (knownVisible) {
             enteredSavedPrefix = true;
-            overshotFrontier = false;
+            crossedFrontier = false;
             direction = 'down';
             unchanged = 0;
+            sameDirectionStalls = 0;
             previousSignature = '';
             await progress(
-              'Нашёл сохранённую часть; теперь иду вниз к месту остановки…',
+              'Нашёл знакомую сохранённую часть; иду по ней вниз к месту остановки…',
               map.size,
               {
                 phase: 'top',
@@ -2637,9 +2665,15 @@
               }
             );
           } else {
-            direction = 'up';
+            // Normally unknown content is below the saved frontier, so search
+            // upward first. If that physical direction is exhausted without
+            // evidence, unknownSearchDirection is reversed and the search
+            // continues instead of repeatedly forcing the same edge.
+            direction = unknownSearchDirection;
             await progress(
-              'Текущий участок ниже сохранённой границы; иду вверх до сохранённой части…',
+              direction === 'up'
+                ? 'Участок пока незнакомый; ищу вверх ближайшую уже сохранённую часть…'
+                : 'Участок пока незнакомый; после проверки верхнего края ищу знакомую часть вниз…',
               map.size,
               {
                 phase: 'top',
@@ -2649,12 +2683,11 @@
             );
           }
         } else if (knownVisible) {
-          // Any known message belongs to the saved prefix, so the saved frontier
-          // is at or below the current viewport.
+          // We are inside the saved prefix; the frontier is at or below us.
           direction = 'down';
-          overshotFrontier = false;
+          crossedFrontier = false;
           await progress(
-            'Я внутри сохранённой части; иду вниз к последней сохранённой точке…',
+            'Участок знакомый; продолжаю вниз к границе уже сохранённого…',
             map.size,
             {
               phase: 'top',
@@ -2663,42 +2696,97 @@
             }
           );
         } else {
-          // We had already been inside the saved prefix and then lost every
-          // known message while moving down: the viewport stepped below the
-          // frontier. Move back up, then approach the frontier more carefully.
+          // Known -> unknown while moving down means the frontier was crossed.
+          // Reverse and reduce the step. Keep searching instead of aborting.
+          if (direction === 'down') {
+            reversals++;
+            crossedFrontier = true;
+          }
           direction = 'up';
-          overshotFrontier = true;
           await progress(
-            'Прошёл ниже сохранённой границы; возвращаюсь вверх к последнему известному участку…',
+            'Перешёл из знакомой части в незнакомую; возвращаюсь к границе и сужаю шаг…',
             map.size,
             {
               phase: 'top',
               iteration: i + 1,
               resumeSearchDirection: direction,
+              frontierCrossed: true,
+              frontierReversals: reversals,
               force: true
             }
           );
         }
 
         const before = visibleTurnSignature();
-        const bursts = overshotFrontier ? 1 : (direction === 'down' ? 2 : 4);
-        await physicalScroll(direction, bursts);
-        const after = visibleTurnSignature();
+        const bursts = crossedFrontier
+          ? 1
+          : direction === 'down'
+            ? 2
+            : (enteredSavedPrefix ? 2 : 5);
 
-        if (after && after === before && after === previousSignature) unchanged++;
-        else unchanged = 0;
+        await physicalScroll(direction, bursts, {
+          settleTimeout: 2600,
+          quietWindow: 400
+        });
+
+        const after = visibleTurnSignature();
+        if (after && after === before && after === previousSignature) {
+          unchanged++;
+          sameDirectionStalls++;
+        } else {
+          unchanged = 0;
+          sameDirectionStalls = 0;
+        }
         previousSignature = after;
 
-        if (unchanged >= 7) {
+        // Do not stop merely because one direction stalled. Reverse once the
+        // current edge/window is exhausted and keep looking for known content.
+        if (sameDirectionStalls >= 4) {
+          const atEdge = direction === 'up'
+            ? physicalScrollStartVisible()
+            : physicalScrollEndVisible();
+
+          if (atEdge) {
+            const nextDirection = oppositeScrollDirection(direction);
+            direction = nextDirection;
+            if (!enteredSavedPrefix) unknownSearchDirection = nextDirection;
+            enteredSavedPrefix = false;
+            crossedFrontier = false;
+            sameDirectionStalls = 0;
+            unchanged = 0;
+            previousSignature = '';
+            reversals++;
+
+            await progress(
+              'В этом направлении новых окон больше нет; проверяю противоположное направление…',
+              map.size,
+              {
+                phase: 'top',
+                iteration: i + 1,
+                resumeSearchDirection: direction,
+                resumeSearchEdgeReversal: true,
+                frontierReversals: reversals,
+                force: true
+              }
+            );
+            continue;
+          }
+        }
+
+        // 360 directional probes are intentionally generous. At this point the
+        // search has already reversed at physical edges and repeatedly failed
+        // to recover any saved evidence, so continuing would no longer be an
+        // evidence-based resume.
+        if (unchanged >= 18 && reversals >= 2) {
           throw new Error(
             enteredSavedPrefix
-              ? 'Сохранённую часть нашёл, но точную границу продолжения восстановить не удалось.'
-              : 'Не удалось найти сохранённую часть выше текущей позиции.'
+              ? 'Сохранённую часть нашёл, но точную границу продолжения восстановить не удалось после проверки обоих направлений.'
+              : 'Не удалось найти сохранённую часть после проверки обоих направлений.'
           );
         }
       }
 
-      throw new Error('Не удалось восстановить границу сохранённого прохода сверху вниз.');
+      throw new Error('Не удалось восстановить место остановки после полного ориентированного поиска.');
     }
 
     // Navigation-to-top drafts are not chronological prefixes. For them the
@@ -2952,7 +3040,7 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
-  async function reachTopFullLegacy(map, order, settings) {
+  async function reachTopFullLegacy(map, order, settings, navigationWindows = null, boundary = null) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -2972,10 +3060,11 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
+      collect(map, order, settings, boundary);
+      recordNavigationWindow(navigationWindows, settings, boundary);
 
       const signature = visibleTurnSignature();
-      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
+      await progress('Этап 1/3: первый проход вверх · собрано ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
@@ -2998,7 +3087,8 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
+      collect(map, order, settings, boundary);
+      recordNavigationWindow(navigationWindows, settings, boundary);
 
       const nextSignature = visibleTurnSignature();
       if (
@@ -3018,7 +3108,7 @@
       // This is intentionally the old conservative stop rule. If ChatGPT is
       // slow at the top, the user can press "I'm at the beginning".
       if (stable >= 4) {
-        await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
+        await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
           force: true
@@ -3030,7 +3120,7 @@
     throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
   }
 
-  async function walkDownFullLegacy(map, order, settings, boundary) {
+  async function walkDownFullLegacy(map, order, settings, boundary, { firstPassCount = 0, attemptedImageSources = new Set() } = {}) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -3040,25 +3130,54 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const touchedIds = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(
+        touchedIds.map(id => map.get(id)).filter(Boolean),
+        attemptedImageSources
+      );
 
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
+        const imageStats = capturedImageStats([...map.values()]);
+        const countMatch = Number(firstPassCount || 0) === map.size;
+        await progress(
+          'Этап 2/3: второй проход завершён · первый ' + Number(firstPassCount || 0) +
+            ' · второй ' + map.size + ' · количество ' + (countMatch ? 'совпало' : 'не совпало'),
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            firstPassCount: Number(firstPassCount || 0),
+            secondPassCount: map.size,
+            passCountMatch: countMatch,
+            comparisonComplete: true,
+            imageCount: imageStats.total,
+            imageBinaryReady: imageStats.ready,
+            imageBinaryFailed: imageStats.failed,
+            force: true
+          }
+        );
         return { boundaryReached: true, physicalEndReached: false };
       }
 
       const signature = visibleTurnSignature();
-      await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
-        phase: 'walk',
-        iteration: i + 1,
-        chronologicalCount: map.size
-      });
+      const imageStats = capturedImageStats([...map.values()]);
+      await progress(
+        'Этап 2/3: сверяю сверху вниз · ' + map.size +
+          (firstPassCount ? ' из ' + firstPassCount + ' сообщений первого прохода' : ' сообщений'),
+        map.size,
+        {
+          phase: 'walk',
+          iteration: i + 1,
+          chronologicalCount: map.size,
+          firstPassCount: Number(firstPassCount || 0),
+          secondPassCount: map.size,
+          imageCount: imageStats.total,
+          imageBinaryReady: imageStats.ready,
+          imageBinaryFailed: imageStats.failed
+        }
+      );
 
       // Stable pre-recovery path: one physical scroll request, then wait for the
       // virtualized window to settle. No checkpoint/storage/network/recovery work here.
@@ -3284,6 +3403,9 @@
     let navigationFirstSignature = '';
     let navigationMessages = [];
     let navigationSequence = [];
+    let firstPassCount = 0;
+    let secondPassCount = 0;
+    const sequentialImageSources = new Set();
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
 
@@ -3404,10 +3526,12 @@
         }
 
         if (mode === 'full') {
-          // Historical 0.3.14 behavior: the upward pass may inspect/capture
-          // visible turns, but it is navigation only. Throw it away before the
-          // real chronological save from top to bottom.
-          await reachTopFullLegacy(map, order, settings);
+          // The upward pass is a real first capture again. Keep its message set
+          // and navigation windows so the downward pass can prove coverage,
+          // recover a turn missed by either pass, and compare the two counts.
+          await reachTopFullLegacy(map, order, settings, navigationWindows, boundary);
+          navigationMessages = [...map.values()];
+          navigationSequence = buildNavigationSequence(navigationWindows);
         } else {
           // Rich upward scans normally begin at the fixed lower boundary. Manual
           // full-range capture is different: the user already chose an explicit
@@ -3485,24 +3609,22 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full') {
-        navigationHighWater = 0;
-        navigationMessages = [];
-        navigationSequence = [];
-      } else if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         navigationHighWater = map.size;
+        firstPassCount = navigationHighWater;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
         navigationFirstSignature = firstAtTop ? turnTextSignature(firstAtTop) : '';
         await progress(
           mode === 'full'
-            ? 'Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз'
+            ? 'Этап 1/3: первый проход вверх завершён · ' + navigationHighWater + ' сообщений'
             : 'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
           navigationHighWater,
           {
             phase: 'top',
             navigationHighWater,
-            navigationOnly: mode === 'full',
+            firstPassCount: navigationHighWater,
+            navigationOnly: false,
             force: true
           }
         );
@@ -3513,7 +3635,10 @@
       chronologicalStarted = true;
 
       const walkResult = mode === 'full'
-        ? await walkDownFullLegacy(map, order, settings, boundary)
+        ? await walkDownFullLegacy(map, order, settings, boundary, {
+            firstPassCount,
+            attemptedImageSources: sequentialImageSources
+          })
         : await walkDown(map, order, settings, boundary, {
             bursts: 3,
             requireBoundary: false
@@ -3533,7 +3658,13 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const finalTouchedIds = collect(map, order, settings, boundary);
+      if (mode === 'full') {
+        await hydrateSequentialImages(
+          finalTouchedIds.map(id => map.get(id)).filter(Boolean),
+          sequentialImageSources
+        );
+      }
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
@@ -3545,12 +3676,15 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
           navigationSequence
         );
+        secondPassCount = reconciliation.chronologicalCount;
+        firstPassCount = navigationHighWater;
+        const passCountMatch = firstPassCount === secondPassCount;
         capturedMessages = reconciliation.messages;
 
         // Keep the best first-pass result as the unfinished-pass source too. The old
@@ -3564,8 +3698,16 @@
         }
 
         await progress(
-          mode === 'full' && !navigationSequence.length
-            ? ('Хронологический проход завершён без разрывов · итог ' + capturedMessages.length)
+          mode === 'full'
+            ? (
+                'Сверка проходов: первый ' + firstPassCount +
+                ', второй ' + secondPassCount +
+                ' · количество ' + (passCountMatch ? 'совпало' : 'не совпало') +
+                (reconciliation.insertedCount
+                  ? ' · восстановлено ' + reconciliation.insertedCount + ' сообщений'
+                  : '') +
+                ' · итог ' + capturedMessages.length
+              )
             : reconciliation.insertedCount
               ? ('Сверка проходов: восстановлено ' + reconciliation.insertedCount +
                  ' пропущенных сообщений · итог ' + capturedMessages.length)
@@ -3575,14 +3717,18 @@
             phase: 'finalizing',
             navigationHighWater,
             chronologicalCount: reconciliation.chronologicalCount,
+            firstPassCount,
+            secondPassCount,
+            passCountMatch,
+            comparisonComplete: mode === 'full',
             reconciledInsertedCount: reconciliation.insertedCount,
             reconciledUnresolvedCount: reconciliation.unresolvedCount,
-            navigationOnly: mode === 'full' && !navigationSequence.length,
+            navigationOnly: false,
             force: true
           }
         );
 
-        if (mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
+        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3860,7 +4006,7 @@
         : [];
 
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
+        onlyMissing: mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
       });
 
       if (mode === 'images' && unresolvedBeforeHydration.length) {
@@ -3929,6 +4075,9 @@
         lastImageBinaryReady: binaryStats.embedded,
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
+        firstPassCount: mode === 'full' ? firstPassCount : undefined,
+        secondPassCount: mode === 'full' ? secondPassCount : undefined,
+        passCountMatch: mode === 'full' ? firstPassCount === secondPassCount : undefined,
         isFragment: mode === 'fragment',
         fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
         lastCaptureAddedCount: addedCount,
@@ -4514,19 +4663,20 @@
         sendResponse({ ok: false, error: 'Активный сбор для продолжения не найден.' });
         return false;
       }
-      (async () => {
-        try {
-          await recoverPauseCheckpoint(state.pauseCheckpoint);
-          state.pauseCheckpoint = null;
-          state.paused = false;
-          sendResponse({ ok: true, paused: false, recovered: true });
-        } catch (error) {
-          state.resumeFailure = error?.message || String(error);
-          state.paused = false;
-          sendResponse({ ok: false, paused: false, error: state.resumeFailure });
-        }
-      })();
-      return true;
+
+      // Pause means "stop automatic activity here", not "start a recovery
+      // traversal on resume". The old resume path tried to scroll while the
+      // worker still marked the job paused, so the worker rejected those
+      // physical scroll requests and the pause could appear to hang.
+      //
+      // Resume immediately from the physical viewport that is currently open.
+      // If the user moved the page manually during the pause, the ordinary
+      // overlap/frontier checks of the active pass decide how to reconnect.
+      state.paused = false;
+      state.pauseCheckpoint = null;
+      state.resumeFailure = '';
+      sendResponse({ ok: true, paused: false, recovered: false });
+      return false;
     }
     if (message && message.type === 'ARCHIVER_CANCEL_CAPTURE') {
       if (state.running && (!message.jobId || message.jobId === state.jobId)) {
