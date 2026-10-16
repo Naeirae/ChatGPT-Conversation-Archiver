@@ -381,9 +381,11 @@ try {
   if (!archiveStoreSource.includes("archiveLibrary: 'archiveLibrary'") ||
       !archiveStoreSource.includes('async function registerArchive(conversation)') ||
       !serviceWorkerSource.includes('exactDocExportForArchive') ||
+      !serviceWorkerSource.includes('docExportCoversArchive') ||
+      !serviceWorkerSource.includes('validatedArchiveDestination') ||
       !serviceWorkerSource.includes('linkedDocUrl: linked?.url') ||
       !serviceWorkerSource.includes('await registerArchive(libraryArchive)')) {
-    fail('saved archive library: completed captures must be registered independently of linked Google Docs');
+    fail('saved archive library: completed captures must be registered independently of linked Google Docs and stale Doc exports must not label a newer snapshot as saved');
   }
   if (!popupJs.includes('state.archiveDestination || null') ||
       !popupJs.includes("destinationText.textContent = 'Сохранён локально · документ не создан'") ||
