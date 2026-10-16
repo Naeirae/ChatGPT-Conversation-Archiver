@@ -126,6 +126,92 @@ test('recordDocExport stores a multi-message tail for duplicate-safe continuatio
   assert.equal(saved.tailSignatures.length, 3);
 });
 
+test('Google Doc export with images is not marked complete without image verification', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage, { now: () => 500 });
+  const conversation = {
+    id: 'archive-images-unverified',
+    sourceUrl: 'https://chatgpt.com/c/conv-images-unverified',
+    imageCount: 2,
+    messages: [
+      { id: 'm1', role: 'user', text: 'Сообщение с картинками' }
+    ]
+  };
+
+  const linked = await store.recordDocExport(
+    conversation,
+    'https://docs.google.com/document/d/doc-images-unverified/edit'
+  );
+
+  assert.equal(linked.imageComplete, false);
+  assert.equal((await store.getDocExport('doc-images-unverified')).imageComplete, false);
+  assert.equal(
+    storage.snapshot()[STORAGE_KEYS.archiveDestinations]?.[conversation.id],
+    undefined
+  );
+});
+
+test('verified Google Doc images mark the archive destination complete', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage, { now: () => 501 });
+  const conversation = {
+    id: 'archive-images-verified',
+    sourceUrl: 'https://chatgpt.com/c/conv-images-verified',
+    imageCount: 2,
+    messages: [
+      { id: 'm1', role: 'user', text: 'Сообщение с картинками' }
+    ]
+  };
+
+  const linked = await store.recordDocExport(
+    conversation,
+    'https://docs.google.com/document/d/doc-images-verified/edit',
+    {
+      imageVerificationAvailable: true,
+      imageExpectedCount: 2,
+      imageVerifiedCount: 2,
+      documentImageCount: 2,
+      imageComplete: true
+    }
+  );
+
+  assert.equal(linked.imageComplete, true);
+  const saved = await store.getDocExport('doc-images-verified');
+  assert.equal(saved.imageComplete, true);
+  assert.equal(saved.documentImageCount, 2);
+  assert.equal(
+    storage.snapshot()[STORAGE_KEYS.archiveDestinations][conversation.id].kind,
+    'google-doc'
+  );
+});
+
+test('no-op relink preserves prior verified image completeness for unchanged archive', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage, { now: () => 502 });
+  const conversation = {
+    id: 'archive-images-preserve',
+    sourceUrl: 'https://chatgpt.com/c/conv-images-preserve',
+    imageCount: 1,
+    messages: [
+      { id: 'm1', role: 'assistant', text: 'Ответ с картинкой' }
+    ]
+  };
+
+  const url = 'https://docs.google.com/document/d/doc-images-preserve/edit';
+  await store.recordDocExport(conversation, url, {
+    imageVerificationAvailable: true,
+    imageExpectedCount: 1,
+    imageVerifiedCount: 1,
+    documentImageCount: 1,
+    imageComplete: true
+  });
+  await store.recordDocExport(conversation, url);
+
+  const saved = await store.getDocExport('doc-images-preserve');
+  assert.equal(saved.imageComplete, true);
+  assert.equal(saved.documentImageCount, 1);
+});
+
 test('one-off doc export records target without replacing canonical link', async () => {
   const storage = fakeStorage();
   const store = createArchiveStore(storage, { now: () => 789 });
