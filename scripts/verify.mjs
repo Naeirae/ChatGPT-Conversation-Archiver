@@ -334,25 +334,33 @@ try {
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
-      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
-      !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
-    fail('popup.js: fragment-range/unified reconcile/unfinished recovery controls are not wired');
+      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE')) {
+    fail('popup.js: fragment-range and unified reconcile controls are not wired');
   }
+  const popupDetailsCount = (popupHtml.match(/<details\b/g) || []).length;
   if (popupHtml.includes('id="recoverImages"') ||
       popupJs.includes("imagesButton.textContent = 'Сверить изображения'") ||
+      popupJs.includes("document.createElement('details')") ||
+      popupDetailsCount > 4 ||
       !popupHtml.includes('id="reconcileArchive" class="primary">Сверить</button>') ||
+      !popupHtml.includes('id="fragmentToggle"') ||
+      !popupHtml.includes('id="archiveMoreToggle"') ||
+      !popupHtml.includes('id="archiveMoreActions"') ||
+      !popupHtml.includes('class="saved-run-card') ||
+      popupHtml.includes('class="saved-run-details') ||
       !popupCss.includes('.inline-progress::before') ||
       !popupCss.includes('.status.busy::before')) {
-    fail('archive UX: one primary sync action and visible progress indicators must remain in place');
+    fail('archive UX: popup must stay flat, keep one primary sync action, and expose visible progress');
   }
   if (popupJs.includes("$('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue)") ||
       !popupJs.includes("type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',\n      archiveId: state.archive.id")) {
     fail('current archive sync must work from Google Docs/other tabs by reopening the archive source URL');
   }
   if (!popupJs.includes("passId: item.exportPassId") ||
+      popupJs.includes("hydrateImages.textContent = 'Сверить и добрать изображения'") ||
       !popupJs.includes("job?.captureMode === 'images-draft'") ||
       !popupJs.includes("!job?.boundarySearchActive")) {
-    fail('popup.js: unfinished image/boundary-search UI contract regressed');
+    fail('popup.js: unfinished recovery must stay functional without exposing specialist image-sync controls');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
@@ -361,6 +369,10 @@ try {
   const offscreenSource = await readFile('offscreen.js', 'utf8');
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
   const manifestSource = await readFile('manifest.json', 'utf8');
+  const helpSource = await readFile('help.html', 'utf8');
+  if (/бинар/i.test(popupHtml) || /бинар/i.test(popupJs) || /бинар/i.test(helpSource)) {
+    fail('user-facing UX must not expose binary transport jargon');
+  }
   if (!contentSource.includes("mode === 'reconcile'") ||
       !contentSource.includes('recoveredImageRefs.push({') ||
       !contentSource.includes("(mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length")) {
@@ -369,16 +381,25 @@ try {
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
-      !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'") ||
-      !serviceWorkerSource.includes('binaryReadyCount > 0') ||
-      !serviceWorkerSource.includes('await pasteBinaryImages(message)') ||
+      !serviceWorkerSource.includes('async function googleDocImageCountAttached') ||
+      !serviceWorkerSource.includes("method: 'docs-dom'") ||
+      !serviceWorkerSource.includes("method: 'accessibility-tree'") ||
+      !serviceWorkerSource.includes('absoluteSafe: false') ||
+      !serviceWorkerSource.includes('imageCountBefore.method === imageCountAfter.method') ||
+      !serviceWorkerSource.includes('documentImageCountAbsoluteSafe') ||
+      !serviceWorkerSource.includes('imagePasteAttemptCount') ||
+      !serviceWorkerSource.includes('imageComplete') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
       !contentSource.includes("type: 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !contentSource.includes('extension fetch:') ||
+      !contentSource.includes('function imageIdentity') ||
+      !serviceWorkerSource.includes('function imageSourceIdentity') ||
       !manifestSource.includes('https://*.oaiusercontent.com/*') ||
-      !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
-    fail('Google Docs images: cross-origin worker hydration and binary-first export must remain wired; rich HTML is fallback only');
+      !manifestSource.includes('https://*.openai.com/*') ||
+      !manifestSource.includes('https://*.oaistatic.com/*') ||
+      !manifestSource.includes('https://*.chatgpt.com/*')) {
+    fail('Google Docs images: signed-URL refresh, cross-origin hydration, real image clipboard and post-paste verification must remain wired');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
@@ -402,12 +423,15 @@ try {
   const archiveStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
   if (!archiveStoreSource.includes("archiveLibrary: 'archiveLibrary'") ||
       !archiveStoreSource.includes('async function registerArchive(conversation)') ||
+      !archiveStoreSource.includes('imageVerificationAvailable') ||
+      !archiveStoreSource.includes('imageComplete: verifiedComplete') ||
       !serviceWorkerSource.includes('exactDocExportForArchive') ||
       !serviceWorkerSource.includes('docExportCoversArchive') ||
+      !serviceWorkerSource.includes("entry.imageComplete !== true") ||
       !serviceWorkerSource.includes('validatedArchiveDestination') ||
       !serviceWorkerSource.includes('linkedDocUrl: linked?.url') ||
       !serviceWorkerSource.includes('await registerArchive(libraryArchive)')) {
-    fail('saved archive library: completed captures must be registered independently of linked Google Docs and stale Doc exports must not label a newer snapshot as saved');
+    fail('saved archive library: local completion must stay separate from a Google Doc whose text/images were not verified');
   }
   if (!popupJs.includes('state.archiveDestination || null') ||
       !popupJs.includes("destinationText.textContent = 'Сохранён локально · документ не создан'") ||
