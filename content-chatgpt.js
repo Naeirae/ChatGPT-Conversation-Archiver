@@ -1237,7 +1237,7 @@
     if (!img) throw new Error('Картинка сейчас не видна в DOM.');
 
     try {
-      img.scrollIntoView({ block: 'center', inline: 'center' });
+      img.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       if (img.decode) await Promise.race([img.decode(), sleep(1800)]).catch(() => {});
       await sleep(120);
     } catch (_) {}
@@ -1388,23 +1388,39 @@
   async function hydrateSequentialImages(messages, attemptedSources) {
     const attempted = attemptedSources instanceof Set ? attemptedSources : new Set();
     const targets = [];
+    const targetSources = new Set();
 
     for (const message of messages || []) {
       const pending = [];
       for (const image of message?.images || []) {
         const src = String(image?.src || '');
         if (!src || attempted.has(src)) continue;
-        attempted.add(src);
         pending.push(image);
+        targetSources.add(src);
       }
       if (pending.length) targets.push({ ...message, images: pending });
     }
 
     if (!targets.length) return { embedded: 0, failed: 0, unique: 0 };
-    return hydrateMessageImages(targets, {
+    const result = await hydrateMessageImages(targets, {
       onlyMissing: false,
       reportProgress: false
     });
+
+    // Only successful sources become final. A failed image may simply have
+    // been half-loaded in this viewport; let the next physical window retry it.
+    for (const src of targetSources) {
+      const refs = targets.flatMap(message =>
+        (message.images || []).filter(image => String(image?.src || '') === src)
+      );
+      if (refs.some(image => image?.binaryStatus === 'ready' && image.dataUrl)) {
+        attempted.add(src);
+      } else {
+        attempted.delete(src);
+      }
+    }
+
+    return result;
   }
 
   async function expandVisible() {
