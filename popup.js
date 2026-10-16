@@ -118,9 +118,9 @@ function renderCaptureProgress(job, running) {
     if (imageHydrationTotal) {
       parts.push('картинки: ' + imageProcessed + '/' + imageHydrationTotal);
     } else if (imageTotal) {
-      parts.push('картинок найдено: ' + imageTotal);
+      parts.push('картинки готовы: ' + imageReady + '/' + imageTotal);
     }
-    if (job?.phase === 'finalizing' && imageReady) {
+    if (job?.phase === 'finalizing' && imageReady && imageHydrationTotal) {
       parts.push('готово: ' + imageReady);
     }
     if (imageFailed) parts.push('не удалось: ' + imageFailed);
