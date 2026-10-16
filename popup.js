@@ -458,8 +458,8 @@ function renderSavedArchives(items = []) {
     notice.classList.toggle('hidden', !withoutDocument);
     notice.textContent = withoutDocument
       ? (withoutDocument === 1
-          ? '1 чат есть в Архиваторе, но ещё не перенесён в документ.'
-          : withoutDocument + ' чатов есть в Архиваторе, но ещё не перенесены в документ.')
+          ? '1 сохранённый чат ещё не подтверждён полностью в Google Docs.'
+          : withoutDocument + ' сохранённых чатов ещё не подтверждены полностью в Google Docs.')
       : '';
   }
 
@@ -537,7 +537,7 @@ function renderSavedArchives(items = []) {
         destinationText.textContent = 'Сохранён отдельно';
       }
     } else if (item.linkedDocUrl) {
-      destinationText.textContent = 'Сохранён локально · есть связанный документ';
+      destinationText.textContent = 'Сохранён локально · связанный Google Doc требует проверки';
     } else {
       destinationText.textContent = 'Сохранён локально · документ не создан';
     }
