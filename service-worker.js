@@ -4552,7 +4552,12 @@ async function pasteArchiveIntoGoogleDoc(
       if (!copied?.ok) {
         imageFailedCount++;
         imageProcessedCount++;
-        failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
+        failedImages.push({
+          messageId: message?.id || '',
+          messageSignature: messageSignature(message?.role || '', message?.text || ''),
+          src: image.src || '',
+          error: copied?.error || 'clipboard failed'
+        });
         await reportDocExportProgress({
           phase: 'images',
           processed: imageProcessedCount,
@@ -4585,6 +4590,8 @@ async function pasteArchiveIntoGoogleDoc(
         imageFailedCount++;
         if (!verified.available) imageVerificationUnavailableCount++;
         failedImages.push({
+          messageId: message?.id || '',
+          messageSignature: messageSignature(message?.role || '', message?.text || ''),
           src: image.src || '',
           error: verified.available
             ? 'Google Docs не подтвердил появление изображения после вставки.'
