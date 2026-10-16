@@ -4806,15 +4806,21 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
         await sleep(180);
         const after = await googleDocImageCountAttached(tab.id);
 
-        if (before.available && after.available && after.count > before.count) {
+        if (
+          before.available &&
+          after.available &&
+          before.method === after.method &&
+          after.count > before.count
+        ) {
           inserted++;
           done.add(keyOf(item));
         } else {
           failures.push({
             src: item.image.src || '',
-            error: before.available && after.available
-              ? 'Google Docs не подтвердил появление изображения после вставки.'
-              : 'Не удалось автоматически подтвердить изображение в Google Docs.'
+            error:
+              before.available && after.available && before.method === after.method
+                ? 'Google Docs не подтвердил появление изображения после вставки.'
+                : 'Не удалось автоматически подтвердить изображение в Google Docs.'
           });
         }
       }
@@ -4833,7 +4839,13 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
     failed: failures.length,
     noChanges: false,
     imageVerificationAvailable: Boolean(finalImageCount.available),
-    documentImageCount: finalImageCount.available ? finalImageCount.count : null,
+    documentImageCount:
+      finalImageCount.available && finalImageCount.absoluteSafe
+        ? finalImageCount.count
+        : null,
+    documentImageCountAbsoluteSafe: Boolean(
+      finalImageCount.available && finalImageCount.absoluteSafe
+    ),
     imageVerificationMethod: finalImageCount.method || '',
     failures
   };
