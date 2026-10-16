@@ -4289,121 +4289,127 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
   return chrome.tabs.get(tabId);
 }
 
-async function copyImageClipboardInGoogleDocs(tabId, image) {
-  const dataUrl = String(image?.dataUrl || '');
-  if (!/^data:image\//i.test(dataUrl)) {
-    return { ok: false, error: 'В архиве нет подготовленных данных изображения.' };
-  }
-
-  let offscreenError = '';
+async function googleDocImageCountAttached(tabId) {
   try {
-    await ensureOffscreen();
-    const offscreen = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE',
-      target: 'offscreen',
-      dataUrl,
-      alt: String(image?.alt || '')
-    });
-    if (offscreen?.ok) {
-      return {
-        ok: true,
-        method: offscreen.method || 'offscreen-image-selection',
-        size: offscreen.size || dataUrl.length
-      };
-    }
-    offscreenError = offscreen?.error || 'offscreen image clipboard failed';
-  } catch (error) {
-    offscreenError = error?.message || String(error);
-  }
-
-  // 0.3.x/early 0.4.x successfully relied on a rich-HTML clipboard payload
-  // containing the original image URL. Keep that proven route as the second
-  // fallback when Chromium refuses an image-only clipboard item.
-  try {
-    const source = String(image?.src || dataUrl);
-    const alt = String(image?.alt || '');
-    const html =
-      '<img src="' + escapeHtml(source) + '" alt="' + escapeHtml(alt) + '">';
-    await writeClipboard(html, alt);
+    await cdp(tabId, 'Accessibility.enable');
+    const tree = await cdp(tabId, 'Accessibility.getFullAXTree');
+    const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
+    const count = nodes.filter(node => {
+      const role = String(node?.role?.value || '').toLowerCase();
+      return role === 'image' || role === 'img' || role === 'graphics-symbol';
+    }).length;
+    return { available: true, count, method: 'accessibility-tree' };
+  } catch (accessibilityError) {
+    try {
+      const result = await cdp(tabId, 'Runtime.evaluate', {
+        expression: `(() => {
+          const primary = document.querySelectorAll('.kix-embeddedobject-image').length;
+          if (primary) return primary;
+          return document.querySelectorAll('.kix-canvas-tile-content image, svg.kix-embeddedobject-image').length;
+        })()`,
+        returnByValue: true
+      });
+      const count = Number(result?.result?.value);
+      if (Number.isFinite(count)) {
+        return { available: true, count, method: 'docs-dom' };
+      }
+    } catch (_) {}
     return {
-      ok: true,
-      method: 'offscreen-rich-html-image',
-      size: source.length,
-      fallbackFrom: offscreenError
+      available: false,
+      count: 0,
+      method: '',
+      error: accessibilityError?.message || String(accessibilityError)
     };
-  } catch (error) {
-    const richHtmlError = error?.message || String(error);
+  }
+}
 
-    // Last resort: retain the in-page clipboard path introduced later. This is
-    // no longer the primary path because Google Docs can report success here
-    // while the clipboard image is not actually accepted by the editor.
-    const expression = `(async () => {
-      const dataUrl = ${JSON.stringify(dataUrl)};
-      let clipboardError = '';
+async function copyImageClipboardInGoogleDocs(tabId, image) {
+  const dataUrl = String(image?.dataUrl || '').trim();
+  const src = String(image?.src || '').trim();
+  const errors = [];
 
-      try {
+  // Best case: put a real image/* ClipboardItem into the focused Google Docs
+  // page. CDP marks the evaluation as a user gesture, which is more reliable
+  // than asking the page to fetch the original ChatGPT URL.
+  if (/^data:image\//i.test(dataUrl)) {
+    try {
+      const expression = `(async () => {
+        const dataUrl = ${JSON.stringify(dataUrl)};
         const response = await fetch(dataUrl);
         const blob = await response.blob();
         const type = blob.type || 'image/png';
-        if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-          await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-          return { ok: true, method: 'navigator.clipboard', type, size: blob.size };
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+          throw new Error('ClipboardItem API unavailable');
         }
-      } catch (error) {
-        clipboardError = String(error?.message || error);
-      }
+        await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+        return { ok: true, method: 'navigator.clipboard', type, size: blob.size };
+      })()`;
+      const result = await cdp(tabId, 'Runtime.evaluate', {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true
+      });
+      const value = result?.result?.value;
+      if (value?.ok) return value;
+      if (value?.error) errors.push(value.error);
+    } catch (error) {
+      errors.push(error?.message || String(error));
+    }
+  }
 
-      try {
-        const host = document.createElement('div');
-        host.contentEditable = 'true';
-        host.style.position = 'fixed';
-        host.style.left = '-10000px';
-        host.style.top = '0';
-        host.style.opacity = '0';
-
-        const img = document.createElement('img');
-        img.src = dataUrl;
-        host.appendChild(img);
-        document.body.appendChild(host);
-        if (img.decode) await img.decode();
-
-        const selection = getSelection();
-        const range = document.createRange();
-        range.selectNode(img);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        host.focus();
-
-        const ok = document.execCommand('copy');
-        selection.removeAllRanges();
-        host.remove();
-
-        if (!ok) throw new Error('document.execCommand(copy) returned false');
-        return { ok: true, method: 'execCommand-image', type: 'image/png', size: dataUrl.length };
-      } catch (error) {
+  // Extension-owned selection copy works without a focused offscreen document.
+  // Try prepared data first, then the live remote URL. The remote variant is
+  // important for archives whose fetch-to-dataURL hydration failed but whose
+  // image is still renderable by Chrome.
+  for (const source of [dataUrl, src]) {
+    if (!/^data:image\//i.test(source) && !/^https?:\/\//i.test(source)) continue;
+    try {
+      await ensureOffscreen();
+      const offscreen = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE',
+        target: 'offscreen',
+        dataUrl: /^data:image\//i.test(source) ? source : '',
+        src: /^https?:\/\//i.test(source) ? source : '',
+        alt: String(image?.alt || '')
+      });
+      if (offscreen?.ok) {
         return {
-          ok: false,
-          error: (clipboardError ? clipboardError + ' | ' : '') + String(error?.message || error)
+          ok: true,
+          method: offscreen.method || 'offscreen-image-selection',
+          size: offscreen.size || source.length
         };
       }
-    })()`;
-
-    const result = await cdp(tabId, 'Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true
-    });
-    const value = result?.result?.value || { ok: false, error: 'Не удалось подготовить image clipboard.' };
-    if (!value.ok) {
-      value.error = [
-        offscreenError,
-        richHtmlError,
-        value.error || ''
-      ].filter(Boolean).join(' | ');
+      if (offscreen?.error) errors.push(offscreen.error);
+    } catch (error) {
+      errors.push(error?.message || String(error));
     }
-    return value;
   }
+
+  // Compatibility fallback: rich HTML can still work for a public/signed URL.
+  // It is never counted as successful merely because the paste command ran;
+  // the Google Docs image-count verification below decides that.
+  const source = dataUrl || src;
+  if (source) {
+    try {
+      const alt = String(image?.alt || '');
+      const html = '<img src="' + escapeHtml(source) + '" alt="' + escapeHtml(alt) + '">';
+      await writeClipboard(html, alt);
+      return {
+        ok: true,
+        method: 'rich-html-image-fallback',
+        size: source.length,
+        fallbackErrors: errors
+      };
+    } catch (error) {
+      errors.push(error?.message || String(error));
+    }
+  }
+
+  return {
+    ok: false,
+    error: errors.filter(Boolean).join(' | ') || 'Не удалось подготовить изображение для вставки.'
+  };
 }
 
 async function pasteArchiveIntoGoogleDoc(
@@ -4415,7 +4421,7 @@ async function pasteArchiveIntoGoogleDoc(
 ) {
   let attached = false;
   let imageInsertedCount = 0;
-  let imageInlinePasteCount = 0;
+  let imagePasteAttemptCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
   const imageBearingCount = (messages || []).reduce(
@@ -4424,18 +4430,15 @@ async function pasteArchiveIntoGoogleDoc(
     ).length,
     0
   );
+  let imageCountBefore = { available: false, count: 0 };
+  let imageCountAfter = { available: false, count: 0 };
 
-  const pasteChunk = async (
-    buffer,
-    withHeader,
-    { stripImages = true, preferOriginalImageSrc = false } = {}
-  ) => {
+  const pasteTextChunk = async (buffer, withHeader) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
-      stripImages,
-      preferOriginalImageSrc
+      stripImages: true
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -4448,14 +4451,12 @@ async function pasteArchiveIntoGoogleDoc(
     await dispatchKey(tabId, 'End', 'End', 35, 2);
     await sleep(100);
     await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
-    await sleep(stripImages ? 450 : 950);
+    await sleep(450);
   };
 
-  const pasteBinaryImages = async message => {
-    const ready = messageImagesReady(message);
-    const failed = (message.images || []).filter(image => !image?.dataUrl);
-
-    for (const image of ready) {
+  const pasteImages = async message => {
+    const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+    for (const image of images) {
       const copied = await copyImageClipboardInGoogleDocs(tabId, image);
       if (!copied?.ok) {
         imageFailedCount++;
@@ -4467,15 +4468,10 @@ async function pasteArchiveIntoGoogleDoc(
       await dispatchKey(tabId, 'End', 'End', 35, 2);
       await sleep(100);
       await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
-      await sleep(850);
+      await sleep(900);
       await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
-      await sleep(120);
-      imageInsertedCount++;
-    }
-
-    for (const image of failed) {
-      imageFailedCount++;
-      failedImages.push({ src: image.src || '', error: image.binaryError || 'binary unavailable' });
+      await sleep(140);
+      imagePasteAttemptCount++;
     }
   };
 
@@ -4489,57 +4485,74 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    const binaryReadyCount = (messages || []).reduce(
-      (total, message) => total + messageImagesReady(message).length,
-      0
-    );
+    imageCountBefore = await googleDocImageCountAttached(tabId);
 
-    if (imageBearingCount > 0 && binaryReadyCount > 0) {
-      // Prefer deterministic binary clipboard insertion whenever hydration
-      // succeeded. A remote-URL rich HTML paste can return success while
-      // Google Docs silently drops every image.
-      let buffer = [];
-      let headerPending = includeHeader;
-
-      for (const message of messages || []) {
-        const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-        if (!images.length) {
-          buffer.push(message);
-          continue;
-        }
-
-        if (buffer.length) {
-          await pasteChunk(buffer, headerPending, { stripImages: true });
-          buffer = [];
-          headerPending = false;
-        }
-
-        await pasteChunk([message], headerPending, { stripImages: true });
-        headerPending = false;
-        await pasteBinaryImages(message);
+    let buffer = [];
+    let headerPending = includeHeader;
+    for (const message of messages || []) {
+      const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+      if (!images.length) {
+        buffer.push(message);
+        continue;
       }
 
-      await pasteChunk(buffer, headerPending, { stripImages: true });
-    } else if (imageBearingCount > 0) {
-      // Last-resort compatibility path for archives whose binaries are still
-      // unavailable. Report this separately as an attempted rich-HTML transfer.
-      await pasteChunk(messages || [], includeHeader, {
-        stripImages: false,
-        preferOriginalImageSrc: true
-      });
-      imageInlinePasteCount = imageBearingCount;
-    } else {
-      await pasteChunk(messages || [], includeHeader, { stripImages: true });
+      if (buffer.length) {
+        await pasteTextChunk(buffer, headerPending);
+        buffer = [];
+        headerPending = false;
+      }
+
+      await pasteTextChunk([message], headerPending);
+      headerPending = false;
+      await pasteImages(message);
+    }
+    await pasteTextChunk(buffer, headerPending);
+
+    await sleep(700);
+    imageCountAfter = await googleDocImageCountAttached(tabId);
+
+    if (imageBearingCount > 0 &&
+        imageCountBefore.available &&
+        imageCountAfter.available) {
+      const verifiedDelta = Math.max(0, imageCountAfter.count - imageCountBefore.count);
+      imageInsertedCount = Math.min(imagePasteAttemptCount, verifiedDelta);
+      const verificationShortfall = Math.max(0, imagePasteAttemptCount - imageInsertedCount);
+      if (verificationShortfall) {
+        imageFailedCount += verificationShortfall;
+        failedImages.push({
+          src: '',
+          error:
+            'Google Docs подтвердил ' + imageInsertedCount + ' из ' +
+            imagePasteAttemptCount + ' попыток вставки изображений.'
+        });
+      }
     }
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
 
+  const imageVerificationAvailable = Boolean(
+    imageCountBefore.available && imageCountAfter.available
+  );
+  const imageComplete = imageBearingCount === 0 || Boolean(
+    imageVerificationAvailable && imageInsertedCount >= imageBearingCount
+  );
+
   return {
     tab: await chrome.tabs.get(tabId),
+    imageExpectedCount: imageBearingCount,
+    imagePasteAttemptCount,
     imageInsertedCount,
-    imageInlinePasteCount,
+    imageInlinePasteCount: 0,
     imageFailedCount,
+    imageVerificationAvailable,
+    imageComplete,
+    documentImageCount: imageCountAfter.available ? imageCountAfter.count : null,
+    imageVerificationMethod: imageCountAfter.method || imageCountBefore.method || '',
+    imageVerificationError:
+      imageVerificationAvailable
+        ? ''
+        : (imageCountAfter.error || imageCountBefore.error || ''),
     failedImages
   };
 }
