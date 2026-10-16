@@ -1626,9 +1626,7 @@ async function startCapture({
       restoreLastArchiveId: String(restoreLastArchiveId || ''),
       pendingDocUrl,
       pendingDocMode,
-      message: mode === 'manual-full'
-        ? 'Рабочая вкладка готова; ищу отмеченное начало полного диапазона…'
-        : mode === 'fragment'
+      message: mode === 'fragment'
           ? 'Рабочая вкладка готова; ищу выбранную границу начала фрагмента…'
           : mode === 'full'
         ? (captureTarget === 'current'
