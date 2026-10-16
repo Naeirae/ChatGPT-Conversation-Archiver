@@ -134,7 +134,7 @@ function unfinishedBoundaryKey(item) {
 
 function unfinishedRangeKey(item) {
   const mode = String(item?.captureMode || '');
-  if (!['fragment', 'manual-full'].includes(mode)) return 'full-range';
+  if (!['fragment'].includes(mode)) return 'full-range';
   const range = item?.captureRange || item?.manualFullRange || item?.fragmentMarkers || {};
   const start = range?.start || {};
   const startKey = String(start.id || start.signature || '');
@@ -1138,11 +1138,24 @@ async function clearBoundaryMarkersCurrent() {
     throw new Error('Во время активного сбора границы менять нельзя.');
   }
 
-  await ensureBoundaryMarkingScript(tab.id, { enable: false });
-  const result = await chrome.tabs.sendMessage(tab.id, {
+  const source = new URL(tab.url);
+  const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
+  await chrome.storage.local.remove(markersKey);
+
+  await ensureBoundaryMarkingScript(tab.id, { enable: false }).catch(() => {});
+  await chrome.tabs.sendMessage(tab.id, {
     type: 'ARCHIVER_CLEAR_FRAGMENT_MARKERS'
-  });
-  if (!result?.ok) throw new Error(result?.error || 'Не удалось очистить ручные границы.');
+  }).catch(() => null);
+
+  const tabs = await chrome.tabs.query({});
+  for (const candidate of tabs) {
+    if (!candidate?.id || candidate.id === tab.id) continue;
+    if (conversationKey(candidate.url || '') !== conversationKey(tab.url || '')) continue;
+    await chrome.tabs.sendMessage(candidate.id, {
+      type: 'ARCHIVER_CLEAR_FRAGMENT_MARKERS'
+    }).catch(() => {});
+  }
+
   return { ok: true, cleared: true, tabId: tab.id };
 }
 
@@ -1470,7 +1483,7 @@ async function startCapture({
   }
 
   const inspection = await inspectAndKickScroll(sourceTab.id);
-  if (mode === 'fragment' || mode === 'manual-full') {
+  if (mode === 'fragment') {
     const source = new URL(inspection.href);
     const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
     const markers = captureRange ||
@@ -1479,9 +1492,6 @@ async function startCapture({
     captureRange = markers;
     if (mode === 'fragment' && !markers.start && !markers.end) {
       throw new Error('Сначала отметьте начало и/или конец фрагмента в переписке.');
-    }
-    if (mode === 'manual-full' && (!markers.start || !markers.end)) {
-      throw new Error('Для ручного полного диапазона отметьте и начало, и конец.');
     }
   }
   let existingArchive = providedArchive;
@@ -1577,7 +1587,7 @@ async function startCapture({
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
-    const modeLabel = mode === 'manual-full' ? 'ручной полный диапазон' : mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'reconcile'
+    const modeLabel = mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'reconcile'
       ? 'сверка и добор локального архива'
       : mode === 'compare'
         ? 'сверка с локальным архивом'
@@ -1693,9 +1703,7 @@ async function startCapture({
         status: 'running',
         message: mode === 'full'
           ? 'Фоновый сбор идет в рабочей вкладке…'
-          : mode === 'manual-full'
-            ? 'Фоново собираю отмеченный полный диапазон…'
-            : mode === 'reconcile'
+          : mode === 'reconcile'
               ? 'Фоново сверяю локальный архив и добираю пропуски…'
               : mode === 'images-draft'
                 ? 'Фоново сверяю изображения сохранённой части…'
@@ -1717,9 +1725,7 @@ async function startCapture({
         status: 'running',
         message: mode === 'full'
           ? 'Физически прокручиваю текущую вкладку…'
-          : mode === 'manual-full'
-            ? 'Физически собираю отмеченный полный диапазон…'
-            : mode === 'fragment'
+          : mode === 'fragment'
               ? 'Физически собираю отмеченный фрагмент…'
               : mode === 'reconcile'
                 ? 'Физически сверяю локальный архив и добираю пропуски…'
@@ -1814,7 +1820,7 @@ async function cancelCapture() {
     ['top', 'boundary'].includes(job.phase || '') &&
     job.captureBoundary?.kind &&
     job.captureBoundary?.key &&
-    ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(job.captureMode)
+    ['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)
   );
   const canRecover = Boolean(
     job.captureTabId != null &&
@@ -1874,7 +1880,7 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     throw new Error('Не сохранена нижняя метка снимка; безопасно продолжить этот проход нельзя.');
   }
 
-  if (!['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(failedJob.captureMode)) {
+  if (!['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)) {
     throw new Error('Этот этап нельзя безопасно продолжить без сохранённого черновика.');
   }
 
@@ -2044,7 +2050,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     ['top', 'boundary'].includes(job.phase || '') &&
     boundary?.kind &&
     boundary?.key &&
-    ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(job.captureMode)
+    ['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)
   );
 
   let preservedCaptureTabId = null;
@@ -2226,7 +2232,7 @@ async function resumeFailedCaptureFromWorkingTab() {
 
   const jobId = makeJobId();
   const resumeNavigation = draft.capturePhase === 'top' &&
-    ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(draft.captureMode);
+    ['full', 'fragment', 'reconcile', 'images'].includes(draft.captureMode);
   const resumeMode = resumeNavigation
     ? draft.captureMode
     : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
@@ -2569,7 +2575,7 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
 
 
   return startCapture({
-    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'manual-full', 'reconcile', 'images'].includes(draft.captureMode)
+    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'reconcile', 'images'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
     resumeNavigation: draft.capturePhase === 'top',
     resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
@@ -5005,8 +5011,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await openBoundaryMarkingTab();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
         return await startCapture({ mode: 'fragment', captureTarget: message.captureTarget || 'copy' });
-      case 'ARCHIVER_CAPTURE_MANUAL_FULL':
-        return await startCapture({ mode: 'manual-full', captureTarget: message.captureTarget || 'copy' });
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
