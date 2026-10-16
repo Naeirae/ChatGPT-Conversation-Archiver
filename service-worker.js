@@ -551,10 +551,33 @@ async function refreshCaptureJobHealth() {
   return failed?.job || await getJob();
 }
 
-function exactDocExportForArchive(docExports = {}, archiveId = '') {
-  if (!archiveId) return null;
+function docExportCoversArchive(entry, archive) {
+  const messages = archive?.messages || [];
+  const last = messages[messages.length - 1] || null;
+  if (!entry || !last) return false;
+
+  if (entry.lastMessageId && last.id && entry.lastMessageId === last.id) return true;
+
+  const lastSignature = messageSignature(last.role, last.text);
+  if (entry.lastMessageSignature && lastSignature &&
+      entry.lastMessageSignature === lastSignature) return true;
+
+  const exportedTail = Array.isArray(entry.tailSignatures)
+    ? entry.tailSignatures.filter(Boolean)
+    : [];
+  const archiveTail = exportTailSignatures(messages).filter(Boolean);
+  if (!exportedTail.length || !archiveTail.length) return false;
+  if (exportedTail.length !== archiveTail.length) return false;
+  return exportedTail.every((signature, index) => signature === archiveTail[index]);
+}
+
+function exactDocExportForArchive(docExports = {}, archive = null) {
+  if (!archive?.id) return null;
   const matches = Object.entries(docExports)
-    .filter(([, entry]) => entry?.archiveId === archiveId)
+    .filter(([, entry]) =>
+      entry?.archiveId === archive.id &&
+      docExportCoversArchive(entry, archive)
+    )
     .sort((left, right) =>
       Number(right[1]?.updatedAt || 0) - Number(left[1]?.updatedAt || 0)
     );
@@ -565,6 +588,16 @@ function exactDocExportForArchive(docExports = {}, archiveId = '') {
     docUrl: entry?.docUrl || ('https://docs.google.com/document/d/' + docId + '/edit'),
     updatedAt: entry?.updatedAt || 0
   };
+}
+
+async function validatedArchiveDestination(archive, destination = null) {
+  if (!archive?.id || !destination?.saved) return null;
+  if (destination.kind !== 'google-doc') return destination;
+
+  const docId = googleDocKey(destination.url || '');
+  if (!docId) return null;
+  const exportRecord = await getDocExport(docId);
+  return docExportCoversArchive(exportRecord, archive) ? destination : null;
 }
 
 async function listLinkedArchives() {
@@ -628,7 +661,13 @@ async function listLinkedArchives() {
     }
 
     let destination = destinations[archive.id] || null;
-    const exactExport = exactDocExportForArchive(docExports, archive.id);
+    if (destination?.kind === 'google-doc') {
+      const destinationDocId = googleDocKey(destination.url || '');
+      const destinationExport = destinationDocId ? docExports[destinationDocId] : null;
+      if (!docExportCoversArchive(destinationExport, archive)) destination = null;
+    }
+
+    const exactExport = exactDocExportForArchive(docExports, archive);
     if (!destination && exactExport?.docUrl) {
       destination = {
         saved: true,
@@ -5394,9 +5433,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           activeUnfinished = pseudo;
         }
 
-        const archiveDestination = archive?.id
+        const rawArchiveDestination = archive?.id
           ? await getArchiveDestination(archive.id)
           : null;
+        const archiveDestination = await validatedArchiveDestination(
+          archive,
+          rawArchiveDestination
+        );
 
         return {
           ok: true,
