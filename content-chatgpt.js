@@ -1221,6 +1221,61 @@
     return blob;
   }
 
+  function renderedImageNode(src = '') {
+    const expected = String(src || '');
+    const nodes = [...document.querySelectorAll('img')];
+    return nodes.find(img => {
+      const candidate = imageSource(img);
+      if (!candidate || candidate !== expected) return false;
+      const rect = img.getBoundingClientRect();
+      return rect.width >= 2 && rect.height >= 2;
+    }) || null;
+  }
+
+  async function captureRenderedImageBlob(src = '') {
+    const img = renderedImageNode(src);
+    if (!img) throw new Error('Картинка сейчас не видна в DOM.');
+
+    try {
+      img.scrollIntoView({ block: 'center', inline: 'center' });
+      if (img.decode) await Promise.race([img.decode(), sleep(1800)]).catch(() => {});
+      await sleep(120);
+    } catch (_) {}
+
+    const rect = img.getBoundingClientRect();
+    const visibleLeft = Math.max(0, rect.left);
+    const visibleTop = Math.max(0, rect.top);
+    const visibleRight = Math.min(innerWidth, rect.right);
+    const visibleBottom = Math.min(innerHeight, rect.bottom);
+    const visibleWidth = visibleRight - visibleLeft;
+    const visibleHeight = visibleBottom - visibleTop;
+
+    if (visibleWidth < 2 || visibleHeight < 2) {
+      throw new Error('Картинка не попала в видимую область вкладки.');
+    }
+
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE',
+      src,
+      rect: {
+        left: visibleLeft,
+        top: visibleTop,
+        width: visibleWidth,
+        height: visibleHeight
+      },
+      viewport: {
+        width: innerWidth,
+        height: innerHeight
+      }
+    });
+    if (!result?.ok || !result.dataUrl) {
+      throw new Error(result?.error || 'Не удалось снять видимую картинку.');
+    }
+
+    const response = await fetch(result.dataUrl);
+    return normalizeImageBlob(await response.blob());
+  }
+
   async function fetchImageBinary(image) {
     if (!image?.src) throw new Error('У изображения нет src.');
 
@@ -1241,25 +1296,32 @@
       pageError = error?.message || String(error);
     }
 
-    // Current ChatGPT media is often rendered from a different OpenAI media
-    // origin. A content-script fetch can be blocked by CORS even though the
-    // <img> is already visible. Retry from the extension service worker, whose
-    // host permissions are not subject to the page's CORS policy.
+    let workerError = '';
     try {
       const result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_FETCH_IMAGE_BINARY',
         src: image.src
       });
       if (!result?.ok || !result.dataUrl) {
-        throw new Error(result?.error || 'worker image fetch failed');
+        throw new Error(result?.error || 'extension fetch failed');
       }
       const response = await fetch(result.dataUrl);
       return normalizeImageBlob(await response.blob());
     } catch (error) {
-      const workerError = error?.message || String(error);
+      workerError = error?.message || String(error);
+    }
+
+    // Final fallback: the browser has already rendered the picture in ChatGPT.
+    // Capture those pixels while the message is physically on screen. This
+    // avoids CORS, expiring media URLs and Google Docs fetching the remote URL.
+    try {
+      return await captureRenderedImageBlob(image.src);
+    } catch (error) {
+      const renderedError = error?.message || String(error);
       throw new Error(
-        'page fetch: ' + (pageError || 'failed') +
-        ' | extension fetch: ' + workerError
+        'страница: ' + (pageError || 'не загрузила') +
+        ' | расширение: ' + (workerError || 'не загрузило') +
+        ' | видимая картинка: ' + renderedError
       );
     }
   }
@@ -3230,7 +3292,18 @@
     return { boundaryReached: true, physicalEndReached: false };
   }
 
-  async function walkDown(map, order, settings, boundary, { bursts = 3, requireBoundary = false } = {}) {
+  async function walkDown(
+    map,
+    order,
+    settings,
+    boundary,
+    {
+      bursts = 3,
+      requireBoundary = false,
+      hydrateImages = false,
+      attemptedImageSources = new Set()
+    } = {}
+  ) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -3251,7 +3324,13 @@
 
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
-      collect(map, order, settings, boundary);
+      const firstTouchedIds = collect(map, order, settings, boundary);
+      if (hydrateImages) {
+        await hydrateSequentialImages(
+          firstTouchedIds.map(id => map.get(id)).filter(Boolean),
+          attemptedImageSources
+        );
+      }
       const beforeRefs = visibleNavigationRefsLightweight();
 
       if (boundaryIsVisible(boundary)) {
@@ -3301,7 +3380,13 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const secondTouchedIds = collect(map, order, settings, boundary);
+      if (hydrateImages) {
+        await hydrateSequentialImages(
+          secondTouchedIds.map(id => map.get(id)).filter(Boolean),
+          attemptedImageSources
+        );
+      }
 
       if (boundaryIsVisible(boundary)) {
         const boundaryImageStats = capturedImageStats([...map.values()]);
@@ -3668,7 +3753,9 @@
           })
         : await walkDown(map, order, settings, boundary, {
             bursts: 3,
-            requireBoundary: false
+            requireBoundary: false,
+            hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            attemptedImageSources: sequentialImageSources
           });
 
       await progress(
