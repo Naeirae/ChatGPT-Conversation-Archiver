@@ -260,9 +260,6 @@ button.compact-button { padding:8px 10px; font-size:11px; }
   gap:7px;
   margin-top:8px;
 }
-.archive-primary-actions #reconcileArchive {
-  grid-column:1 / -1;
-}
 .archive-primary-actions button {
   width:100%;
   margin:0;
@@ -1358,9 +1355,6 @@ body.tour-open .header-popover {
   gap:6px;
   margin-top:8px;
 }
-.archive-primary-actions #reconcileArchive {
-  grid-column:1 / -1;
-}
 .archive-primary-actions button {
   width:100%;
   margin:0;
@@ -1494,4 +1488,32 @@ body.tour-open .header-popover {
 }
 .archive-format-settings .field {
   margin-top:8px;
+}
+
+.current-doc-editor {
+  display:grid;
+  gap:6px;
+  margin-top:7px;
+  padding-top:7px;
+  border-top:1px solid color-mix(in srgb,var(--border) 72%,transparent);
+}
+.current-doc-editor input {
+  width:100%;
+  min-width:0;
+}
+.current-doc-editor-actions {
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+}
+.current-doc-editor-actions button {
+  width:auto;
+  margin:0;
+  padding:6px 8px;
+  font-size:10px;
+}
+.archive-link-subtle {
+  color:var(--muted);
+  border-color:transparent;
+  background:transparent;
 }
