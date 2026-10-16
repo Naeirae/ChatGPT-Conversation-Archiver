@@ -4657,19 +4657,20 @@
         sendResponse({ ok: false, error: 'Активный сбор для продолжения не найден.' });
         return false;
       }
-      (async () => {
-        try {
-          await recoverPauseCheckpoint(state.pauseCheckpoint);
-          state.pauseCheckpoint = null;
-          state.paused = false;
-          sendResponse({ ok: true, paused: false, recovered: true });
-        } catch (error) {
-          state.resumeFailure = error?.message || String(error);
-          state.paused = false;
-          sendResponse({ ok: false, paused: false, error: state.resumeFailure });
-        }
-      })();
-      return true;
+
+      // Pause means "stop automatic activity here", not "start a recovery
+      // traversal on resume". The old resume path tried to scroll while the
+      // worker still marked the job paused, so the worker rejected those
+      // physical scroll requests and the pause could appear to hang.
+      //
+      // Resume immediately from the physical viewport that is currently open.
+      // If the user moved the page manually during the pause, the ordinary
+      // overlap/frontier checks of the active pass decide how to reconnect.
+      state.paused = false;
+      state.pauseCheckpoint = null;
+      state.resumeFailure = '';
+      sendResponse({ ok: true, paused: false, recovered: false });
+      return false;
     }
     if (message && message.type === 'ARCHIVER_CANCEL_CAPTURE') {
       if (state.running && (!message.jobId || message.jobId === state.jobId)) {
