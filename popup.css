@@ -1237,16 +1237,11 @@ body.tour-open .header-popover {
 .unfinished-more {
   margin-top:6px;
 }
-.unfinished-more > summary {
+.unfinished-more > .archive-link-more-toggle {
   width:max-content;
-  cursor:pointer;
-  list-style:none;
-  color:var(--muted);
   font-size:10.5px;
   font-weight:650;
 }
-.unfinished-more > summary::-webkit-details-marker { display:none; }
-.unfinished-more > summary::after { content:' · дополнительные действия'; font-weight:400; }
 .unfinished-secondary-actions {
   display:flex;
   flex-wrap:wrap;
