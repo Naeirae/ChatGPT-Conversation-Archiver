@@ -4364,6 +4364,12 @@ async function pasteArchiveIntoGoogleDoc(
   let imageInlinePasteCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
+  const imageBearingCount = (messages || []).reduce(
+    (total, message) => total + (message?.images || []).filter(
+      image => image?.src || image?.dataUrl
+    ).length,
+    0
+  );
 
   const pasteChunk = async (
     buffer,
@@ -4429,48 +4435,50 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    let buffer = [];
-    let headerPending = includeHeader;
-
-    for (const message of messages || []) {
-      const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-      if (!images.length) {
-        buffer.push(message);
-        continue;
-      }
-
-      // Restore the pre-34f7bcb path that was observed to work in Google Docs:
-      // text and image markup for an image-bearing message travel through one
-      // rich HTML clipboard paste, using the original ChatGPT image URL first.
-      if (buffer.length) {
-        await pasteChunk(buffer, headerPending, { stripImages: true });
-        buffer = [];
-        headerPending = false;
-      }
-
+    // Reproduce the pre-binary export path exactly: one rich HTML clipboard
+    // payload for the whole exported message range. This is the last version
+    // the user observed inserting ChatGPT images into Google Docs reliably.
+    // The newer per-image binary/debugger path remains a fallback only.
+    if (imageBearingCount > 0) {
       try {
-        await pasteChunk([message], headerPending, {
+        await pasteChunk(messages || [], includeHeader, {
           stripImages: false,
           preferOriginalImageSrc: true
         });
-        headerPending = false;
-        imageInlinePasteCount += images.length;
-      } catch (error) {
-        // If the old rich-HTML route itself errors, keep the newer binary
-        // clipboard path as a fallback instead of losing the whole export.
-        await pasteChunk([message], headerPending, { stripImages: true });
-        headerPending = false;
-        await pasteBinaryImages(message);
+        imageInlinePasteCount = imageBearingCount;
+      } catch (legacyError) {
+        let buffer = [];
+        let headerPending = includeHeader;
+
+        for (const message of messages || []) {
+          const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+          if (!images.length) {
+            buffer.push(message);
+            continue;
+          }
+
+          if (buffer.length) {
+            await pasteChunk(buffer, headerPending, { stripImages: true });
+            buffer = [];
+            headerPending = false;
+          }
+
+          await pasteChunk([message], headerPending, { stripImages: true });
+          headerPending = false;
+          await pasteBinaryImages(message);
+        }
+
+        await pasteChunk(buffer, headerPending, { stripImages: true });
         if (!imageInsertedCount && !imageFailedCount) {
           failedImages.push({
-            src: images[0]?.src || '',
-            error: error?.message || String(error)
+            src: '',
+            error: legacyError?.message || String(legacyError)
           });
         }
       }
+    } else {
+      await pasteChunk(messages || [], includeHeader, { stripImages: true });
     }
-
-    await pasteChunk(buffer, headerPending, { stripImages: true });
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
@@ -4787,6 +4795,7 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     addedCount: 0,
     noChanges: true,
     imageInsertedCount: 0,
+    imageInlinePasteCount: 0,
     imageFailedCount: 0,
     failedImages: []
   };
@@ -4833,6 +4842,7 @@ async function exportConversationToLinkedDoc(archiveId = '') {
   const imageInsertedCount =
     Number(messageResult.imageInsertedCount || 0) +
     Number(patchResult.inserted || 0);
+  const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);
   const imageFailedCount =
     Number(messageResult.imageFailedCount || 0) +
     Number(patchResult.failed || 0);
