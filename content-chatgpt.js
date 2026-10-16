@@ -1229,12 +1229,39 @@
       return normalizeImageBlob(await response.blob());
     }
 
-    const response = await fetch(image.src, {
-      credentials: 'include',
-      cache: 'force-cache'
-    });
-    if (!response.ok) throw new Error('HTTP ' + response.status);
-    return normalizeImageBlob(await response.blob());
+    let pageError = '';
+    try {
+      const response = await fetch(image.src, {
+        credentials: 'include',
+        cache: 'force-cache'
+      });
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return normalizeImageBlob(await response.blob());
+    } catch (error) {
+      pageError = error?.message || String(error);
+    }
+
+    // Current ChatGPT media is often rendered from a different OpenAI media
+    // origin. A content-script fetch can be blocked by CORS even though the
+    // <img> is already visible. Retry from the extension service worker, whose
+    // host permissions are not subject to the page's CORS policy.
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_FETCH_IMAGE_BINARY',
+        src: image.src
+      });
+      if (!result?.ok || !result.dataUrl) {
+        throw new Error(result?.error || 'worker image fetch failed');
+      }
+      const response = await fetch(result.dataUrl);
+      return normalizeImageBlob(await response.blob());
+    } catch (error) {
+      const workerError = error?.message || String(error);
+      throw new Error(
+        'page fetch: ' + (pageError || 'failed') +
+        ' | extension fetch: ' + workerError
+      );
+    }
   }
 
   async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
