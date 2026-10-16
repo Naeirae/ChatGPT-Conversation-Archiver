@@ -340,7 +340,7 @@ try {
   const disclosureCount = (popupHtml.match(/<details\b/g) || []).length;
   if (popupHtml.includes('id="recoverImages"') ||
       popupJs.includes("imagesButton.textContent = 'Сверить изображения'") ||
-      !popupHtml.includes('id="reconcileArchive" class="primary">Сверить</button>') ||
+      !popupHtml.includes('id="reconcileArchive">Сверить</button>') ||
       !popupHtml.includes('id="savedArchivesPanel" class="workspace-section archives-panel"') ||
       !popupHtml.includes('id="archive" class="current-archive hidden"') ||
       disclosureCount > 3 ||
@@ -421,8 +421,9 @@ try {
     fail('saved archive library: completed captures must be registered independently of linked Google Docs and stale Doc exports must not label a newer snapshot as saved');
   }
   if (!popupJs.includes('state.archiveDestination || null') ||
-      !popupJs.includes("destinationText.textContent = 'Сохранён локально · документ не создан'") ||
-      !popupJs.includes("exportButton.textContent = 'Новый документ Google Docs'") ||
+      !popupJs.includes("destinationText.textContent = 'Только локально'") ||
+      !popupJs.includes("openArchive.textContent = 'Открыть'") ||
+      !popupHtml.includes('id="newDoc">Новый Google Doc</button>') ||
       popupJs.includes("$('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs'")) {
     fail('saved archive UI: local completion and conversation-level linked Docs must stay separate');
   }
