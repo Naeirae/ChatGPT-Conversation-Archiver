@@ -827,6 +827,72 @@ async function fetchImageBinaryForContent(src = '') {
   };
 }
 
+async function captureRenderedImageForContent(tabId, rect = {}, viewport = {}) {
+  const left = Number(rect.left);
+  const top = Number(rect.top);
+  const width = Number(rect.width);
+  const height = Number(rect.height);
+  const viewportWidth = Number(viewport.width);
+  const viewportHeight = Number(viewport.height);
+
+  if (![left, top, width, height, viewportWidth, viewportHeight].every(Number.isFinite) ||
+      width < 2 || height < 2 || viewportWidth < 2 || viewportHeight < 2) {
+    throw new Error('Не удалось определить видимую область картинки.');
+  }
+
+  let attached = false;
+  try {
+    await chrome.debugger.attach({ tabId }, '1.3');
+    attached = true;
+    const screenshot = await cdp(tabId, 'Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false
+    });
+    if (!screenshot?.data) throw new Error('Chrome не вернул снимок вкладки.');
+
+    const screenshotBlob = await (await fetch('data:image/png;base64,' + screenshot.data)).blob();
+    const bitmap = await createImageBitmap(screenshotBlob);
+    try {
+      const scaleX = bitmap.width / viewportWidth;
+      const scaleY = bitmap.height / viewportHeight;
+      const x = Math.max(0, Math.floor(left * scaleX));
+      const y = Math.max(0, Math.floor(top * scaleY));
+      const right = Math.min(bitmap.width, Math.ceil((left + width) * scaleX));
+      const bottom = Math.min(bitmap.height, Math.ceil((top + height) * scaleY));
+      const cropWidth = Math.max(1, right - x);
+      const cropHeight = Math.max(1, bottom - y);
+
+      if (cropWidth < 2 || cropHeight < 2) {
+        throw new Error('Картинка оказалась вне видимой области вкладки.');
+      }
+
+      const canvas = new OffscreenCanvas(cropWidth, cropHeight);
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Chrome не дал создать буфер изображения.');
+      context.drawImage(
+        bitmap,
+        x, y, cropWidth, cropHeight,
+        0, 0, cropWidth, cropHeight
+      );
+      const blob = await canvas.convertToBlob({ type: 'image/png' });
+      if (!blob?.size) throw new Error('Не удалось сохранить видимую картинку.');
+
+      return {
+        ok: true,
+        dataUrl: 'data:image/png;base64,' + arrayBufferToBase64(await blob.arrayBuffer()),
+        mimeType: 'image/png',
+        byteSize: blob.size,
+        renderedFallback: true
+      };
+    } finally {
+      bitmap.close?.();
+    }
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
 async function checkForUpdate() {
   const localVersion = chrome.runtime.getManifest().version || '0.0.0';
   try {
@@ -5359,6 +5425,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message?.type) {
       case 'ARCHIVER_FETCH_IMAGE_BINARY':
         return await fetchImageBinaryForContent(message.src || '');
+      case 'ARCHIVER_CAPTURE_RENDERED_IMAGE': {
+        const tabId = sender?.tab?.id;
+        if (tabId == null) throw new Error('Не удалось определить вкладку с картинкой.');
+        const job = await getJob();
+        if (job?.captureTabId != null && job.captureTabId !== tabId) {
+          throw new Error('Картинка пришла не из вкладки текущего сбора.');
+        }
+        return await captureRenderedImageForContent(
+          tabId,
+          message.rect || {},
+          message.viewport || {}
+        );
+      }
       case 'ARCHIVER_CHECK_UPDATE':
         return await checkForUpdate();
       case 'ARCHIVER_TOGGLE_MARKING_CURRENT':
