@@ -1233,128 +1233,63 @@
     return normalizeImageBlob(await response.blob());
   }
 
-  const imageBinaryCache = new Map();
-  const imageBinaryPending = new Map();
-
-  function applyCachedImageBinaries(messages) {
+  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
+    const unique = new Map();
     for (const message of messages || []) {
-      for (const image of message?.images || []) {
-        const cached = image?.src ? imageBinaryCache.get(image.src) : null;
-        if (cached) Object.assign(image, cached);
-      }
-    }
-  }
-
-  function queueImageBinary(image) {
-    const src = String(image?.src || '');
-    if (!src || imageBinaryCache.has(src)) return null;
-    if (imageBinaryPending.has(src)) return imageBinaryPending.get(src);
-
-    const pending = (async () => {
-      try {
-        const blob = await fetchImageBinary(image);
-        const dataUrl = await blobToDataUrl(blob);
-        const result = {
-          dataUrl,
-          mimeType: blob.type || 'image/png',
-          byteSize: blob.size || 0,
-          binaryStatus: 'ready',
-          binaryError: ''
-        };
-        imageBinaryCache.set(src, result);
-        return result;
-      } catch (error) {
-        const result = {
-          dataUrl: '',
-          mimeType: image?.mimeType || '',
-          byteSize: 0,
-          binaryStatus: 'failed',
-          binaryError: error?.message || String(error)
-        };
-        imageBinaryCache.set(src, result);
-        return result;
-      } finally {
-        imageBinaryPending.delete(src);
-      }
-    })();
-
-    imageBinaryPending.set(src, pending);
-    return pending;
-  }
-
-  function queueMessageImages(messages) {
-    applyCachedImageBinaries(messages);
-    let queued = 0;
-    for (const message of messages || []) {
-      for (const image of message?.images || []) {
+      for (const image of message.images || []) {
         if (!image?.src) continue;
-        if (image.binaryStatus === 'ready' && image.dataUrl) {
-          if (!imageBinaryCache.has(image.src)) {
-            imageBinaryCache.set(image.src, {
-              dataUrl: image.dataUrl,
-              mimeType: image.mimeType || 'image/png',
-              byteSize: image.byteSize || 0,
-              binaryStatus: 'ready',
-              binaryError: ''
-            });
-          }
-          continue;
-        }
-        if (!imageBinaryCache.has(image.src) && !imageBinaryPending.has(image.src)) {
-          queueImageBinary(image);
-          queued++;
-        }
+        if (onlyMissing && image.binaryStatus === 'ready' && image.dataUrl) continue;
+        if (!unique.has(image.src)) unique.set(image.src, []);
+        unique.get(image.src).push(image);
       }
     }
-    return queued;
-  }
 
-  async function flushQueuedImages(messages, { reportProgress = true } = {}) {
-    queueMessageImages(messages);
-    const srcs = [...new Set(
-      (messages || []).flatMap(message =>
-        (message?.images || []).map(image => String(image?.src || '')).filter(Boolean)
-      )
-    )];
-
+    let embedded = 0;
+    let failed = 0;
     let processed = 0;
-    for (const src of srcs) {
-      const pending = imageBinaryPending.get(src);
-      if (pending) await pending.catch(() => {});
+    const total = unique.size;
+
+    for (const [src, refs] of unique) {
+      if (state.cancel) throw new Error('Сбор отменен.');
+
+      try {
+        const blob = await fetchImageBinary(refs[0]);
+        const dataUrl = await blobToDataUrl(blob);
+        for (const image of refs) {
+          image.dataUrl = dataUrl;
+          image.mimeType = blob.type || 'image/png';
+          image.byteSize = blob.size || 0;
+          image.binaryStatus = 'ready';
+          image.binaryError = '';
+        }
+        embedded += refs.length;
+      } catch (error) {
+        const message = error?.message || String(error);
+        for (const image of refs) {
+          image.binaryStatus = 'failed';
+          image.binaryError = message;
+        }
+        failed += refs.length;
+      }
+
       processed++;
       if (reportProgress) {
-        applyCachedImageBinaries(messages);
-        const stats = capturedImageStats(messages);
         await progress(
-          'Этап 3/3: завершаю изображения · ' + processed + '/' + srcs.length,
+          'Этап 3/3: забираю изображения · ' + processed + '/' + total,
           messages.length,
           {
             phase: 'finalizing',
             imageBinaryProcessed: processed,
-            imageBinaryTotal: srcs.length,
-            imageBinaryReady: stats.ready,
-            imageBinaryFailed: stats.failed,
+            imageBinaryTotal: total,
+            imageBinaryReady: embedded,
+            imageBinaryFailed: failed,
             force: true
           }
         );
       }
     }
 
-    applyCachedImageBinaries(messages);
-    const stats = capturedImageStats(messages);
-    return { embedded: stats.ready, failed: stats.failed, unique: srcs.length };
-  }
-
-  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
-    const targets = onlyMissing
-      ? (messages || []).filter(message =>
-          (message?.images || []).some(image =>
-            image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
-          )
-        )
-      : (messages || []);
-
-    return flushQueuedImages(targets, { reportProgress });
+    return { embedded, failed, unique: total };
   }
 
   async function expandVisible() {
@@ -1374,14 +1309,12 @@
 
   function collect(map, order, settings, stopBoundary = null) {
     const turns = orderedTurns();
-    const captured = [];
 
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
       const message = captureTurn(turn, ordinal, settings);
 
       if (message) {
-        captured.push(message);
         const existing = map.get(message.id);
         if (!existing) {
           order.push(message.id);
@@ -1411,7 +1344,6 @@
       // walking back down.
       if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
     }
-    return captured;
   }
 
   function capturedImageStats(messages) {
@@ -3104,60 +3036,33 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      const visibleCaptured = collect(map, order, settings, boundary);
-      queueMessageImages(visibleCaptured);
-      applyCachedImageBinaries([...map.values()]);
+      collect(map, order, settings, boundary);
 
       if (boundaryIsVisible(boundary)) {
-        const stats = capturedImageStats([...map.values()]);
-        await progress(
-          'Этап 2/3: достигнут конец снимка · ' +
-            map.size + ' сообщений · ' + stats.total + ' изображений найдено',
-          map.size,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            boundaryReached: true,
-            chronologicalCount: map.size,
-            imageCount: stats.total,
-            imageBinaryReady: stats.ready,
-            imageBinaryFailed: stats.failed,
-            force: true
-          }
-        );
+        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
         return { boundaryReached: true, physicalEndReached: false };
       }
 
       const signature = visibleTurnSignature();
-      const stats = capturedImageStats([...map.values()]);
-      await progress(
-        'Этап 2/3: физически прохожу вниз · ' +
-          map.size + ' сообщений · ' + stats.total + ' изображений найдено',
-        map.size,
-        {
-          phase: 'walk',
-          iteration: i + 1,
-          chronologicalCount: map.size,
-          imageCount: stats.total,
-          imageBinaryReady: stats.ready,
-          imageBinaryFailed: stats.failed
-        }
-      );
-
-
-      // Exact old normal step: 7 wheel bursts and short settle.
-      await physicalScroll('down', 7, {
-        settleTimeout: 1600,
-        quietWindow: 360
+      await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
+        phase: 'walk',
+        iteration: i + 1,
+        chronologicalCount: map.size
       });
 
+      // Stable pre-recovery path: one physical scroll request, then wait for the
+      // virtualized window to settle. No checkpoint/storage/network/recovery work here.
+      await physicalScroll('down');
+
       const nextSignature = visibleTurnSignature();
-      if (
-        nextSignature &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        map.size === previousSize
-      ) {
+      if (nextSignature && nextSignature === signature &&
+          signature === previousSignature && map.size === previousSize) {
         stable++;
       } else {
         stable = 0;
@@ -3169,19 +3074,9 @@
       if (stable >= 4) break;
     }
 
-    await expandVisible();
-    if (settings.includeReasoning) await expandReasoningVisible();
-    const finalVisibleCaptured = collect(map, order, settings, boundary);
-    queueMessageImages(finalVisibleCaptured);
-    applyCachedImageBinaries([...map.values()]);
-
     if (!boundaryIsVisible(boundary)) {
-      throw new Error(
-        'Не удалось дойти до зафиксированного конца снимка. ' +
-        'Собранная часть сохранена как незавершённый проход.'
-      );
+      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
     }
-
     return { boundaryReached: true, physicalEndReached: false };
   }
 
@@ -4129,7 +4024,6 @@
       if (mode !== 'images-draft' &&
           (chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
-        applyCachedImageBinaries(draftMessages);
 
         let existingRecoveryDraft = null;
         if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
