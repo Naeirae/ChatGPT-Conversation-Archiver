@@ -1378,8 +1378,8 @@ function render(data) {
     : 'Добавить в открытый документ Google Docs';
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
-  $('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue);
-  $('recoverImages').disabled = Boolean(running || !archive || !state.canContinue);
+  $('reconcileArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
+  $('recoverImages').disabled = Boolean(running || !archive || !archive.sourceUrl);
   $('deleteArchive').disabled = Boolean(running || !archive);
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
@@ -1927,10 +1927,11 @@ $('reconcileArchive').onclick = async () => {
     return;
   }
   $('reconcileArchive').disabled = true;
-  setStatus('Сверяю весь текущий чат с локальным архивом и добираю пропущенные сообщения…');
+  setStatus('Открываю исходный чат и сверяю локальный архив, добирая пропущенные сообщения…');
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_RECONCILE_CURRENT',
+      type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
+      archiveId: state.archive.id,
       captureTarget: $('captureTarget').value
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку архива.');
@@ -1954,10 +1955,11 @@ $('recoverImages').onclick = async () => {
     return;
   }
   $('recoverImages').disabled = true;
-  setStatus('Сверяю изображения по всему чату и добираю недостающие…');
+  setStatus('Открываю исходный чат и сверяю изображения локального архива…');
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_RECOVER_IMAGES_CURRENT',
+      type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',
+      archiveId: state.archive.id,
       captureTarget: $('captureTarget').value
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить добор изображений.');
