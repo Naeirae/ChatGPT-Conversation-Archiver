@@ -339,6 +339,12 @@ try {
       !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
     fail('popup.js: fragment-range/reconcile/image recovery controls are not wired');
   }
+  if (popupJs.includes("$('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue)") ||
+      popupJs.includes("$('recoverImages').disabled = Boolean(running || !archive || !state.canContinue)") ||
+      !popupJs.includes("type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',\n      archiveId: state.archive.id") ||
+      !popupJs.includes("type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',\n      archiveId: state.archive.id")) {
+    fail('current archive repair controls must work from Google Docs/other tabs by reopening the archive source URL');
+  }
   if (!popupJs.includes("passId: item.exportPassId") ||
       !popupJs.includes("job?.captureMode === 'images-draft'") ||
       !popupJs.includes("!job?.boundarySearchActive")) {
