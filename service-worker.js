@@ -5161,6 +5161,7 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
   let includeHeader = true;
   let appendToEnd = false;
   let exportMode = 'full';
+  let previousDocExport = null;
 
   if (activeDoc) {
     tab = await getActiveTab();
@@ -5170,6 +5171,7 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     if (!docKey) throw new Error('Не удалось определить идентификатор открытого документа Google Docs.');
 
     const previous = await getDocExport(docKey);
+    previousDocExport = previous || null;
     const currentConversationKey = conversationKey(conversation.sourceUrl);
 
     if (previous?.conversationKey === currentConversationKey) {
@@ -5235,15 +5237,41 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
       });
     }
   } else {
+    const archiveImageExpectedCount = Math.max(0, Number(conversation.imageCount || 0));
+    const previousImageExpectedCount = Math.max(
+      0,
+      Number(previousDocExport?.imageExpectedCount || 0)
+    );
+    const actionImageExpectedCount = Math.max(0, Number(pasted.imageExpectedCount || 0));
+    const safeAbsoluteComplete = Boolean(
+      pasted.documentImageCountAbsoluteSafe &&
+      pasted.documentImageCount != null &&
+      Number(pasted.documentImageCount) >= archiveImageExpectedCount
+    );
+    const continuityComplete = Boolean(
+      exportMode === 'delta' &&
+      previousDocExport?.imageComplete === true &&
+      archiveImageExpectedCount === previousImageExpectedCount + actionImageExpectedCount &&
+      pasted.imageComplete === true
+    );
+    const archiveImageComplete =
+      archiveImageExpectedCount === 0 ||
+      safeAbsoluteComplete ||
+      (exportMode === 'full' && pasted.imageComplete === true) ||
+      continuityComplete;
+
     linkedDoc = await recordDocExport(conversation, finalTab.url, {
-      imageVerificationAvailable: pasted.imageVerificationAvailable,
-      imageExpectedCount: Number(conversation.imageCount || 0),
-      imageVerifiedCount: pasted.documentImageCount ?? pasted.imageInsertedCount ?? 0,
+      imageVerificationAvailable:
+        Boolean(pasted.imageVerificationAvailable) ||
+        Boolean(previousDocExport?.imageVerificationAvailable),
+      imageExpectedCount: archiveImageExpectedCount,
+      imageVerifiedCount: archiveImageComplete
+        ? archiveImageExpectedCount
+        : Math.max(0, Number(pasted.imageInsertedCount || 0)),
       documentImageCount: pasted.documentImageCount,
-      imageComplete: pasted.imageVerificationAvailable
-        ? Number(pasted.documentImageCount || 0) >= Number(conversation.imageCount || 0)
-        : false
+      imageComplete: archiveImageComplete
     });
+    pasted.archiveImageComplete = archiveImageComplete;
   }
 
   return {
@@ -5259,8 +5287,12 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
     imageFailedCount: pasted.imageFailedCount || 0,
     imageVerificationAvailable: Boolean(pasted.imageVerificationAvailable),
-    imageComplete: Boolean(pasted.imageComplete),
+    imageActionComplete: Boolean(pasted.imageComplete),
+    imageComplete: conversation.isFragment
+      ? Boolean(pasted.imageComplete)
+      : Boolean(pasted.archiveImageComplete),
     documentImageCount: pasted.documentImageCount,
+    documentImageCountAbsoluteSafe: Boolean(pasted.documentImageCountAbsoluteSafe),
     failedImages: pasted.failedImages || [],
     noChanges: false
   };
