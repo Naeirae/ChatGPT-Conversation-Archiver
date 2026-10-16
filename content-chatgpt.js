@@ -1193,7 +1193,7 @@
   async function normalizeImageBlob(blob) {
     if (!blob || !blob.size) throw new Error('Пустой файл изображения.');
     if (blob.size > 12 * 1024 * 1024) {
-      throw new Error('Изображение больше 12 МБ; бинарная вставка пропущена.');
+      throw new Error('Изображение больше 12 МБ; подготовить его для Google Docs не удалось.');
     }
 
     // PNG is the most predictable clipboard format in Chromium. Convert when
