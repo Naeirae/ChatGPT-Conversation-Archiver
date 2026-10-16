@@ -4294,7 +4294,10 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
 }
 
 async function googleDocImageCountAttached(tabId) {
+  let domAvailable = false;
+  let domCount = 0;
   let domError = '';
+
   try {
     const result = await cdp(tabId, 'Runtime.evaluate', {
       expression: `(() => {
@@ -4302,50 +4305,90 @@ async function googleDocImageCountAttached(tabId) {
         const fallback = document.querySelectorAll(
           '.kix-canvas-tile-content image, svg.kix-embeddedobject-image'
         ).length;
-        return primary || fallback || 0;
+        return { primary, fallback };
       })()`,
       returnByValue: true
     });
-    const count = Number(result?.result?.value);
-    if (Number.isFinite(count)) {
-      return {
-        available: true,
-        count,
-        method: 'docs-dom',
-        absoluteSafe: true
-      };
+    const value = result?.result?.value || {};
+    const primary = Number(value.primary);
+    const fallback = Number(value.fallback);
+    if (Number.isFinite(primary) && Number.isFinite(fallback)) {
+      domAvailable = true;
+      domCount = Math.max(0, primary || fallback || 0);
     }
   } catch (error) {
     domError = error?.message || String(error);
   }
 
+  let axAvailable = false;
+  let axCount = 0;
+  let axError = '';
   try {
     await cdp(tabId, 'Accessibility.enable');
     const tree = await cdp(tabId, 'Accessibility.getFullAXTree');
     const nodes = Array.isArray(tree?.nodes) ? tree.nodes : [];
-    const count = nodes.filter(node => {
+    axCount = nodes.filter(node => {
       const role = String(node?.role?.value || '').toLowerCase();
       return role === 'image' || role === 'img' || role === 'graphics-symbol';
     }).length;
-    return {
-      available: true,
-      count,
-      method: 'accessibility-tree',
-      // The AX tree can include toolbar/profile images. It is useful for a
-      // before/after delta, but never for archive-wide completeness.
-      absoluteSafe: false
-    };
-  } catch (accessibilityError) {
+    axAvailable = true;
+  } catch (error) {
+    axError = error?.message || String(error);
+  }
+
+  if (!domAvailable && !axAvailable) {
     return {
       available: false,
       count: 0,
       method: '',
       absoluteSafe: false,
-      error: [domError, accessibilityError?.message || String(accessibilityError)]
-        .filter(Boolean)
-        .join(' | ')
+      domAvailable: false,
+      domCount: 0,
+      axAvailable: false,
+      axCount: 0,
+      error: [domError, axError].filter(Boolean).join(' | ')
     };
   }
+
+  const preferDom = domAvailable && domCount > 0;
+  return {
+    available: true,
+    count: preferDom ? domCount : axCount,
+    method: preferDom ? 'docs-dom' : (axAvailable ? 'accessibility-tree' : 'docs-dom'),
+    // A positive Docs-specific DOM count can be used as an absolute document
+    // count. AX includes toolbar/profile graphics and is delta-only.
+    absoluteSafe: Boolean(preferDom),
+    domAvailable,
+    domCount,
+    axAvailable,
+    axCount,
+    error: [domError, axError].filter(Boolean).join(' | ')
+  };
+}
+
+function googleDocImageDelta(before = {}, after = {}) {
+  const canUseDom = Boolean(
+    before.domAvailable &&
+    after.domAvailable &&
+    (Number(before.domCount || 0) > 0 || Number(after.domCount || 0) > 0)
+  );
+  if (canUseDom) {
+    return {
+      available: true,
+      delta: Math.max(0, Number(after.domCount || 0) - Number(before.domCount || 0)),
+      method: 'docs-dom'
+    };
+  }
+
+  if (before.axAvailable && after.axAvailable) {
+    return {
+      available: true,
+      delta: Math.max(0, Number(after.axCount || 0) - Number(before.axCount || 0)),
+      method: 'accessibility-tree'
+    };
+  }
+
+  return { available: false, delta: 0, method: '' };
 }
 
 async function copyImageClipboardInGoogleDocs(tabId, image) {
@@ -4588,12 +4631,12 @@ async function pasteArchiveIntoGoogleDoc(
     }
     imageCountAfter = await googleDocImageCountAttached(tabId);
 
-    if (imageBearingCount > 0 &&
-        imageCountBefore.available &&
-        imageCountAfter.available &&
-        imageCountBefore.method === imageCountAfter.method) {
-      const verifiedDelta = Math.max(0, imageCountAfter.count - imageCountBefore.count);
-      imageInsertedCount = Math.min(imagePasteAttemptCount, verifiedDelta);
+    const verifiedImageDelta = googleDocImageDelta(imageCountBefore, imageCountAfter);
+    if (imageBearingCount > 0 && verifiedImageDelta.available) {
+      imageInsertedCount = Math.min(
+        imagePasteAttemptCount,
+        Math.max(0, Number(verifiedImageDelta.delta || 0))
+      );
       const verificationShortfall = Math.max(0, imagePasteAttemptCount - imageInsertedCount);
       if (verificationShortfall) {
         imageFailedCount += verificationShortfall;
@@ -4609,11 +4652,8 @@ async function pasteArchiveIntoGoogleDoc(
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
 
-  const imageVerificationAvailable = Boolean(
-    imageCountBefore.available &&
-    imageCountAfter.available &&
-    imageCountBefore.method === imageCountAfter.method
-  );
+  const finalImageDelta = googleDocImageDelta(imageCountBefore, imageCountAfter);
+  const imageVerificationAvailable = Boolean(finalImageDelta.available);
   const imageComplete = imageBearingCount === 0 || Boolean(
     imageVerificationAvailable && imageInsertedCount >= imageBearingCount
   );
@@ -4649,7 +4689,7 @@ async function pasteArchiveIntoGoogleDoc(
     ),
     imageVerificationMethod:
       imageVerificationAvailable
-        ? imageCountAfter.method
+        ? finalImageDelta.method
         : (imageCountAfter.method || imageCountBefore.method || ''),
     imageVerificationError:
       imageVerificationAvailable
@@ -4866,21 +4906,16 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
         await sleep(180);
         const after = await googleDocImageCountAttached(tab.id);
 
-        if (
-          before.available &&
-          after.available &&
-          before.method === after.method &&
-          after.count > before.count
-        ) {
+        const verified = googleDocImageDelta(before, after);
+        if (verified.available && verified.delta > 0) {
           inserted++;
           done.add(keyOf(item));
         } else {
           failures.push({
             src: item.image.src || '',
-            error:
-              before.available && after.available && before.method === after.method
-                ? 'Google Docs не подтвердил появление изображения после вставки.'
-                : 'Не удалось автоматически подтвердить изображение в Google Docs.'
+            error: verified.available
+              ? 'Google Docs не подтвердил появление изображения после вставки.'
+              : 'Не удалось автоматически подтвердить изображение в Google Docs.'
           });
         }
       }
