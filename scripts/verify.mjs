@@ -347,6 +347,20 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
     fail('service-worker.js: saved-archive reconcile/image routes are missing');
   }
+  const archiveStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
+  if (!archiveStoreSource.includes("archiveLibrary: 'archiveLibrary'") ||
+      !archiveStoreSource.includes('async function registerArchive(conversation)') ||
+      !serviceWorkerSource.includes('exactDocExportForArchive') ||
+      !serviceWorkerSource.includes('linkedDocUrl: linked?.url') ||
+      !serviceWorkerSource.includes('await registerArchive(libraryArchive)')) {
+    fail('saved archive library: completed captures must be registered independently of linked Google Docs');
+  }
+  if (!popupJs.includes('state.archiveDestination || null') ||
+      !popupJs.includes("destinationText.textContent = 'Сохранён локально · документ не создан'") ||
+      !popupJs.includes("exportButton.textContent = 'Новый документ Google Docs'") ||
+      popupJs.includes("$('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs'")) {
+    fail('saved archive UI: local completion and conversation-level linked Docs must stay separate');
+  }
   const iconSizes = new Map([
     ['icons/icon-16.png', 16],
     ['icons/icon-24.png', 24],
