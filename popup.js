@@ -736,9 +736,14 @@ function renderSavedArchives(items = []) {
         setStatus('Проверяю связанный документ и добавляю недостающее…');
         try {
           const result = await exportToDoc('ARCHIVER_EXPORT_LINKED_DOC', { archiveId: item.id });
-          setStatus(result.noChanges
-            ? 'Связанный документ уже содержит сохранённый хвост архива.'
-            : 'В связанный документ добавлено ' + Number(result.addedCount || 0) + ' сообщений.');
+          const imageOutcome = docImageOutcome(result, item.imageCount || 0);
+          setStatus(
+            result.noChanges
+              ? 'Связанный документ открыт. Новых сообщений нет.' + imageOutcome.text
+              : 'В связанный документ добавлено ' +
+                Number(result.addedCount || 0) + ' сообщений.' + imageOutcome.text,
+            imageOutcome.error
+          );
           await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
@@ -2096,33 +2101,29 @@ $('activeDoc').onclick = async () => {
       linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
       { archiveId: state?.archive?.id || '' }
     );
-    const imageInline = Number(result.imageInlinePasteCount || 0);
-    const imageInserted = Number(result.imageInsertedCount || 0);
-    const imageFailed = Number(result.imageFailedCount || 0);
-    const imageAttempted = Number(result.recoveredImagePatchCandidateCount || 0);
-    const failureReason = String(result.firstImageFailure || '').trim();
-    const imageAdded = imageInserted || imageInline;
-    const imagePart = (imageAdded || imageFailed || imageAttempted)
-      ? ' Картинки: добавлено ' + imageAdded +
-        (imageFailed ? ', не удалось ' + imageFailed : '') +
-        (failureReason ? '. Причина: ' + failureReason : '') + '.'
-      : '';
+    const imageOutcome = docImageOutcome(result, state?.archive?.imageCount || 0);
 
     if (result.noChanges) {
       setStatus(
-        linked
-          ? 'Связанный документ Google Docs открыт. Новых сообщений и невставленных сохранённых изображений нет.'
-          : 'В этом документе Google Docs уже есть все сообщения из локального архива.'
+        (linked
+          ? 'Связанный документ Google Docs открыт. Новых сообщений нет.'
+          : 'В этом документе Google Docs уже есть сохранённый текст архива.') +
+        imageOutcome.text,
+        imageOutcome.error
       );
     } else if (result.addedCount) {
       setStatus(
-        `Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` +
-        imagePart
+        `В конец документа добавлено ${result.addedCount || 0} новых сообщений.` +
+        imageOutcome.text,
+        imageOutcome.error
       );
-    } else if (imageInline || imageInserted || imageFailed || imageAttempted) {
+    } else if (
+      Number(result.imageExpectedCount || 0) ||
+      Number(result.recoveredImagePatchCandidateCount || 0)
+    ) {
       setStatus(
-        'Текст повторно не вставлялся.' + imagePart,
-        Boolean(imageFailed && !imageInserted)
+        'Текст повторно не вставлялся.' + imageOutcome.text,
+        imageOutcome.error
       );
     } else {
       setStatus('Связанный документ Google Docs открыт и проверен.');
