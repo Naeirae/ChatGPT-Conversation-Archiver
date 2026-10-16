@@ -908,7 +908,6 @@ function renderHistory(history = []) {
     images: 'Сверка и добор изображений',
     'images-draft': 'Сверка изображений незавершённой части',
     reconcile: 'Сверка и добор сообщений',
-    'manual-full': 'Ручной полный диапазон',
     'retry-walk': 'Повтор прохода вниз'
   };
 
@@ -1205,13 +1204,10 @@ function render(data) {
   }
 
   const isFragmentRun = job?.captureMode === 'fragment' && running;
-  const isManualFullRun = job?.captureMode === 'manual-full' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
   if (captureHeading) captureHeading.textContent = isFragmentRun
     ? 'Собирается фрагмент'
-    : isManualFullRun
-      ? 'Собирается ручной полный диапазон'
-      : 'Собрать чат целиком';
+    : 'Собрать чат целиком';
   $('captureFragment').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
   $('clearMarkers').disabled = Boolean(running);
@@ -1220,9 +1216,7 @@ function render(data) {
   $('capture').textContent = running
     ? (isFragmentRun
         ? 'Собирается выбранный фрагмент…'
-        : isManualFullRun
-          ? 'Собирается ручной полный диапазон…'
-          : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
+        : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
     : 'Собрать чат';
   $('continue').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
@@ -1242,7 +1236,7 @@ function render(data) {
     job?.phase === 'top' &&
     !job?.boundarySearchActive &&
     job?.captureTabId != null &&
-    ['full', 'images', 'images-draft', 'reconcile', 'retry-walk', 'manual-full'].includes(job?.captureMode || '')
+    ['full', 'images', 'images-draft', 'reconcile', 'retry-walk'].includes(job?.captureMode || '')
   );
   $('confirmTop').classList.toggle('hidden', !canConfirmTop);
   $('confirmTop').disabled = !canConfirmTop;
