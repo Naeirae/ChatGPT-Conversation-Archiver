@@ -4512,6 +4512,7 @@ async function pasteArchiveIntoGoogleDoc(
   );
   let imageCountBefore = { available: false, count: 0 };
   let imageCountAfter = { available: false, count: 0 };
+  let currentImageCount = null;
 
   const pasteTextChunk = async (buffer, withHeader) => {
     if (!buffer.length && !withHeader) return;
@@ -4542,6 +4543,7 @@ async function pasteArchiveIntoGoogleDoc(
         processed: imageProcessedCount,
         total: imageBearingCount,
         attempted: imagePasteAttemptCount,
+        verified: imageInsertedCount,
         failed: imageFailedCount
       });
 
@@ -4555,6 +4557,7 @@ async function pasteArchiveIntoGoogleDoc(
           processed: imageProcessedCount,
           total: imageBearingCount,
           attempted: imagePasteAttemptCount,
+          verified: imageInsertedCount,
           failed: imageFailedCount
         });
         continue;
@@ -4566,14 +4569,34 @@ async function pasteArchiveIntoGoogleDoc(
       await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
       await sleep(900);
       await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
-      await sleep(140);
+      await sleep(180);
+
       imagePasteAttemptCount++;
       imageProcessedCount++;
+
+      const after = await googleDocImageCountAttached(tabId);
+      const verified = currentImageCount
+        ? googleDocImageDelta(currentImageCount, after)
+        : { available: false, delta: 0, method: '' };
+      if (verified.available && verified.delta > 0) {
+        imageInsertedCount++;
+      } else {
+        imageFailedCount++;
+        failedImages.push({
+          src: image.src || '',
+          error: verified.available
+            ? 'Google Docs не подтвердил появление изображения после вставки.'
+            : 'Не удалось автоматически подтвердить изображение в Google Docs.'
+        });
+      }
+      currentImageCount = after;
+
       await reportDocExportProgress({
         phase: 'images',
         processed: imageProcessedCount,
         total: imageBearingCount,
         attempted: imagePasteAttemptCount,
+        verified: imageInsertedCount,
         failed: imageFailedCount
       });
     }
@@ -4590,6 +4613,7 @@ async function pasteArchiveIntoGoogleDoc(
     }
 
     imageCountBefore = await googleDocImageCountAttached(tabId);
+    currentImageCount = imageCountBefore;
     await reportDocExportProgress({
       phase: imageBearingCount ? 'text' : 'text-only',
       processed: 0,
@@ -4619,41 +4643,29 @@ async function pasteArchiveIntoGoogleDoc(
     }
     await pasteTextChunk(buffer, headerPending);
 
-    await sleep(700);
+    await sleep(400);
     if (imageBearingCount > 0) {
       await reportDocExportProgress({
         phase: 'verify',
         processed: imageProcessedCount,
         total: imageBearingCount,
         attempted: imagePasteAttemptCount,
+        verified: imageInsertedCount,
         failed: imageFailedCount
       });
     }
-    imageCountAfter = await googleDocImageCountAttached(tabId);
-
-    const verifiedImageDelta = googleDocImageDelta(imageCountBefore, imageCountAfter);
-    if (imageBearingCount > 0 && verifiedImageDelta.available) {
-      imageInsertedCount = Math.min(
-        imagePasteAttemptCount,
-        Math.max(0, Number(verifiedImageDelta.delta || 0))
-      );
-      const verificationShortfall = Math.max(0, imagePasteAttemptCount - imageInsertedCount);
-      if (verificationShortfall) {
-        imageFailedCount += verificationShortfall;
-        failedImages.push({
-          src: '',
-          error:
-            'Google Docs подтвердил ' + imageInsertedCount + ' из ' +
-            imagePasteAttemptCount + ' попыток вставки изображений.'
-        });
-      }
-    }
+    imageCountAfter = currentImageCount || await googleDocImageCountAttached(tabId);
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
 
   const finalImageDelta = googleDocImageDelta(imageCountBefore, imageCountAfter);
-  const imageVerificationAvailable = Boolean(finalImageDelta.available);
+  const imageVerificationAvailable = imageBearingCount === 0
+    ? true
+    : Boolean(
+        imageProcessedCount === imageBearingCount &&
+        imageInsertedCount + imageFailedCount >= imageBearingCount
+      );
   const imageComplete = imageBearingCount === 0 || Boolean(
     imageVerificationAvailable && imageInsertedCount >= imageBearingCount
   );
