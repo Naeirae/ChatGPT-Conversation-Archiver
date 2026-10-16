@@ -347,6 +347,12 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
     fail('service-worker.js: saved-archive reconcile/image routes are missing');
   }
+  if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
+      serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
+      !serviceWorkerSource.includes("return settings.userName ? \`${settings.userName}:\` : 'Пользователь:'") ||
+      !serviceWorkerSource.includes("return settings.assistantName ? \`${settings.assistantName}:\` : 'ChatGPT:'")) {
+    fail('speaker labels: custom names must replace the default role label, not be appended to it');
+  }
   const archiveStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
   if (!archiveStoreSource.includes("archiveLibrary: 'archiveLibrary'") ||
       !archiveStoreSource.includes('async function registerArchive(conversation)') ||
