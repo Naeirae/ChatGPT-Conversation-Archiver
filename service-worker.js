@@ -4803,10 +4803,70 @@ function imageSourceIdentity(srcValue = '') {
   }
 }
 
+function normalizeDocImageRef(ref = {}) {
+  const src = String(ref.src || '').trim();
+  if (!src) return null;
+  return {
+    messageId: String(ref.messageId || ''),
+    messageSignature: String(ref.messageSignature || ''),
+    src
+  };
+}
+
+function docImageRefKey(ref = {}) {
+  const normalized = normalizeDocImageRef(ref);
+  if (!normalized) return '';
+  return hashText(
+    String(normalized.messageId || normalized.messageSignature || '') + '|' +
+    imageSourceIdentity(normalized.src)
+  );
+}
+
+function mergeDocImageRefs(...groups) {
+  const result = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const raw of Array.isArray(group) ? group : []) {
+      const ref = normalizeDocImageRef(raw);
+      const key = docImageRefKey(ref || {});
+      if (!ref || !key || seen.has(key)) continue;
+      seen.add(key);
+      result.push(ref);
+    }
+  }
+  return result;
+}
+
+async function storePendingDocImageRefs(archiveId = '', refs = [], { merge = false } = {}) {
+  if (!archiveId) return null;
+  const archive = await getArchive(archiveId);
+  if (!archive?.id) return null;
+  const pending = merge
+    ? mergeDocImageRefs(archive.pendingDocImageRefs || [], refs)
+    : mergeDocImageRefs(refs);
+  const updated = {
+    ...archive,
+    pendingDocImageRefs: pending
+  };
+  await putArchive(updated);
+  return updated;
+}
+
+function failedDocImageRefs(failures = []) {
+  return mergeDocImageRefs(
+    (failures || []).map(item => ({
+      messageId: item?.messageId || '',
+      messageSignature: item?.messageSignature || '',
+      src: item?.src || ''
+    }))
+  );
+}
+
 function recoveredImageItems(archive) {
-  const refs = Array.isArray(archive?.lastRecoveredImageRefs)
-    ? archive.lastRecoveredImageRefs
-    : [];
+  const refs = mergeDocImageRefs(
+    archive?.lastRecoveredImageRefs || [],
+    archive?.pendingDocImageRefs || []
+  );
   const messages = archive?.messages || [];
   const items = [];
 
