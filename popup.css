@@ -97,6 +97,23 @@ button.compact-button { padding:8px 10px; font-size:11px; }
   border-color:color-mix(in srgb,var(--danger) 62%,var(--border));
   background:color-mix(in srgb,var(--danger) 7%,var(--panel));
 }
+.status.busy {
+  position:relative;
+  padding-left:35px;
+}
+.status.busy::before {
+  content:'';
+  position:absolute;
+  left:12px;
+  top:50%;
+  width:13px;
+  height:13px;
+  margin-top:-7px;
+  border:2px solid color-mix(in srgb,var(--accent) 24%,transparent);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:archiver-spin .8s linear infinite;
+}
 .status-bar #retryCurrent { margin-top:6px; }
 
 .workspace-card,
