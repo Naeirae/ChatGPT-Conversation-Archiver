@@ -4910,6 +4910,16 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
     !excludedIds.has(String(item?.message?.id || '')) &&
     !excludedSignatures.has(messageSignature(item?.message?.role, item?.message?.text))
   );
+  const resolvedPendingKeys = new Set(allItems.map(item => docImageRefKey(item.ref)));
+  const preservedPendingRefs = (archive.pendingDocImageRefs || []).filter(ref => {
+    const key = docImageRefKey(ref);
+    return (
+      !key ||
+      !resolvedPendingKeys.has(key) ||
+      excludedIds.has(String(ref?.messageId || '')) ||
+      excludedSignatures.has(String(ref?.messageSignature || ''))
+    );
+  });
   if (!allItems.length) {
     return { docUrl, inserted: 0, failed: 0, noChanges: true, failures: [] };
   }
@@ -4925,6 +4935,11 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
   );
   const items = allItems.filter(item => !done.has(keyOf(item)));
   if (!items.length) {
+    await storePendingDocImageRefs(
+      archive.id,
+      preservedPendingRefs,
+      { merge: false }
+    ).catch(() => null);
     return { docUrl, inserted: 0, failed: 0, noChanges: true, failures: [] };
   }
 
@@ -4933,6 +4948,25 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
   let inserted = 0;
   let finalImageCount = { available: false, count: 0, method: '' };
   const failures = [];
+  let processed = 0;
+  const failureFor = (item, error) => ({
+    messageId: item?.message?.id || '',
+    messageSignature: messageSignature(
+      item?.message?.role || '',
+      item?.message?.text || ''
+    ),
+    src: item?.image?.src || '',
+    error
+  });
+
+  await reportDocExportProgress({
+    phase: 'images',
+    processed: 0,
+    total: items.length,
+    attempted: 0,
+    verified: 0,
+    failed: 0
+  });
 
   try {
     tab = await openExistingGoogleDocTab(docUrl, {
@@ -4959,7 +4993,11 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
       const anchor = uniqueMessageAnchor(docText, message);
       if (!anchor) {
         for (const item of group) {
-          failures.push({ src: item.image.src || '', error: 'Не найден уникальный текстовый якорь сообщения в документе Google Docs.' });
+          failures.push(failureFor(
+            item,
+            'Не найден уникальный текстовый якорь сообщения в документе Google Docs.'
+          ));
+          processed++;
         }
         continue;
       }
@@ -4967,7 +5005,11 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
       const located = await locateGoogleDocAnchor(tab.id, anchor);
       if (!located) {
         for (const item of group) {
-          failures.push({ src: item.image.src || '', error: 'Google Docs не подтвердил выделение якоря; вставка пропущена.' });
+          failures.push(failureFor(
+            item,
+            'Google Docs не подтвердил выделение якоря; вставка пропущена.'
+          ));
+          processed++;
         }
         continue;
       }
@@ -4976,7 +5018,19 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
         const before = await googleDocImageCountAttached(tab.id);
         const copied = await copyImageClipboardInGoogleDocs(tab.id, item.image);
         if (!copied?.ok) {
-          failures.push({ src: item.image.src || '', error: copied?.error || 'clipboard failed' });
+          failures.push(failureFor(
+            item,
+            copied?.error || 'Не удалось подготовить изображение для вставки.'
+          ));
+          processed++;
+          await reportDocExportProgress({
+            phase: 'images',
+            processed,
+            total: items.length,
+            attempted: processed - failures.length,
+            verified: inserted,
+            failed: failures.length
+          });
           continue;
         }
         await dispatchKey(tab.id, 'v', 'KeyV', 86, 2);
@@ -4990,19 +5044,50 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
           inserted++;
           done.add(keyOf(item));
         } else {
-          failures.push({
-            src: item.image.src || '',
-            error: verified.available
+          failures.push(failureFor(
+            item,
+            verified.available
               ? 'Google Docs не подтвердил появление изображения после вставки.'
               : 'Не удалось автоматически подтвердить изображение в Google Docs.'
-          });
+          ));
         }
+        processed++;
+        await reportDocExportProgress({
+          phase: 'images',
+          processed,
+          total: items.length,
+          attempted: processed,
+          verified: inserted,
+          failed: failures.length
+        });
       }
     }
 
+    await reportDocExportProgress({
+      phase: 'verify',
+      processed,
+      total: items.length,
+      attempted: processed,
+      verified: inserted,
+      failed: failures.length
+    });
     finalImageCount = await googleDocImageCountAttached(tab.id);
     patchState[docId] = [...done];
     await chrome.storage.local.set({ [DOC_IMAGE_PATCHES_KEY]: patchState });
+    await storePendingDocImageRefs(
+      archive.id,
+      mergeDocImageRefs(preservedPendingRefs, failedDocImageRefs(failures)),
+      { merge: false }
+    ).catch(() => null);
+    await reportDocExportProgress({
+      phase: 'done',
+      processed,
+      total: items.length,
+      attempted: processed,
+      verified: inserted,
+      failed: failures.length,
+      complete: failures.length === 0
+    });
   } finally {
     if (attached && tab?.id) await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
   }
