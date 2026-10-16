@@ -4682,6 +4682,7 @@ async function appendMessagesToGoogleDocUrl(
       noChanges: false,
       linkedDoc,
       imageInsertedCount: pasted.imageInsertedCount || 0,
+      imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
       imageFailedCount: pasted.imageFailedCount || 0,
       failedImages: pasted.failedImages || []
     };
@@ -4791,6 +4792,7 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     addedCount: Number(messageResult.addedCount || 0),
     noChanges: !delta.length && !imageInsertedCount && !imageFailedCount,
     imageInsertedCount,
+    imageInlinePasteCount,
     imageFailedCount,
     failedImages,
     recoveredImagePatchAttempted: Boolean(oldRecoveredItems.length),
@@ -4894,6 +4896,7 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     exportMode,
     addedCount: messages.length,
     imageInsertedCount: pasted.imageInsertedCount || 0,
+    imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
     imageFailedCount: pasted.imageFailedCount || 0,
     failedImages: pasted.failedImages || [],
     noChanges: false
@@ -5085,6 +5088,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
   const settings = await getSettings();
   const docs = [];
   let imageInsertedCount = 0;
+  let imageInlinePasteCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
   let totalTabs = 0;
@@ -5149,6 +5153,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
         );
 
         imageInsertedCount += Number(pasted.imageInsertedCount || 0);
+        imageInlinePasteCount += Number(pasted.imageInlinePasteCount || 0);
         imageFailedCount += Number(pasted.imageFailedCount || 0);
         failedImages.push(...(pasted.failedImages || []));
         completedTabs++;
