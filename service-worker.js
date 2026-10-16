@@ -67,6 +67,7 @@ const {
   getLastArchive,
   getArchiveForUrl,
   indexArchive,
+  registerArchive,
   getLinkedDoc,
   setLinkedDoc,
   clearLinkedDoc,
@@ -550,6 +551,22 @@ async function refreshCaptureJobHealth() {
   return failed?.job || await getJob();
 }
 
+function exactDocExportForArchive(docExports = {}, archiveId = '') {
+  if (!archiveId) return null;
+  const matches = Object.entries(docExports)
+    .filter(([, entry]) => entry?.archiveId === archiveId)
+    .sort((left, right) =>
+      Number(right[1]?.updatedAt || 0) - Number(left[1]?.updatedAt || 0)
+    );
+  if (!matches.length) return null;
+  const [docId, entry] = matches[0];
+  return {
+    docId,
+    docUrl: entry?.docUrl || ('https://docs.google.com/document/d/' + docId + '/edit'),
+    updatedAt: entry?.updatedAt || 0
+  };
+}
+
 async function listLinkedArchives() {
   // Never deserialize every archive just to render the popup. Large archives
   // contain thousands of messages and can stall both UI polling and capture.
@@ -557,6 +574,7 @@ async function listLinkedArchives() {
   // user-visible archives.
   const meta = await chrome.storage.local.get([
     STORAGE_KEYS.archiveIndex,
+    STORAGE_KEYS.archiveLibrary,
     STORAGE_KEYS.lastArchiveId,
     STORAGE_KEYS.archiveDestinations,
     STORAGE_KEYS.docExports,
@@ -565,11 +583,13 @@ async function listLinkedArchives() {
   ]);
 
   const index = meta[STORAGE_KEYS.archiveIndex] || {};
+  const library = meta[STORAGE_KEYS.archiveLibrary] || {};
   const destinations = meta[STORAGE_KEYS.archiveDestinations] || {};
   const docExports = meta[STORAGE_KEYS.docExports] || {};
   const docLinks = meta[STORAGE_KEYS.docLinks] || {};
 
   const ids = new Set([
+    ...Object.keys(library),
     ...Object.values(index),
     meta[STORAGE_KEYS.lastArchiveId] || '',
     meta.fragmentLatestId || '',
@@ -585,7 +605,8 @@ async function listLinkedArchives() {
 
   for (const id of ids) {
     const archive = stored[STORAGE_KEYS.archivePrefix + id];
-    if (!archive?.id || !archive?.sourceUrl || archive.partial) continue;
+    if (!archive?.id || !archive?.sourceUrl) continue;
+    if (archive.partial && archive.complete !== true) continue;
 
     const sourceKey = conversationKey(archive.sourceUrl || '');
     let linked = !archive.isFragment && sourceKey ? (docLinks[sourceKey] || null) : null;
@@ -607,15 +628,19 @@ async function listLinkedArchives() {
     }
 
     let destination = destinations[archive.id] || null;
-    if (!destination && linked?.url) {
+    const exactExport = exactDocExportForArchive(docExports, archive.id);
+    if (!destination && exactExport?.docUrl) {
       destination = {
         saved: true,
-        url: linked.url,
+        url: exactExport.docUrl,
         kind: 'google-doc',
         label: 'Google Docs',
-        updatedAt: linked.updatedAt || archive.capturedAt || ''
+        updatedAt: exactExport.updatedAt || archive.capturedAt || ''
       };
     }
+    const exactDocUrl = destination?.kind === 'google-doc'
+      ? (destination.url || exactExport?.docUrl || '')
+      : (exactExport?.docUrl || '');
 
     rows.push({
       id: archive.id,
@@ -631,9 +656,10 @@ async function listLinkedArchives() {
       imageBinaryFailed: archive.imageBinaryFailed || 0,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
-      docUrl: linked?.url || '',
+      docUrl: exactDocUrl,
+      linkedDocUrl: linked?.url || '',
       destination,
-      updatedAt: destination?.updatedAt || linked?.updatedAt || archive.capturedAt || ''
+      updatedAt: destination?.updatedAt || archive.capturedAt || linked?.updatedAt || ''
     });
   }
 
@@ -2877,6 +2903,7 @@ async function reconcileUnfinishedPassIntoArchive(passId = '') {
 
   await putArchive(updated);
   await indexArchive(updated);
+  await registerArchive(updated);
   await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: updated.id });
 
   return {
@@ -2927,7 +2954,7 @@ async function handleCaptureComplete(message) {
   const job = await getJob();
   if (!job || job.jobId !== message.jobId) return;
 
-  const archive = await getArchive(message.archiveId);
+  let archive = await getArchive(message.archiveId);
   if (!archive) {
     return finishJobWithError(
       message.jobId,
@@ -2937,6 +2964,15 @@ async function handleCaptureComplete(message) {
       Number(job.draftCount || 0),
       'error'
     );
+  }
+
+  if (message.mode !== 'compare' && (archive.partial || archive.complete !== true)) {
+    archive = {
+      ...archive,
+      partial: false,
+      complete: true
+    };
+    await putArchive(archive);
   }
 
   const partialSourceId = job.recoveryDraftId || job.draftId || '';
@@ -2950,6 +2986,15 @@ async function handleCaptureComplete(message) {
     }
   } else if (message.mode !== 'compare' && message.mode !== 'fragment') {
     await indexArchive(archive);
+  }
+
+  if (message.mode !== 'compare') {
+    const libraryArchive = partialMerge.applied
+      ? await getArchive(partialMerge.archiveId)
+      : archive;
+    if (libraryArchive?.id && !libraryArchive.partial && libraryArchive.complete !== false) {
+      await registerArchive(libraryArchive);
+    }
   }
 
   if (job.restoreCanonicalArchiveId) {
@@ -5113,6 +5158,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const archive = activeIsConversation
           ? currentArchive
           : (currentArchive || await getLastArchive());
+        if (archive?.id && !archive.partial && archive.complete !== false) {
+          await registerArchive(archive);
+        }
         if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
@@ -5167,10 +5215,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           activeUnfinished = pseudo;
         }
 
+        const archiveDestination = archive?.id
+          ? await getArchiveDestination(archive.id)
+          : null;
+
         return {
           ok: true,
           job,
           archive: summarize(archive),
+          archiveDestination,
           unfinishedPass: activeUnfinished,
           unfinishedPasses,
           linkedDoc,
