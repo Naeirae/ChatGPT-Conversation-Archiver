@@ -222,6 +222,15 @@
         <div class="archive-secondary-actions">
           <button id="copyArchive" class="text-action" type="button">Скопировать</button>
           <button id="openPlanner" class="text-action" type="button">Разбить по темам</button>
+          <button id="editCurrentDoc" class="text-action" type="button">Связать / сменить Google Doc</button>
+        </div>
+        <div id="currentDocEditor" class="current-doc-editor hidden">
+          <input id="currentDocUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
+          <div class="current-doc-editor-actions">
+            <button id="saveCurrentDocLink" class="primary" type="button">Сохранить ссылку</button>
+            <button id="clearCurrentDocLink" class="danger-outline" type="button">Отвязать</button>
+            <button id="cancelCurrentDocEdit" type="button">Отмена</button>
+          </div>
         </div>
       </section>
     </section>
