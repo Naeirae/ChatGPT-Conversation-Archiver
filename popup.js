@@ -571,8 +571,10 @@ function renderSavedArchives(items = []) {
       } else {
         destinationText.textContent = 'Сохранён отдельно';
       }
+    } else if (item.linkedDocUrl) {
+      destinationText.textContent = 'Сохранён локально · есть связанный документ';
     } else {
-      destinationText.textContent = 'Не перенесён в документ';
+      destinationText.textContent = 'Сохранён локально · документ не создан';
     }
     destination.appendChild(destinationText);
 
@@ -709,14 +711,15 @@ function renderSavedArchives(items = []) {
       open.disabled = busy;
       open.onclick = async () => {
         open.disabled = true;
-        setStatus('Открываю и проверяю связанный документ Google Docs…');
+        setStatus('Открываю и проверяю документ Google Docs этого архива…');
         try {
           const result = await chrome.runtime.sendMessage({
             type: 'ARCHIVER_OPEN_LINKED_DOC',
-            archiveId: item.id
+            archiveId: item.id,
+            sourceUrl: item.sourceUrl || ''
           });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть связанный документ Google Docs.');
-          setStatus('Связанный документ Google Docs открыт.');
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть документ Google Docs.');
+          setStatus('Документ Google Docs открыт.');
         } catch (error) {
           setStatus(error.message || String(error), true);
           await getState().catch(() => {});
@@ -733,41 +736,90 @@ function renderSavedArchives(items = []) {
       open.rel = 'noopener noreferrer';
       open.textContent = 'Документ Google Docs ↗';
       actions.appendChild(open);
-    } else {
-      const exportButton = document.createElement('button');
-      exportButton.className = 'archive-link-open';
-      exportButton.type = 'button';
-      exportButton.textContent = 'В документ Google Docs';
-      exportButton.disabled = busy;
-      exportButton.onclick = async () => {
-        exportButton.disabled = true;
-        setStatus('Создаю документ Google Docs…');
+    } else if (item.linkedDocUrl && !item.isFragment) {
+      const openLinked = document.createElement('button');
+      openLinked.className = 'archive-link-open';
+      openLinked.type = 'button';
+      openLinked.textContent = 'Связанный документ ↗';
+      openLinked.disabled = busy;
+      openLinked.onclick = async () => {
+        openLinked.disabled = true;
+        setStatus('Открываю связанный документ Google Docs…');
         try {
-          const sameTitle = rows.filter(record => record.id !== item.id &&
-            normalizedTitle(record.title) === normalizedTitle(item.title));
-          if (sameTitle.length) {
-            const sameChat = sameTitle.filter(record => chatKey(record.sourceUrl) &&
-              chatKey(record.sourceUrl) === chatKey(item.sourceUrl));
-            const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
-              record.docUrl);
-            const explanation = existingDoc
-              ? 'Для этой переписки уже найден сохранённый документ Google Docs.'
-              : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
-            if (!confirm(explanation + '\n\nСоздать ещё один документ Google Docs? Нажмите «Отмена», чтобы избежать дубля.')) {
-              setStatus('Создание документа отменено. Сохранённые данные не изменены.');
-              return;
-            }
-          }
-          const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-          setStatus('Сохранено в документ Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_OPEN_LINKED_DOC',
+            archiveId: item.id,
+            sourceUrl: item.sourceUrl || ''
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть связанный документ Google Docs.');
+          setStatus('Связанный документ Google Docs открыт.');
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          await getState().catch(() => {});
+        } finally {
+          openLinked.disabled = false;
+        }
+      };
+      actions.appendChild(openLinked);
+
+      const appendLinked = document.createElement('button');
+      appendLinked.className = 'archive-link-open';
+      appendLinked.type = 'button';
+      appendLinked.textContent = 'В связанный документ';
+      appendLinked.disabled = busy;
+      appendLinked.onclick = async () => {
+        appendLinked.disabled = true;
+        setStatus('Проверяю связанный документ и добавляю недостающее…');
+        try {
+          const result = await exportToDoc('ARCHIVER_EXPORT_LINKED_DOC', { archiveId: item.id });
+          setStatus(result.noChanges
+            ? 'Связанный документ уже содержит сохранённый хвост архива.'
+            : 'В связанный документ добавлено ' + Number(result.addedCount || 0) + ' сообщений.');
           await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
-          exportButton.disabled = false;
+        } finally {
+          appendLinked.disabled = false;
         }
       };
-      actions.appendChild(exportButton);
+      actions.appendChild(appendLinked);
     }
+
+    const exportButton = document.createElement('button');
+    exportButton.className = 'archive-link-open';
+    exportButton.type = 'button';
+    exportButton.textContent = 'Новый документ Google Docs';
+    exportButton.disabled = busy;
+    exportButton.onclick = async () => {
+      exportButton.disabled = true;
+      setStatus('Создаю новый документ Google Docs…');
+      try {
+        const sameTitle = rows.filter(record => record.id !== item.id &&
+          normalizedTitle(record.title) === normalizedTitle(item.title));
+        if (sameTitle.length) {
+          const sameChat = sameTitle.filter(record => chatKey(record.sourceUrl) &&
+            chatKey(record.sourceUrl) === chatKey(item.sourceUrl));
+          const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
+            record.docUrl || record.linkedDocUrl);
+          const explanation = existingDoc
+            ? 'Для этой переписки уже найден документ Google Docs.'
+            : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
+          if (!confirm(explanation + '\n\nСоздать ещё один документ Google Docs? Нажмите «Отмена», чтобы избежать дубля.')) {
+            setStatus('Создание документа отменено. Сохранённые данные не изменены.');
+            exportButton.disabled = false;
+            return;
+          }
+        }
+        const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
+        setStatus('Сохранено в новый документ Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
+        await getState();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        exportButton.disabled = false;
+      }
+    };
+    actions.appendChild(exportButton);
 
     const mark = document.createElement('button');
     mark.className = 'archive-link-more';
@@ -1291,13 +1343,24 @@ function render(data) {
       (archive.lastImageRecoveredCount ? ' · добор изображений +' + archive.lastImageRecoveredCount : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
-  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
-  $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
-  $('archiveDocStatus').textContent = linkedUrl
-    ? 'Документ Google Docs связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
-    : 'Архив пока хранится только локально.';
-  $('archiveDocLink').classList.toggle('hidden', !linkedUrl);
-  $('archiveDocLink').href = linkedUrl || '#';
+  const archiveDestination = state.archiveDestination || null;
+  const savedDocUrl = archiveDestination?.saved && archiveDestination?.kind === 'google-doc'
+    ? (archiveDestination.url || '')
+    : '';
+  $('archiveStateLabel').textContent = savedDocUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
+  $('archiveStateHint').textContent = savedDocUrl
+    ? 'локальная копия также сохранена для продолжения'
+    : (linkedUrl ? 'локально · для переписки есть связанный документ' : 'локально в Chrome');
+  $('archiveDocStatus').textContent = savedDocUrl
+    ? 'Этот локальный архив уже сохранён в документ Google Docs.'
+    : linkedUrl
+      ? 'Этот архив сохранён локально. Для переписки есть связанный документ: его можно обновить или создать новый документ.'
+      : 'Этот архив сохранён локально. Можно создать для него новый документ Google Docs.';
+  $('archiveDocLink').classList.toggle('hidden', !(savedDocUrl || linkedUrl));
+  $('archiveDocLink').href = savedDocUrl || linkedUrl || '#';
+  $('archiveDocLink').textContent = savedDocUrl
+    ? 'Открыть документ Google Docs ↗'
+    : 'Открыть связанный документ Google Docs ↗';
 
   // A failed new capture must not hide or disable the previously completed
   // local archive. Export is disabled only while a capture is actively running.
