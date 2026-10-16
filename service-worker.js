@@ -5061,6 +5061,11 @@ async function appendMessagesToGoogleDocUrl(
     );
 
     const finalTab = pasted.tab;
+    await storePendingDocImageRefs(
+      conversation.id,
+      failedDocImageRefs(pasted.failedImages || []),
+      { merge: true }
+    ).catch(() => null);
     const archiveImageExpectedCount = Math.max(0, Number(conversation.imageCount || 0));
     const previousImageExpectedCount = Math.max(
       0,
@@ -5411,6 +5416,11 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     { includeHeader, appendToEnd }
   );
   const finalTab = pasted.tab;
+  await storePendingDocImageRefs(
+    conversation.id,
+    failedDocImageRefs(pasted.failedImages || []),
+    { merge: exportMode === 'delta' }
+  ).catch(() => null);
   let linkedDoc = null;
   if (conversation.isFragment) {
     if (pasted.imageComplete) {
