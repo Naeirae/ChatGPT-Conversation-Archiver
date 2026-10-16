@@ -246,7 +246,7 @@ try {
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');
   }
-  for (const id of ['openMarkingTab', 'clearMarkers', 'reconcileArchive', 'recoverImages']) {
+  for (const id of ['openMarkingTab', 'clearMarkers', 'reconcileArchive']) {
     if (!popupHtml.includes('id="' + id + '"')) {
       fail('popup.html: missing capture-recovery control ' + id);
     }
@@ -335,15 +335,19 @@ try {
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
-      !popupJs.includes('ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE') ||
       !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
-    fail('popup.js: fragment-range/reconcile/image recovery controls are not wired');
+    fail('popup.js: fragment-range/unified reconcile/unfinished recovery controls are not wired');
+  }
+  if (popupHtml.includes('id="recoverImages"') ||
+      popupJs.includes("imagesButton.textContent = 'Сверить изображения'") ||
+      !popupHtml.includes('id="reconcileArchive" class="primary">Сверить</button>') ||
+      !popupCss.includes('.inline-progress::before') ||
+      !popupCss.includes('.status.busy::before')) {
+    fail('archive UX: one primary sync action and visible progress indicators must remain in place');
   }
   if (popupJs.includes("$('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue)") ||
-      popupJs.includes("$('recoverImages').disabled = Boolean(running || !archive || !state.canContinue)") ||
-      !popupJs.includes("type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',\n      archiveId: state.archive.id") ||
-      !popupJs.includes("type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',\n      archiveId: state.archive.id")) {
-    fail('current archive repair controls must work from Google Docs/other tabs by reopening the archive source URL');
+      !popupJs.includes("type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',\n      archiveId: state.archive.id")) {
+    fail('current archive sync must work from Google Docs/other tabs by reopening the archive source URL');
   }
   if (!popupJs.includes("passId: item.exportPassId") ||
       !popupJs.includes("job?.captureMode === 'images-draft'") ||
@@ -352,11 +356,16 @@ try {
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
-    fail('service-worker.js: saved-archive reconcile/image routes are missing');
+    fail('service-worker.js: unified saved-archive reconcile and legacy image recovery routes are missing');
   }
   const offscreenSource = await readFile('offscreen.js', 'utf8');
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
   const manifestSource = await readFile('manifest.json', 'utf8');
+  if (!contentSource.includes("mode === 'reconcile'") ||
+      !contentSource.includes('recoveredImageRefs.push({') ||
+      !contentSource.includes("(mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length")) {
+    fail('unified reconcile: one pass must reconcile text and recover/hydrate images');
+  }
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||

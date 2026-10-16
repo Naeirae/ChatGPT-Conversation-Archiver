@@ -1193,7 +1193,7 @@
   async function normalizeImageBlob(blob) {
     if (!blob || !blob.size) throw new Error('Пустой файл изображения.');
     if (blob.size > 12 * 1024 * 1024) {
-      throw new Error('Изображение больше 12 МБ; бинарная вставка пропущена.');
+      throw new Error('Изображение больше 12 МБ; подготовить его для Google Docs не удалось.');
     }
 
     // PNG is the most predictable clipboard format in Chromium. Convert when
@@ -3903,7 +3903,7 @@
         recoveredImageRefs = merged.recovered;
         addedCount = 0;
       } else if (mode === 'reconcile') {
-        if (!existingArchiveId) throw new Error('Для сверки и добора нужен существующий локальный архив.');
+        if (!existingArchiveId) throw new Error('Для сверки нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
         const existing = stored['archive:' + existingArchiveId];
         if (!existing?.messages?.length) throw new Error('Локальный архив для сверки недоступен.');
@@ -3918,8 +3918,39 @@
             'Локальный архив не изменён; используйте ручной полный диапазон, если чат был отредактирован или ветка изменилась.'
           );
         }
+
         messages = reconciled.messages;
         addedCount = reconciled.addedCount;
+
+        // One reconcile pass owns both text and images. Track images that are
+        // newly discovered relative to the saved archive so the same result can
+        // later be patched into a linked Google Doc without a second scan.
+        const existingByRef = new Map();
+        for (const message of existing.messages || []) {
+          const ref = navigationRef(message);
+          const key = ref.id || ref.signature || ref.externalSignature;
+          if (key) existingByRef.set(key, message);
+        }
+        for (const message of messages) {
+          const ref = navigationRef(message);
+          const key = ref.id || ref.signature || ref.externalSignature;
+          const previous = key ? existingByRef.get(key) : null;
+          const previousImages = new Map(
+            (previous?.images || []).map(image => [String(image?.src || ''), image])
+          );
+          for (const image of message.images || []) {
+            const src = String(image?.src || '');
+            if (!src) continue;
+            const before = previousImages.get(src);
+            if (!before) {
+              recoveredImageRefs.push({
+                messageId: message.id || '',
+                messageSignature: messageTextSignature(message),
+                src
+              });
+            }
+          }
+        }
       } else if (mode === 'images') {
         if (!existingArchiveId) throw new Error('Для добора изображений нужен существующий локальный архив.');
         const stored = await chrome.storage.local.get('archive:' + existingArchiveId);
@@ -4021,7 +4052,7 @@
             })
           : (addedCount > 0 ? messages.slice(messages.length - addedCount) : []);
 
-      const unresolvedBeforeHydration = mode === 'images'
+      const unresolvedBeforeHydration = (mode === 'images' || mode === 'reconcile')
         ? binaryTargetMessages.flatMap(message =>
             (message.images || [])
               .filter(image => image?.src && !(image.binaryStatus === 'ready' && image.dataUrl))
@@ -4036,7 +4067,7 @@
         onlyMissing: mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
       });
 
-      if (mode === 'images' && unresolvedBeforeHydration.length) {
+      if ((mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length) {
         const knownRecovered = new Set(recoveredImageRefs.map(ref =>
           String(ref.messageId || ref.messageSignature || '') + '|' + String(ref.src || '')
         ));

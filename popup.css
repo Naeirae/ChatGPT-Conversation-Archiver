@@ -97,6 +97,23 @@ button.compact-button { padding:8px 10px; font-size:11px; }
   border-color:color-mix(in srgb,var(--danger) 62%,var(--border));
   background:color-mix(in srgb,var(--danger) 7%,var(--panel));
 }
+.status.busy {
+  position:relative;
+  padding-left:35px;
+}
+.status.busy::before {
+  content:'';
+  position:absolute;
+  left:12px;
+  top:50%;
+  width:13px;
+  height:13px;
+  margin-top:-7px;
+  border:2px solid color-mix(in srgb,var(--accent) 24%,transparent);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:archiver-spin .8s linear infinite;
+}
 .status-bar #retryCurrent { margin-top:6px; }
 
 .workspace-card,
@@ -216,6 +233,52 @@ button.compact-button { padding:8px 10px; font-size:11px; }
 
 .capture-progress strong,
 .run-log strong { display:block; font-size:12px; }
+.inline-progress {
+  position:relative;
+  padding-left:42px;
+}
+.inline-progress::before {
+  content:'';
+  position:absolute;
+  left:14px;
+  top:50%;
+  width:16px;
+  height:16px;
+  margin-top:-8px;
+  border:2px solid color-mix(in srgb,var(--accent) 24%,transparent);
+  border-top-color:var(--accent);
+  border-radius:50%;
+  animation:archiver-spin .8s linear infinite;
+}
+@keyframes archiver-spin {
+  to { transform:rotate(360deg); }
+}
+
+.archive-primary-actions {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:7px;
+  margin-top:8px;
+}
+.archive-primary-actions #reconcileArchive {
+  grid-column:1 / -1;
+}
+.archive-primary-actions button {
+  width:100%;
+  margin:0;
+}
+.archive-more-actions {
+  margin-top:7px;
+}
+.archive-more-actions > summary {
+  cursor:pointer;
+  color:var(--muted);
+  font-size:10px;
+  font-weight:700;
+}
+.archive-more-actions .compact-actions {
+  margin-top:5px;
+}
 
 .compare-result {
   min-height:15px;

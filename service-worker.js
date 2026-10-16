@@ -693,6 +693,7 @@ async function listLinkedArchives() {
       imageCount: archive.imageCount || 0,
       imageBinaryReady: archive.imageBinaryReady || 0,
       imageBinaryFailed: archive.imageBinaryFailed || 0,
+      imageRecoveredCount: archive.lastImageRecoveredCount || 0,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
       docUrl: exactDocUrl,
@@ -813,7 +814,7 @@ async function fetchImageBinaryForContent(src = '') {
   }
   if (!blob.size) throw new Error('Пустой файл изображения.');
   if (blob.size > 12 * 1024 * 1024) {
-    throw new Error('Изображение больше 12 МБ; бинарная вставка пропущена.');
+    throw new Error('Изображение больше 12 МБ; подготовить его для Google Docs не удалось.');
   }
 
   const buffer = await blob.arrayBuffer();
@@ -3151,9 +3152,18 @@ async function handleCaptureComplete(message) {
 
   if (message.mode === 'reconcile') {
     const repaired = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
-    const finalMessage = repaired
-      ? ('Сверка и добор завершены: восстановлено ' + repaired + ' сообщений. Локальный архив обновлён.')
-      : 'Сверка завершена: пропущенных сообщений не найдено; локальный архив подтверждён.';
+    const recoveredImages = Number(message.imageRecoveredCount || archive.lastImageRecoveredCount || 0);
+    const imageTotal = Number(archive.imageCount || 0);
+    const imageReady = Number(archive.imageBinaryReady || 0);
+    const imageFailed = Number(archive.imageBinaryFailed || 0);
+    const finalMessage =
+      'Сверка завершена.' +
+      (repaired ? ' Восстановлено сообщений: ' + repaired + '.' : ' Сообщения совпадают.') +
+      (imageTotal
+        ? ' Картинки: готово ' + imageReady + '/' + imageTotal +
+          (recoveredImages ? ', восстановлено ' + recoveredImages : '') +
+          (imageFailed ? ', не удалось ' + imageFailed : '') + '.'
+        : '');
 
     const next = await appendRunLog({
       status: 'done',
@@ -3165,6 +3175,7 @@ async function handleCaptureComplete(message) {
       imageCount: archive.imageCount || 0,
       imageBinaryReady: archive.imageBinaryReady || 0,
       imageBinaryFailed: archive.imageBinaryFailed || 0,
+      imageRecoveredCount: recoveredImages,
       archiveId: archive.id,
       finishedAt: Date.now(),
       captureTabId: null,
@@ -3246,9 +3257,9 @@ async function handleCaptureComplete(message) {
       : 'Переписка собрана.';
 
   if (!isContinuation && !isDraftRecovery && Number(archive.imageCount || 0) > 0) {
-    finalMessage += ' Изображения в локальном архиве: ' + Number(archive.imageCount || 0) +
-      '; бинарно готовы ' + Number(archive.imageBinaryReady || 0) +
-      ', ошибок ' + Number(archive.imageBinaryFailed || 0) + '.';
+    finalMessage += ' Картинки в локальном архиве: ' + Number(archive.imageCount || 0) +
+      '; готово ' + Number(archive.imageBinaryReady || 0) +
+      ', не удалось ' + Number(archive.imageBinaryFailed || 0) + '.';
   }
 
   if (shouldAutoAppend) {
@@ -4281,7 +4292,7 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
 async function copyImageClipboardInGoogleDocs(tabId, image) {
   const dataUrl = String(image?.dataUrl || '');
   if (!/^data:image\//i.test(dataUrl)) {
-    return { ok: false, error: 'В архиве нет бинарных данных изображения.' };
+    return { ok: false, error: 'В архиве нет подготовленных данных изображения.' };
   }
 
   let offscreenError = '';
