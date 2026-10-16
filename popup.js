@@ -775,17 +775,11 @@ function renderSavedArchives(items = []) {
           }
         }
         const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-        const inlineImages = Number(result.imageInlinePasteCount || 0);
-        const binaryImages = Number(result.imageInsertedCount || 0);
-        const failedImages = Number(result.imageFailedCount || 0);
-        const imageAdded = binaryImages || inlineImages;
-        const imagePart = imageAdded || failedImages
-          ? ' Картинки: добавлено ' + imageAdded +
-            (failedImages ? ', не удалось ' + failedImages : '') + '.'
-          : '';
+        const imageOutcome = docImageOutcome(result, item.imageCount || 0);
         setStatus(
-          'Сохранено в новый документ Google Docs: ' +
-          (result.addedCount || 0) + ' сообщений.' + imagePart
+          'В новый документ Google Docs вставлено ' +
+          (result.addedCount || 0) + ' сообщений.' + imageOutcome.text,
+          imageOutcome.error
         );
         await getState();
       } catch (error) {
@@ -1041,6 +1035,35 @@ function setStatus(text, error = false, busy = false) {
   $('status').classList.toggle('error', error);
   $('status').classList.toggle('busy', Boolean(busy && !error));
   $('status').setAttribute('aria-busy', busy && !error ? 'true' : 'false');
+}
+
+function docImageOutcome(result = {}, expectedFallback = 0) {
+  const expected = Math.max(
+    0,
+    Number(
+      result.imageExpectedCount != null
+        ? result.imageExpectedCount
+        : expectedFallback
+    ) || 0
+  );
+  if (!expected) return { text: '', error: false };
+
+  const verified = Math.max(0, Number(result.imageInsertedCount || 0));
+  if (result.imageVerificationAvailable) {
+    const complete = result.imageComplete === true || verified >= expected;
+    return {
+      text: ' Картинки: подтверждено ' + Math.min(verified, expected) + '/' + expected +
+        (complete ? '.' : '; часть не вставилась.'),
+      error: !complete
+    };
+  }
+
+  return {
+    text:
+      ' Картинки: автоматическая проверка Google Docs недоступна; ' +
+      'документ не помечен как полностью сохранён.',
+    error: true
+  };
 }
 
 function normalizeHex(value, fallback) {
@@ -2036,15 +2059,12 @@ $('newDoc').onclick = async () => {
   setStatus('Открываю документ Google Docs и вставляю переписку…', false, true);
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
-    const imageInline = Number(result.imageInlinePasteCount || 0);
-    const imageInserted = Number(result.imageInsertedCount || 0);
-    const imageFailed = Number(result.imageFailedCount || 0);
-    const imageAdded = imageInserted || imageInline;
-    const imagePart = (imageAdded || imageFailed)
-      ? ' Картинки: добавлено ' + imageAdded +
-        (imageFailed ? ', не удалось ' + imageFailed : '') + '.'
-      : '';
-    setStatus(`Готово. В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` + imagePart);
+    const imageOutcome = docImageOutcome(result, state?.archive?.imageCount || 0);
+    setStatus(
+      `В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` +
+      imageOutcome.text,
+      imageOutcome.error
+    );
     await getState();
   } catch (error) {
     setStatus(error.message || String(error), true);
