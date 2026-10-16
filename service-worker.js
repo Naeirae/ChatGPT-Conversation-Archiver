@@ -4699,6 +4699,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
   let tab = null;
   let attached = false;
   let inserted = 0;
+  let finalImageCount = { available: false, count: 0, method: '' };
   const failures = [];
 
   try {
@@ -4766,6 +4767,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
       }
     }
 
+    finalImageCount = await googleDocImageCountAttached(tab.id);
     patchState[docId] = [...done];
     await chrome.storage.local.set({ [DOC_IMAGE_PATCHES_KEY]: patchState });
   } finally {
@@ -4777,6 +4779,9 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
     inserted,
     failed: failures.length,
     noChanges: false,
+    imageVerificationAvailable: Boolean(finalImageCount.available),
+    documentImageCount: finalImageCount.available ? finalImageCount.count : null,
+    imageVerificationMethod: finalImageCount.method || '',
     failures
   };
 }
