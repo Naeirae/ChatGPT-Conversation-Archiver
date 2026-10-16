@@ -73,18 +73,14 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_CURRENT'")) {
     fail('capture runtime: missing verified reconcile-and-fill mode');
   }
-  if (!contentSource.includes("'manual-full'") ||
-      !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
-    fail('capture runtime: missing manual full-range route');
+  if (contentSource.includes("'manual-full'") ||
+      serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_MANUAL_FULL'")) {
+    fail('capture runtime: manual full-range mode must stay removed');
   }
-  if (!contentSource.includes("if (boundary && !boundaryIsVisible(boundary))") ||
-      !contentSource.includes("requireBoundary: mode === 'manual-full'") ||
-      !contentSource.includes("closeSelection.textContent = 'Завершить разметку'")) {
-    fail('manual full range: explicit end marker must be physically validated before chronological capture');
-  }
-  if (!contentSource.includes('strictStable: Boolean(selectedFragment.end.id)') ||
+  if (!contentSource.includes("closeSelection.textContent = 'Завершить разметку'") ||
+      !contentSource.includes('strictStable: Boolean(selectedFragment.end.id)') ||
       !contentSource.includes('if (boundary.strictStable) return false')) {
-    fail('manual full range: manually marked stable end must not fall back to text-signature matching');
+    fail('fragment marking: explicit end marker must remain stable and marking exit must stay visible');
   }
   if (!contentSource.includes('resolveFragmentTurnFromTarget') ||
       !contentSource.includes("document.addEventListener('click'") ||
@@ -220,7 +216,7 @@ try {
   if (!popupHtml.includes('id="reloadExtension"')) {
     fail('popup.html: missing extension reload action');
   }
-  for (const id of ['captureManualFull', 'openMarkingTab', 'reconcileArchive', 'recoverImages']) {
+  for (const id of ['openMarkingTab', 'clearMarkers', 'reconcileArchive', 'recoverImages']) {
     if (!popupHtml.includes('id="' + id + '"')) {
       fail('popup.html: missing capture-recovery control ' + id);
     }
@@ -296,11 +292,12 @@ try {
     fail('popup.js: linked Doc export must be one manual action without a separate image-patch button');
   }
   if (!popupJs.includes("type: 'ARCHIVER_CAPTURE_CURRENT'") ||
-      popupJs.includes("hasManualRange ? 'ARCHIVER_CAPTURE_MANUAL_FULL' : 'ARCHIVER_CAPTURE_CURRENT'") ||
+      popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
+      popupHtml.includes('id="captureManualFull"') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupHtml.includes('id="clearMarkers"') ||
       !serviceWorkerSource.includes('captureRange,')) {
-    fail('manual range UX: saved boundaries must stay explicit and never hijack the primary full-capture button');
+    fail('fragment range UX: fragment markers must never hijack the primary full-capture button');
   }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
