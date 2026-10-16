@@ -773,7 +773,20 @@ function renderSavedArchives(items = []) {
           }
         }
         const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-        setStatus('Сохранено в новый документ Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
+        const inlineImages = Number(result.imageInlinePasteCount || 0);
+        const binaryImages = Number(result.imageInsertedCount || 0);
+        const failedImages = Number(result.imageFailedCount || 0);
+        const imagePart = inlineImages || binaryImages || failedImages
+          ? ' Изображения: ' +
+            (inlineImages ? inlineImages + ' передано через rich HTML' : '') +
+            (inlineImages && binaryImages ? ', ' : '') +
+            (binaryImages ? binaryImages + ' вставлено бинарно' : '') +
+            (failedImages ? ', ' + failedImages + ' ошибок' : '') + '.'
+          : '';
+        setStatus(
+          'Сохранено в новый документ Google Docs: ' +
+          (result.addedCount || 0) + ' сообщений.' + imagePart
+        );
         await getState();
       } catch (error) {
         setStatus(error.message || String(error), true);
@@ -2039,8 +2052,15 @@ $('newDoc').onclick = async () => {
   setStatus('Открываю документ Google Docs и вставляю переписку…');
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
-    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
-      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+    const imageInline = Number(result.imageInlinePasteCount || 0);
+    const imageInserted = Number(result.imageInsertedCount || 0);
+    const imageFailed = Number(result.imageFailedCount || 0);
+    const imagePart = (imageInline || imageInserted || imageFailed)
+      ? ' Изображения: ' +
+        (imageInline ? imageInline + ' передано через rich HTML' : '') +
+        (imageInline && imageInserted ? ', ' : '') +
+        (imageInserted ? imageInserted + ' вставлено бинарно' : '') +
+        (imageFailed ? ', ' + imageFailed + ' ошибок' : '') + '.'
       : '';
     setStatus(`Готово. В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` + imagePart);
     await getState();
@@ -2062,14 +2082,18 @@ $('activeDoc').onclick = async () => {
       linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
       { archiveId: state?.archive?.id || '' }
     );
+    const imageInline = Number(result.imageInlinePasteCount || 0);
     const imageInserted = Number(result.imageInsertedCount || 0);
     const imageFailed = Number(result.imageFailedCount || 0);
     const imageAttempted = Number(result.recoveredImagePatchCandidateCount || 0);
     const failureReason = String(result.firstImageFailure || '').trim();
-    const imagePart = (imageInserted || imageFailed || imageAttempted)
-      ? ` Изображения: ${imageInserted} вставлено отдельно через debugger` +
-        (imageFailed ? `, ${imageFailed} не вставлено` : '') +
-        (failureReason ? `. Причина: ${failureReason}` : '') + '.'
+    const imagePart = (imageInline || imageInserted || imageFailed || imageAttempted)
+      ? ' Изображения: ' +
+        (imageInline ? imageInline + ' передано через rich HTML' : '') +
+        (imageInline && imageInserted ? ', ' : '') +
+        (imageInserted ? imageInserted + ' вставлено бинарно' : '') +
+        (imageFailed ? ', ' + imageFailed + ' не вставлено' : '') +
+        (failureReason ? '. Причина: ' + failureReason : '') + '.'
       : '';
 
     if (result.noChanges) {
@@ -2083,7 +2107,7 @@ $('activeDoc').onclick = async () => {
         `Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` +
         imagePart
       );
-    } else if (imageInserted || imageFailed || imageAttempted) {
+    } else if (imageInline || imageInserted || imageFailed || imageAttempted) {
       setStatus(
         'Текст повторно не вставлялся.' + imagePart,
         Boolean(imageFailed && !imageInserted)
