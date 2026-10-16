@@ -345,13 +345,6 @@ function renderUnfinishedPasses(items = []) {
     };
     primaryActions.appendChild(saveCurrent);
 
-    const more = document.createElement('details');
-    more.className = 'unfinished-more';
-
-    const moreSummary = document.createElement('summary');
-    moreSummary.textContent = 'Ещё';
-    more.appendChild(moreSummary);
-
     const secondary = document.createElement('div');
     secondary.className = 'unfinished-secondary-actions';
 
@@ -382,7 +375,7 @@ function renderUnfinishedPasses(items = []) {
 
     if (item.canExportCurrent && item.exportPassId) {
       const reconcileSaved = document.createElement('button');
-      reconcileSaved.textContent = 'Сверить с локальным архивом и добрать';
+      reconcileSaved.textContent = 'Сверить сохранённую часть';
       reconcileSaved.onclick = async () => {
         reconcileSaved.disabled = true;
         setStatus('Сверяю сохранённую часть с локальным архивом…');
@@ -405,30 +398,6 @@ function renderUnfinishedPasses(items = []) {
         }
       };
       secondary.appendChild(reconcileSaved);
-    }
-
-    if (item.exportPassId && item.canExportCurrent) {
-      const hydrateImages = document.createElement('button');
-      hydrateImages.textContent = 'Сверить и добрать изображения';
-      hydrateImages.onclick = async () => {
-        hydrateImages.disabled = true;
-        setStatus('Добираю изображения в сохранённой части незавершённого сбора…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES',
-            passId: item.exportPassId
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
-          setStatus('Сверка изображений сохранённой части запущена…');
-          if (result.job) render({ ...state, job: result.job });
-          startPolling();
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-        } finally {
-          hydrateImages.disabled = false;
-        }
-      };
-      secondary.appendChild(hydrateImages);
     }
 
     if (item.copyPassId) {
@@ -477,11 +446,10 @@ function renderUnfinishedPasses(items = []) {
     };
     secondary.appendChild(remove);
 
-    more.appendChild(secondary);
     row.append(head, meta);
     if (saveHint) row.appendChild(saveHint);
     if (documentStatus) row.appendChild(documentStatus);
-    row.append(primaryActions, more);
+    row.append(primaryActions, secondary);
     list.appendChild(row);
   }
 }
@@ -605,13 +573,8 @@ function renderSavedArchives(items = []) {
     const actions = document.createElement('div');
     actions.className = 'archive-link-actions';
 
-    const moreActions = document.createElement('details');
-    moreActions.className = 'archive-link-tools';
-    const moreSummary = document.createElement('summary');
-    moreSummary.textContent = 'Ещё';
     const secondaryActions = document.createElement('div');
     secondaryActions.className = 'archive-link-secondary';
-    moreActions.append(moreSummary, secondaryActions);
 
     const resume = document.createElement('button');
     resume.className = 'archive-link-open';
@@ -681,7 +644,7 @@ function renderSavedArchives(items = []) {
       reconcileButton.disabled = busy;
       reconcileButton.onclick = async () => {
         reconcileButton.disabled = true;
-        setStatus('Открываю исходный чат и сверяю выбранный архив…');
+        setStatus('Открываю исходный чат и сверяю выбранный архив…', false, true);
         try {
           const result = await chrome.runtime.sendMessage({
             type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
@@ -724,7 +687,7 @@ function renderSavedArchives(items = []) {
       appendLinked.disabled = busy;
       appendLinked.onclick = async () => {
         appendLinked.disabled = true;
-        setStatus('Проверяю связанный документ и добавляю недостающее…');
+        setStatus('Проверяю связанный документ и добавляю недостающее…', false, true);
         try {
           const result = await exportToDoc('ARCHIVER_EXPORT_LINKED_DOC', { archiveId: item.id });
           setStatus(result.noChanges
@@ -747,7 +710,7 @@ function renderSavedArchives(items = []) {
     exportButton.disabled = busy;
     exportButton.onclick = async () => {
       exportButton.disabled = true;
-      setStatus('Создаю новый документ Google Docs…');
+      setStatus('Создаю новый документ Google Docs…', false, true);
       try {
         const sameTitle = rows.filter(record => record.id !== item.id &&
           normalizedTitle(record.title) === normalizedTitle(item.title));
@@ -917,7 +880,7 @@ function renderSavedArchives(items = []) {
       if (!destinationEditor.classList.contains('hidden')) destinationInput.focus();
     };
 
-    row.append(main, actions, moreActions, destinationEditor);
+    row.append(main, actions, secondaryActions, destinationEditor);
     list.appendChild(row);
   }
 }
@@ -1253,10 +1216,6 @@ function render(data) {
   const unfinishedPanel = $('unfinishedPassesPanel');
   unfinishedPanel?.classList.toggle('hidden', !hasUnfinished);
   unfinishedPanel?.classList.toggle('has-items', hasUnfinished);
-  if (hasUnfinished && ['error', 'cancelled'].includes(job?.status)) {
-    unfinishedPanel.open = true;
-  }
-
   const isFragmentRun = job?.captureMode === 'fragment' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
   if (captureHeading) captureHeading.textContent = isFragmentRun
@@ -1517,6 +1476,14 @@ async function exportToDoc(type, payload = {}) {
   if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить в документ Google Docs.');
   return result;
 }
+
+$('fragmentToggle').onclick = () => {
+  const panel = $('fragmentPanel');
+  const nextOpen = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !nextOpen);
+  $('fragmentToggle').setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+  $('fragmentToggle').textContent = nextOpen ? 'Скрыть фрагмент' : 'Собрать фрагмент…';
+};
 
 $('capture').onclick = async () => {
   $('capture').disabled = true;
@@ -2178,19 +2145,14 @@ const TOUR_STEPS = [
     text: 'Если сбор прервётся после сохранения части сообщений, появится один незавершённый сбор. Его можно продолжить или сохранить текущую часть в Google Docs.'
   },
   {
-    selector: '#savedArchivesPanel > summary',
+    selector: '#savedArchivesPanel .section-bar',
     title: 'Готовые чаты — в одном списке',
     text: 'Здесь можно продолжить чат, скопировать его, сохранить в документ Google Docs или разбить по темам.'
   },
   {
-    selector: '.accessibility-options > summary',
-    title: 'Настройте подписи',
-    text: 'Здесь можно изменить имена пользователя и ChatGPT в сохранённом тексте и выровнять реплики пользователя справа.'
-  },
-  {
     selector: '.settings-menu > summary',
-    title: 'Оформление и обновление',
-    text: 'Шестерёнка открывает настройки темы, шрифта и обновлений.'
+    title: 'Настройки в одном месте',
+    text: 'Шестерёнка открывает оформление интерфейса, подписи в документе и обновление расширения.'
   },
   {
     selector: '.help-menu > summary',
