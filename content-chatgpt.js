@@ -2339,8 +2339,14 @@
       throw new Error('У сохраненного архива нет якоря продолжения.');
     }
 
-    for (let i = 0; i < 260; i++) {
+    for (let i = 0; i < 72; i++) {
       await waitIfPaused();
+
+      if (physicalScrollStartVisible() && i > 0) {
+        throw new Error(
+          'Сохранённый стык не найден локально. Продолжение остановлено, чтобы не превращать его в полный проход к началу.'
+        );
+      }
 
       if (await recoverVisibleLoadError('top', map.size)) {
         await expandVisible();
@@ -2530,6 +2536,25 @@
     //   saved prefix is found, then turn down toward the exact checkpoint.
     if (capturePhase === 'walk') {
       let prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
+
+      // A preserved working tab normally remains very close to the failure
+      // frontier. If the viewport already contains one of the last saved turns,
+      // resume immediately instead of searching toward the conversation top.
+      const frontierSlack = Math.max(0, (savedRefs || []).length - 12);
+      if (prefixEvidence.known && prefixEvidence.savedIndex >= frontierSlack) {
+        await progress('Последняя сохранённая часть уже видна. Продолжаю прямо отсюда.', map.size, {
+          phase: 'top',
+          anchorReached: true,
+          resumeSearchDirection: 'down',
+          force: true
+        });
+        return {
+          id: anchorId,
+          signature: anchorSignature,
+          matchLength: Math.max(1, prefixEvidence.matchLength || 1),
+          frontierMatched: true
+        };
+      }
       let knownVisible = prefixEvidence.known;
       let direction = knownVisible ? 'down' : 'up';
       let enteredSavedPrefix = knownVisible;
@@ -2537,7 +2562,7 @@
       let unchanged = 0;
       let previousSignature = '';
 
-      for (let i = 0; i < 160; i++) {
+      for (let i = 0; i < 48; i++) {
         await waitIfPaused();
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
@@ -3237,16 +3262,13 @@
     try {
       const settings = await getSettings();
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
-      const selectedFragment = (mode === 'fragment' || mode === 'manual-full')
+      const selectedFragment = (mode === 'fragment')
         ? (options.captureRange ||
           (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] ||
           {})
         : null;
       if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) {
         throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
-      }
-      if (mode === 'manual-full' && (!selectedFragment.start || !selectedFragment.end)) {
-        throw new Error('Для ручного полного сбора отметьте и начало, и конец.');
       }
       await progress(
         mode === 'full'
@@ -3273,7 +3295,7 @@
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
       }
 
-      const markerEnd = (mode === 'fragment' || mode === 'manual-full') && selectedFragment.end
+      const markerEnd = (mode === 'fragment') && selectedFragment.end
         ? {
             kind: selectedFragment.end.id ? 'stable' : 'signature',
             key: selectedFragment.end.id || selectedFragment.end.signature,
@@ -3306,7 +3328,7 @@
 
       collect(map, order, settings, boundary);
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const navigationWindows = [];
         if (resumeNavigation) {
           const checkpoint = (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId];
@@ -3379,7 +3401,7 @@
             order,
             settings,
             navigationWindows,
-            (mode === 'fragment' || mode === 'manual-full') ? selectedFragment.start || null : null,
+            (mode === 'fragment') ? selectedFragment.start || null : null,
             boundary
           );
           navigationMessages = [...map.values()];
@@ -3438,7 +3460,7 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -3465,7 +3487,7 @@
         ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
             bursts: 3,
-            requireBoundary: mode === 'manual-full'
+            requireBoundary: false
           });
 
       await progress(
@@ -3492,7 +3514,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3529,7 +3551,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment' || mode === 'manual-full') {
+        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3582,7 +3604,7 @@
         capturedMessages = capturedMessages.slice(anchorIndex + 1);
       }
 
-      if (mode === 'fragment' || mode === 'manual-full') {
+      if (mode === 'fragment') {
         const startMatches = selectedFragment.start
           ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.start) ? [i] : [])
           : [0];
@@ -3599,7 +3621,7 @@
         }
         capturedMessages = capturedMessages.slice(startAt, endAt + 1);
       }
-      if ((mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment' || mode === 'manual-full') && !capturedMessages.length) {
+      if ((mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') && !capturedMessages.length) {
         throw new Error('Сообщения не найдены. Возможно, ChatGPT изменил структуру страницы.');
       }
 
@@ -3772,7 +3794,7 @@
         return;
       }
 
-      const binaryTargetMessages = (mode === 'full' || mode === 'fragment' || mode === 'manual-full')
+      const binaryTargetMessages = (mode === 'full' || mode === 'fragment')
         ? messages
         : mode === 'images-draft'
           ? messages.filter(message => (message.images || []).some(image =>
@@ -4054,7 +4076,7 @@
               sum + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
             captureRange:
               existingRecoveryDraft?.captureRange ||
-              ((mode === 'fragment' || mode === 'manual-full') ? selectedFragment : null) ||
+              ((mode === 'fragment') ? selectedFragment : null) ||
               current.captureRange ||
               null,
             pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
@@ -4387,9 +4409,10 @@
     }
     if (message && message.type === 'ARCHIVER_CLEAR_FRAGMENT_MARKERS') {
       fragmentMarkers = {};
+      fragmentSelectionActive = false;
       clearSelectedFragmentTurn();
       chrome.storage.local.remove(fragmentStorageKey()).then(() => {
-        updateFragmentOverlay();
+        removeFragmentOverlay();
         sendResponse({ ok: true, cleared: true });
       }).catch(error => {
         sendResponse({ ok: false, error: error?.message || String(error) });
