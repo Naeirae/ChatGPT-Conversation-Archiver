@@ -597,6 +597,14 @@ function renderSavedArchives(items = []) {
     const actions = document.createElement('div');
     actions.className = 'archive-link-actions';
 
+    const moreActions = document.createElement('details');
+    moreActions.className = 'archive-link-tools';
+    const moreSummary = document.createElement('summary');
+    moreSummary.textContent = 'Ещё';
+    const secondaryActions = document.createElement('div');
+    secondaryActions.className = 'archive-link-secondary';
+    moreActions.append(moreSummary, secondaryActions);
+
     const resume = document.createElement('button');
     resume.className = 'archive-link-open';
     resume.type = 'button';
@@ -655,7 +663,7 @@ function renderSavedArchives(items = []) {
         copyButton.disabled = false;
       }
     };
-    actions.appendChild(copyButton);
+    secondaryActions.appendChild(copyButton);
 
     if (!item.isFragment && !item.partial) {
       const reconcileButton = document.createElement('button');
@@ -680,7 +688,7 @@ function renderSavedArchives(items = []) {
           reconcileButton.disabled = false;
         }
       };
-      actions.appendChild(reconcileButton);
+      secondaryActions.appendChild(reconcileButton);
 
       const imagesButton = document.createElement('button');
       imagesButton.className = 'archive-link-open';
@@ -704,7 +712,7 @@ function renderSavedArchives(items = []) {
           imagesButton.disabled = false;
         }
       };
-      actions.appendChild(imagesButton);
+      secondaryActions.appendChild(imagesButton);
     }
 
     if (item.docUrl) {
@@ -802,7 +810,7 @@ function renderSavedArchives(items = []) {
     editLinkedDoc.textContent = item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc';
     editLinkedDoc.disabled = Boolean(busy || item.isFragment);
     editLinkedDoc.classList.toggle('hidden', Boolean(item.isFragment));
-    actions.appendChild(editLinkedDoc);
+    secondaryActions.appendChild(editLinkedDoc);
 
     const plan = document.createElement('button');
     plan.className = 'archive-link-more';
@@ -813,7 +821,7 @@ function renderSavedArchives(items = []) {
       const url = chrome.runtime.getURL('planner.html?archiveId=' + encodeURIComponent(item.id));
       await chrome.tabs.create({ url });
     };
-    actions.appendChild(plan);
+    secondaryActions.appendChild(plan);
 
     const deleteSaved = document.createElement('button');
     deleteSaved.type = 'button';
@@ -841,7 +849,7 @@ function renderSavedArchives(items = []) {
         deleteSaved.disabled = false;
       }
     };
-    actions.appendChild(deleteSaved);
+    secondaryActions.appendChild(deleteSaved);
 
     const destinationEditor = document.createElement('div');
     destinationEditor.className = 'archive-destination-editor hidden';
@@ -926,7 +934,7 @@ function renderSavedArchives(items = []) {
       if (!destinationEditor.classList.contains('hidden')) destinationInput.focus();
     };
 
-    row.append(main, actions, destinationEditor);
+    row.append(main, actions, moreActions, destinationEditor);
     list.appendChild(row);
   }
 }
