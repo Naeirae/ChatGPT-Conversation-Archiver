@@ -3211,7 +3211,10 @@ function speakerLabel(role, settings) {
   if (role === 'user') return settings.userName ? `${settings.userName}:` : 'Пользователь:';
   return settings.assistantName ? `${settings.assistantName}:` : 'ChatGPT:';
 }
-function messageHtmlForExport(message, { stripImages = false } = {}) {
+function messageHtmlForExport(message, {
+  stripImages = false,
+  preferOriginalImageSrc = false
+} = {}) {
   let html = String(message?.html || `<p>${escapeHtml(message?.text || '')}</p>`);
 
   html = html.replace(/<img\b[^>]*>/gi, tag => {
@@ -3221,7 +3224,9 @@ function messageHtmlForExport(message, { stripImages = false } = {}) {
 
     if (stripImages) return '';
 
-    const src = image?.dataUrl || image?.src || '';
+    const src = preferOriginalImageSrc
+      ? (image?.src || image?.dataUrl || '')
+      : (image?.dataUrl || image?.src || '');
     if (!src) return '';
 
     const escaped = escapeHtml(src);
@@ -3269,7 +3274,10 @@ function buildRichHtml(conversation, settings, options = {}) {
       chunks.push(msg.reasoningHtml);
       chunks.push('</div>');
     }
-    chunks.push(`<div>${messageHtmlForExport(msg, { stripImages: Boolean(options.stripImages) })}</div>`);
+    chunks.push(`<div>${messageHtmlForExport(msg, {
+      stripImages: Boolean(options.stripImages),
+      preferOriginalImageSrc: Boolean(options.preferOriginalImageSrc)
+    })}</div>`);
     chunks.push('</div>');
     chunks.push('<p><br></p>');
   }
@@ -4298,15 +4306,21 @@ async function pasteArchiveIntoGoogleDoc(
 ) {
   let attached = false;
   let imageInsertedCount = 0;
+  let imageInlinePasteCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
 
-  const flushText = async (buffer, withHeader) => {
+  const pasteChunk = async (
+    buffer,
+    withHeader,
+    { stripImages = true, preferOriginalImageSrc = false } = {}
+  ) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
-      stripImages: true
+      stripImages,
+      preferOriginalImageSrc
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -4319,7 +4333,35 @@ async function pasteArchiveIntoGoogleDoc(
     await dispatchKey(tabId, 'End', 'End', 35, 2);
     await sleep(100);
     await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
-    await sleep(450);
+    await sleep(stripImages ? 450 : 950);
+  };
+
+  const pasteBinaryImages = async message => {
+    const ready = messageImagesReady(message);
+    const failed = (message.images || []).filter(image => !image?.dataUrl);
+
+    for (const image of ready) {
+      const copied = await copyImageClipboardInGoogleDocs(tabId, image);
+      if (!copied?.ok) {
+        imageFailedCount++;
+        failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
+        continue;
+      }
+
+      await focusGoogleDocEditor(tabId);
+      await dispatchKey(tabId, 'End', 'End', 35, 2);
+      await sleep(100);
+      await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
+      await sleep(850);
+      await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+      await sleep(120);
+      imageInsertedCount++;
+    }
+
+    for (const image of failed) {
+      imageFailedCount++;
+      failedImages.push({ src: image.src || '', error: image.binaryError || 'binary unavailable' });
+    }
   };
 
   try {
@@ -4336,41 +4378,44 @@ async function pasteArchiveIntoGoogleDoc(
     let headerPending = includeHeader;
 
     for (const message of messages || []) {
-      buffer.push(message);
-      const ready = messageImagesReady(message);
-      const failed = (message.images || []).filter(image => !image?.dataUrl);
-
-      if (!ready.length && !failed.length) continue;
-
-      await flushText(buffer, headerPending);
-      buffer = [];
-      headerPending = false;
-
-      for (const image of ready) {
-        const copied = await copyImageClipboardInGoogleDocs(tabId, image);
-        if (!copied?.ok) {
-          imageFailedCount++;
-          failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
-          continue;
-        }
-
-        await focusGoogleDocEditor(tabId);
-        await dispatchKey(tabId, 'End', 'End', 35, 2);
-        await sleep(100);
-        await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
-        await sleep(850);
-        await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
-        await sleep(120);
-        imageInsertedCount++;
+      const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+      if (!images.length) {
+        buffer.push(message);
+        continue;
       }
 
-      for (const image of failed) {
-        imageFailedCount++;
-        failedImages.push({ src: image.src || '', error: image.binaryError || 'binary unavailable' });
+      // Restore the pre-34f7bcb path that was observed to work in Google Docs:
+      // text and image markup for an image-bearing message travel through one
+      // rich HTML clipboard paste, using the original ChatGPT image URL first.
+      if (buffer.length) {
+        await pasteChunk(buffer, headerPending, { stripImages: true });
+        buffer = [];
+        headerPending = false;
+      }
+
+      try {
+        await pasteChunk([message], headerPending, {
+          stripImages: false,
+          preferOriginalImageSrc: true
+        });
+        headerPending = false;
+        imageInlinePasteCount += images.length;
+      } catch (error) {
+        // If the old rich-HTML route itself errors, keep the newer binary
+        // clipboard path as a fallback instead of losing the whole export.
+        await pasteChunk([message], headerPending, { stripImages: true });
+        headerPending = false;
+        await pasteBinaryImages(message);
+        if (!imageInsertedCount && !imageFailedCount) {
+          failedImages.push({
+            src: images[0]?.src || '',
+            error: error?.message || String(error)
+          });
+        }
       }
     }
 
-    await flushText(buffer, headerPending);
+    await pasteChunk(buffer, headerPending, { stripImages: true });
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
@@ -4378,6 +4423,7 @@ async function pasteArchiveIntoGoogleDoc(
   return {
     tab: await chrome.tabs.get(tabId),
     imageInsertedCount,
+    imageInlinePasteCount,
     imageFailedCount,
     failedImages
   };
