@@ -2117,6 +2117,24 @@ $('captureInfoToggle').onclick = () => {
   button.setAttribute('aria-expanded', opening ? 'true' : 'false');
 };
 
+$('fragmentToggle').onclick = () => {
+  const panel = $('fragmentPanel');
+  const button = $('fragmentToggle');
+  const opening = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !opening);
+  button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  button.textContent = opening ? 'Скрыть фрагмент и границы' : 'Фрагмент и границы';
+};
+
+$('archiveMoreToggle').onclick = () => {
+  const panel = $('archiveMoreActions');
+  const button = $('archiveMoreToggle');
+  const opening = panel.classList.contains('hidden');
+  panel.classList.toggle('hidden', !opening);
+  button.setAttribute('aria-expanded', opening ? 'true' : 'false');
+  button.textContent = opening ? 'Скрыть' : 'Ещё';
+};
+
 $('userName').oninput = e => saveSettings({ userName: e.target.value });
 $('assistantName').oninput = e => saveSettings({ assistantName: e.target.value });
 $('alignUserRight').onchange = e => saveSettings({ alignUserRight: e.target.checked });
