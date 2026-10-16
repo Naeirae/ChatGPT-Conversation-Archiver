@@ -773,6 +773,13 @@ async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
   return captureSavedArchive(archiveId, 'continue', captureTarget);
 }
 
+async function selectSavedArchive(archiveId = '') {
+  const archive = await getArchive(archiveId);
+  if (!archive?.id) throw new Error('Сохранённый чат не найден.');
+  await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+  return { ok: true, archive: summarize(archive) };
+}
+
 function compareVersions(left = '', right = '') {
   const a = String(left).split('.').map(value => Number(value) || 0);
   const b = String(right).split('.').map(value => Number(value) || 0);
@@ -5474,6 +5481,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           message.archiveId || '',
           message.captureTarget || 'copy'
         );
+      case 'ARCHIVER_SELECT_SAVED_ARCHIVE':
+        return await selectSavedArchive(message.archiveId || '');
       case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE':
         return await captureSavedArchive(
           message.archiveId || '',
