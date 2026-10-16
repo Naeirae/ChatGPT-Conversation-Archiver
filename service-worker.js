@@ -693,6 +693,7 @@ async function listLinkedArchives() {
       imageCount: archive.imageCount || 0,
       imageBinaryReady: archive.imageBinaryReady || 0,
       imageBinaryFailed: archive.imageBinaryFailed || 0,
+      imageRecoveredCount: recoveredImages,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
       docUrl: exactDocUrl,
@@ -3151,9 +3152,18 @@ async function handleCaptureComplete(message) {
 
   if (message.mode === 'reconcile') {
     const repaired = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
-    const finalMessage = repaired
-      ? ('Сверка и добор завершены: восстановлено ' + repaired + ' сообщений. Локальный архив обновлён.')
-      : 'Сверка завершена: пропущенных сообщений не найдено; локальный архив подтверждён.';
+    const recoveredImages = Number(message.imageRecoveredCount || archive.lastImageRecoveredCount || 0);
+    const imageTotal = Number(archive.imageCount || 0);
+    const imageReady = Number(archive.imageBinaryReady || 0);
+    const imageFailed = Number(archive.imageBinaryFailed || 0);
+    const finalMessage =
+      'Сверка завершена.' +
+      (repaired ? ' Восстановлено сообщений: ' + repaired + '.' : ' Сообщения совпадают.') +
+      (imageTotal
+        ? ' Картинки: готово ' + imageReady + '/' + imageTotal +
+          (recoveredImages ? ', восстановлено ' + recoveredImages : '') +
+          (imageFailed ? ', не удалось ' + imageFailed : '') + '.'
+        : '');
 
     const next = await appendRunLog({
       status: 'done',
@@ -3246,9 +3256,9 @@ async function handleCaptureComplete(message) {
       : 'Переписка собрана.';
 
   if (!isContinuation && !isDraftRecovery && Number(archive.imageCount || 0) > 0) {
-    finalMessage += ' Изображения в локальном архиве: ' + Number(archive.imageCount || 0) +
-      '; бинарно готовы ' + Number(archive.imageBinaryReady || 0) +
-      ', ошибок ' + Number(archive.imageBinaryFailed || 0) + '.';
+    finalMessage += ' Картинки в локальном архиве: ' + Number(archive.imageCount || 0) +
+      '; готово ' + Number(archive.imageBinaryReady || 0) +
+      ', не удалось ' + Number(archive.imageBinaryFailed || 0) + '.';
   }
 
   if (shouldAutoAppend) {
