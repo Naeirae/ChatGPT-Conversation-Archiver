@@ -108,14 +108,18 @@ function renderCaptureProgress(job, running) {
   const imageTotal = Number(job?.imageCount || 0);
   const imageReady = Number(job?.imageBinaryReady || 0);
   const imageFailed = Number(job?.imageBinaryFailed || 0);
-  if (imageTotal || job?.phase === 'finalizing') {
-    parts.push('изображений найдено: ' + imageTotal);
-    if (job?.phase === 'finalizing') {
-      parts.push('сохранено бинарно: ' + imageReady);
-      if (imageFailed) parts.push('ошибок изображений: ' + imageFailed);
+  const imageProcessed = Number(job?.imageBinaryProcessed || 0);
+  const imageHydrationTotal = Number(job?.imageBinaryTotal || 0);
+  if (imageTotal || imageHydrationTotal || job?.phase === 'finalizing') {
+    if (imageHydrationTotal) {
+      parts.push('картинки: ' + imageProcessed + '/' + imageHydrationTotal);
     } else if (imageTotal) {
-      parts.push('бинарное сохранение: на этапе 3');
+      parts.push('картинок найдено: ' + imageTotal);
     }
+    if (job?.phase === 'finalizing' && imageReady) {
+      parts.push('готово: ' + imageReady);
+    }
+    if (imageFailed) parts.push('не удалось: ' + imageFailed);
   }
   if (job?.startedAt) {
     parts.push(formatDuration(Date.now() - job.startedAt));
@@ -150,7 +154,7 @@ function renderRunLog(job) {
         : job.captureMode === 'continue'
           ? 'продолжение'
           : job.captureMode === 'reconcile'
-            ? 'сверка и добор сообщений'
+            ? 'сверка архива'
             : job.captureMode === 'images-draft'
               ? 'сверка изображений незавершённой части'
               : job.captureMode === 'images'
@@ -164,8 +168,8 @@ function renderRunLog(job) {
   meta.push((job.count || 0) + ' собрано');
   if (Number(job.imageCount || 0)) {
     meta.push(
-      Number(job.imageCount || 0) + ' изображений · ' +
-      Number(job.imageBinaryReady || 0) + ' бинарно'
+      Number(job.imageCount || 0) + ' изображений · готово ' +
+      Number(job.imageBinaryReady || 0)
     );
   }
   if (job.draftCount) meta.push(job.draftCount + ' в незавершённом сборе');
@@ -669,7 +673,7 @@ function renderSavedArchives(items = []) {
       const reconcileButton = document.createElement('button');
       reconcileButton.className = 'archive-link-open';
       reconcileButton.type = 'button';
-      reconcileButton.textContent = 'Сверить и добрать';
+      reconcileButton.textContent = 'Сверить';
       reconcileButton.disabled = busy;
       reconcileButton.onclick = async () => {
         reconcileButton.disabled = true;
@@ -690,29 +694,6 @@ function renderSavedArchives(items = []) {
       };
       secondaryActions.appendChild(reconcileButton);
 
-      const imagesButton = document.createElement('button');
-      imagesButton.className = 'archive-link-open';
-      imagesButton.type = 'button';
-      imagesButton.textContent = 'Сверить изображения';
-      imagesButton.disabled = busy;
-      imagesButton.onclick = async () => {
-        imagesButton.disabled = true;
-        setStatus('Открываю исходный чат и сверяю изображения выбранного архива…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',
-            archiveId: item.id,
-            captureTarget: $('captureTarget').value
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сверку изображений.');
-          render({ ...state, job: result.job });
-          startPolling();
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-          imagesButton.disabled = false;
-        }
-      };
-      secondaryActions.appendChild(imagesButton);
     }
 
     if (item.docUrl) {
@@ -1346,8 +1327,8 @@ function render(data) {
   $('archiveTitle').textContent = archive?.title || '';
   $('archiveMeta').textContent = archive
     ? ((archive.messageCount || 0) + ' сообщений · ' + (archive.imageCount || 0) + ' изображений' +
-      ' · подготовлено ' + (archive.imageBinaryReady || 0) +
-      (archive.imageBinaryFailed ? ' · не подготовлено ' + archive.imageBinaryFailed : '') +
+      ' · картинки готовы ' + (archive.imageBinaryReady || 0) + '/' + (archive.imageCount || 0) +
+      (archive.imageBinaryFailed ? ' · не удалось ' + archive.imageBinaryFailed : '') +
       (archive.lastImageRecoveredCount ? ' · добор изображений +' + archive.lastImageRecoveredCount : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
@@ -1379,7 +1360,6 @@ function render(data) {
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
   $('reconcileArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
-  $('recoverImages').disabled = Boolean(running || !archive || !archive.sourceUrl);
   $('deleteArchive').disabled = Boolean(running || !archive);
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
@@ -1418,10 +1398,14 @@ function render(data) {
     );
   } else if (job?.status === 'done' && job?.captureMode === 'reconcile') {
     const repaired = Number(job.addedCount || archive?.lastCaptureAddedCount || 0);
+    const imageTotal = Number(archive?.imageCount || 0);
+    const imageReady = Number(archive?.imageBinaryReady || 0);
+    const imageFailed = Number(archive?.imageBinaryFailed || 0);
     setStatus(
-      repaired
-        ? 'Сверка завершена: восстановлено ' + repaired + ' сообщений. Локальный архив обновлён.'
-        : 'Сверка завершена: пропущенных сообщений не найдено.'
+      'Сверка завершена.' +
+      (repaired ? ' Восстановлено сообщений: ' + repaired + '.' : ' Сообщения совпадают.') +
+      (imageTotal ? ' Картинки: готово ' + imageReady + '/' + imageTotal +
+        (imageFailed ? ', не удалось ' + imageFailed : '') + '.' : '')
     );
   } else if (job?.status === 'done' && job?.captureMode === 'images') {
     const recovered = Number(job.imageRecoveredCount || archive?.lastImageRecoveredCount || 0);
@@ -1927,7 +1911,7 @@ $('reconcileArchive').onclick = async () => {
     return;
   }
   $('reconcileArchive').disabled = true;
-  setStatus('Открываю исходный чат и сверяю локальный архив, добирая пропущенные сообщения…');
+  setStatus('Открываю исходный чат и сверяю архив: сообщения и картинки…');
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
@@ -1946,34 +1930,6 @@ $('reconcileArchive').onclick = async () => {
   } catch (error) {
     setStatus(error.message || String(error), true);
     $('reconcileArchive').disabled = false;
-  }
-};
-
-$('recoverImages').onclick = async () => {
-  if (!state?.archive) {
-    setStatus('Сначала нужен локальный архив этого чата.', true);
-    return;
-  }
-  $('recoverImages').disabled = true;
-  setStatus('Открываю исходный чат и сверяю изображения локального архива…');
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE',
-      archiveId: state.archive.id,
-      captureTarget: $('captureTarget').value
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить добор изображений.');
-    render({
-      ...state,
-      job: result.job,
-      archive: state?.archive || null,
-      unfinishedPass: null,
-      canContinue: true
-    });
-    startPolling();
-  } catch (error) {
-    setStatus(error.message || String(error), true);
-    $('recoverImages').disabled = false;
   }
 };
 
@@ -2073,12 +2029,10 @@ $('newDoc').onclick = async () => {
     const imageInline = Number(result.imageInlinePasteCount || 0);
     const imageInserted = Number(result.imageInsertedCount || 0);
     const imageFailed = Number(result.imageFailedCount || 0);
-    const imagePart = (imageInline || imageInserted || imageFailed)
-      ? ' Изображения: ' +
-        (imageInline ? imageInline + ' передано через rich HTML' : '') +
-        (imageInline && imageInserted ? ', ' : '') +
-        (imageInserted ? imageInserted + ' вставлено бинарно' : '') +
-        (imageFailed ? ', ' + imageFailed + ' ошибок' : '') + '.'
+    const imageAdded = imageInserted || imageInline;
+    const imagePart = (imageAdded || imageFailed)
+      ? ' Картинки: добавлено ' + imageAdded +
+        (imageFailed ? ', не удалось ' + imageFailed : '') + '.'
       : '';
     setStatus(`Готово. В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` + imagePart);
     await getState();
@@ -2105,12 +2059,10 @@ $('activeDoc').onclick = async () => {
     const imageFailed = Number(result.imageFailedCount || 0);
     const imageAttempted = Number(result.recoveredImagePatchCandidateCount || 0);
     const failureReason = String(result.firstImageFailure || '').trim();
-    const imagePart = (imageInline || imageInserted || imageFailed || imageAttempted)
-      ? ' Изображения: ' +
-        (imageInline ? imageInline + ' передано через rich HTML' : '') +
-        (imageInline && imageInserted ? ', ' : '') +
-        (imageInserted ? imageInserted + ' вставлено бинарно' : '') +
-        (imageFailed ? ', ' + imageFailed + ' не вставлено' : '') +
+    const imageAdded = imageInserted || imageInline;
+    const imagePart = (imageAdded || imageFailed || imageAttempted)
+      ? ' Картинки: добавлено ' + imageAdded +
+        (imageFailed ? ', не удалось ' + imageFailed : '') +
         (failureReason ? '. Причина: ' + failureReason : '') + '.'
       : '';
 
