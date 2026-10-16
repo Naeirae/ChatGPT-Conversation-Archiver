@@ -44,10 +44,10 @@ function writeWithExecCommand(html, text) {
 
 
 
-async function writeImageWithExecCommand(dataUrl, alt = '') {
-  const source = String(dataUrl || '');
-  if (!/^data:image\//i.test(source)) {
-    throw new Error('Нет подготовленных бинарных данных изображения.');
+async function writeImageWithExecCommand(sourceValue, alt = '') {
+  const source = String(sourceValue || '').trim();
+  if (!/^data:image\//i.test(source) && !/^https?:\/\//i.test(source)) {
+    throw new Error('Нет доступного источника изображения для буфера обмена.');
   }
 
   const host = document.createElement('div');
@@ -65,13 +65,21 @@ async function writeImageWithExecCommand(dataUrl, alt = '') {
   document.body.appendChild(host);
 
   try {
-    if (img.decode) {
-      await img.decode();
-    } else if (!img.complete) {
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = () => reject(new Error('Изображение не декодировалось в offscreen clipboard.'));
-      });
+    await Promise.race([
+      img.decode
+        ? img.decode()
+        : new Promise((resolve, reject) => {
+            if (img.complete && img.naturalWidth) return resolve();
+            img.onload = resolve;
+            img.onerror = () => reject(new Error('Изображение не загрузилось.'));
+          }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Изображение не загрузилось за 15 секунд.')), 15000)
+      )
+    ]);
+
+    if (!img.naturalWidth || !img.naturalHeight) {
+      throw new Error('Изображение загрузилось без размеров.');
     }
 
     const selection = getSelection();
@@ -86,8 +94,12 @@ async function writeImageWithExecCommand(dataUrl, alt = '') {
 
     return {
       ok: true,
-      method: 'offscreen-image-selection',
-      size: source.length
+      method: /^data:image\//i.test(source)
+        ? 'offscreen-data-image-selection'
+        : 'offscreen-remote-image-selection',
+      size: source.length,
+      width: img.naturalWidth,
+      height: img.naturalHeight
     };
   } finally {
     getSelection()?.removeAllRanges?.();
@@ -132,7 +144,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     if (message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE') {
       return await writeImageWithExecCommand(
-        String(message.dataUrl || ''),
+        String(message.dataUrl || message.src || ''),
         String(message.alt || '')
       );
     }
