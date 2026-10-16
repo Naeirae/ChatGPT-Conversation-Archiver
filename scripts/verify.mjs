@@ -58,6 +58,10 @@ try {
     fail('service-worker.js: missing compare-current route');
   }
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
+  if (!contentSource.includes("return 'turn:' + wrapperKey + ':' + role + ':'") ||
+      !contentSource.includes('hashText(normalizeMatchText(turnMessageText(turn)))')) {
+    fail('long-chat identity: virtual data-turn-key wrappers must remain message-qualified; wrapper keys are recyclable');
+  }
   if (/activeCaptureJob\s*:/.test(contentSource)) {
     fail('content-chatgpt.js: capture page must never overwrite worker-owned activeCaptureJob');
   }
