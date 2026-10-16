@@ -1282,3 +1282,135 @@ body.tour-open .header-popover {
   opacity:.58;
   cursor:not-allowed;
 }
+
+
+/* 0.4.24 flat popup hierarchy */
+.capture-secondary-bar {
+  display:flex;
+  justify-content:flex-end;
+  margin-top:6px;
+}
+.capture-secondary-bar .text-button,
+.archive-more-toggle {
+  width:auto;
+  margin:0;
+  padding:3px 0;
+  border:0;
+  background:transparent;
+  color:var(--muted);
+  font-size:10px;
+}
+.capture-secondary-bar .text-button:hover:not(:disabled),
+.archive-more-toggle:hover:not(:disabled) {
+  border:0;
+  background:transparent;
+  color:var(--accent);
+}
+.capture-advanced {
+  margin-top:7px;
+  padding:8px;
+  border:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+  border-radius:10px;
+  background:color-mix(in srgb,var(--panel) 78%,transparent);
+}
+.capture-advanced .compact-actions {
+  margin-top:6px;
+}
+
+.saved-run-card {
+  margin-top:10px;
+  padding:10px;
+  border-top:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+}
+.saved-run-card > strong {
+  display:block;
+  margin-top:5px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12px;
+}
+.archive-summary-head {
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.archive-state-label {
+  font-size:11px;
+  font-weight:750;
+}
+.saved-run-card .archive-primary-actions {
+  margin-top:9px;
+}
+.saved-run-card .archive-more-actions {
+  margin-top:6px;
+  padding-top:6px;
+  border-top:1px solid color-mix(in srgb,var(--border) 65%,transparent);
+}
+.saved-run-card .archive-more-actions button {
+  width:auto;
+}
+
+.flat-panel-heading {
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:10px;
+  padding:8px 10px;
+}
+.flat-panel-heading small {
+  color:var(--muted);
+  font-size:10px;
+  font-weight:600;
+}
+.unfinished-panel .history-list {
+  padding:0 10px 8px;
+}
+
+.technical-block {
+  margin:0;
+  padding:9px 0;
+  border-top:1px solid color-mix(in srgb,var(--border) 70%,transparent);
+}
+.technical-block:first-child {
+  border-top:0;
+}
+.technical-block > strong {
+  display:block;
+  font-size:11px;
+}
+.technical-panel .run-log,
+.technical-panel .history-panel {
+  margin:0;
+  padding:9px 0;
+}
+
+.archive-link-tools {
+  display:block;
+}
+.archive-link-more-toggle {
+  width:auto;
+  margin:0;
+  padding:4px 0;
+  border:0;
+  background:transparent;
+  color:var(--muted);
+  font-size:10px;
+  font-weight:700;
+}
+.archive-link-more-toggle:hover:not(:disabled) {
+  border:0;
+  background:transparent;
+  color:var(--accent);
+}
+.archive-link-secondary.hidden {
+  display:none !important;
+}
+
+/* Avoid accidental styling from the old nested-details implementation. */
+.archive-link-tools > summary,
+.saved-run-details,
+.saved-run-body {
+  all:unset;
+}
