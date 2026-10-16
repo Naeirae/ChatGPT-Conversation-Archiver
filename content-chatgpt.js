@@ -3855,6 +3855,7 @@
       let addedCount = capturedMessages.length;
       let previousCount = 0;
       let recoveredImageRefs = [];
+      let pendingDocImageRefs = [];
 
       if (mode === 'resume-draft' || mode === 'retry-walk') {
         if (!existingDraftId) throw new Error('Для продолжения нужен сохранённый незавершённый проход.');
@@ -3930,6 +3931,9 @@
         if (!existing?.messages?.length) throw new Error('Локальный архив для сверки недоступен.');
 
         previousCount = existing.messages.length;
+        pendingDocImageRefs = Array.isArray(existing.pendingDocImageRefs)
+          ? existing.pendingDocImageRefs
+          : [];
         const reconciled = reconcileVerifiedCaptureWithArchive(capturedMessages, existing.messages);
         if (!reconciled.ok) {
           const index = Number(reconciled.missingArchiveIndex || 0) + 1;
@@ -3957,12 +3961,13 @@
           const key = ref.id || ref.signature || ref.externalSignature;
           const previous = key ? existingByRef.get(key) : null;
           const previousImages = new Map(
-            (previous?.images || []).map(image => [String(image?.src || ''), image])
+            (previous?.images || []).map(image => [imageIdentity(image?.src), image])
           );
           for (const image of message.images || []) {
             const src = String(image?.src || '');
-            if (!src) continue;
-            const before = previousImages.get(src);
+            const identity = imageIdentity(src);
+            if (!identity) continue;
+            const before = previousImages.get(identity);
             if (!before) {
               recoveredImageRefs.push({
                 messageId: message.id || '',
@@ -3979,6 +3984,9 @@
         if (!existing?.messages?.length) throw new Error('Локальный архив для добора изображений недоступен.');
 
         previousCount = existing.messages.length;
+        pendingDocImageRefs = Array.isArray(existing.pendingDocImageRefs)
+          ? existing.pendingDocImageRefs
+          : [];
 
         // The upward and downward scans can each expose a different subset of
         // lazy-loaded images. Union them before merging into the saved archive.
@@ -4008,6 +4016,9 @@
         if (!existing?.messages) throw new Error('Локальный архив для продолжения недоступен.');
 
         previousCount = existing.messages.length;
+        pendingDocImageRefs = Array.isArray(existing.pendingDocImageRefs)
+          ? existing.pendingDocImageRefs
+          : [];
         const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
         const existingSignatures = new Set(
           existing.messages
@@ -4162,6 +4173,7 @@
         lastCaptureAddedCount: addedCount,
         lastImageRecoveredCount: recoveredImageRefs.length,
         lastRecoveredImageRefs: recoveredImageRefs,
+        pendingDocImageRefs,
         previousMessageCount: previousCount,
         reasoningMessageCount,
         reasoningBlockCount,
