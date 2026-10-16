@@ -201,6 +201,35 @@ test('one-off doc export never becomes the recovered canonical link', async () =
   assert.equal((await store.getDocExport('doc-once')).linkEligible, false);
 });
 
+test('registerArchive exposes only completed local archives in the saved library', async () => {
+  const storage = fakeStorage();
+  const store = createArchiveStore(storage);
+
+  await store.registerArchive({
+    id: 'saved-1',
+    title: 'Готовый чат',
+    sourceUrl: 'https://chatgpt.com/c/conv-saved',
+    capturedAt: '2026-10-16T18:00:00Z',
+    complete: true,
+    partial: false,
+    messages: [{ id: 'm1' }]
+  });
+  await store.registerArchive({
+    id: 'partial-1',
+    title: 'Незавершённый чат',
+    sourceUrl: 'https://chatgpt.com/c/conv-partial',
+    capturedAt: '2026-10-16T18:05:00Z',
+    complete: false,
+    partial: true,
+    messages: [{ id: 'm1' }]
+  });
+
+  const library = storage.snapshot()[STORAGE_KEYS.archiveLibrary];
+  assert.equal(library['saved-1'].title, 'Готовый чат');
+  assert.equal(library['saved-1'].sourceUrl, 'https://chatgpt.com/c/conv-saved');
+  assert.equal(library['partial-1'], undefined);
+});
+
 test('temporary archives can be removed without touching other state', async () => {
   const storage = fakeStorage({
     [STORAGE_KEYS.archivePrefix + 'temp']: { id: 'temp' },
@@ -221,6 +250,10 @@ test('deleteArchive clears canonical index and last pointer without touching lin
     [STORAGE_KEYS.archiveIndex]: {
       'chatgpt.com:conv-bad': 'bad',
       'chatgpt.com:conv-good': 'good'
+    },
+    [STORAGE_KEYS.archiveLibrary]: {
+      bad: { title: 'Bad' },
+      good: { title: 'Good' }
     },
     [STORAGE_KEYS.archivePrefix + 'bad']: {
       id: 'bad',
@@ -245,6 +278,8 @@ test('deleteArchive clears canonical index and last pointer without touching lin
   assert.equal(snapshot[STORAGE_KEYS.lastArchiveId], undefined);
   assert.equal(snapshot[STORAGE_KEYS.archiveIndex]['chatgpt.com:conv-bad'], undefined);
   assert.equal(snapshot[STORAGE_KEYS.archiveIndex]['chatgpt.com:conv-good'], 'good');
+  assert.equal(snapshot[STORAGE_KEYS.archiveLibrary].bad, undefined);
+  assert.equal(snapshot[STORAGE_KEYS.archiveLibrary].good.title, 'Good');
   assert.equal(snapshot[STORAGE_KEYS.docLinks]['chatgpt.com:conv-bad'].url, 'https://docs.google.com/document/d/doc/edit');
 });
 
