@@ -783,6 +783,49 @@ function compareVersions(left = '', right = '') {
   return 0;
 }
 
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fetchImageBinaryForContent(src = '') {
+  const url = String(src || '').trim();
+  if (!/^https?:\/\//i.test(url)) {
+    throw new Error('Worker fallback supports only http(s) image URLs.');
+  }
+
+  const response = await fetch(url, {
+    credentials: 'include',
+    cache: 'force-cache',
+    redirect: 'follow'
+  });
+  if (!response.ok) throw new Error('HTTP ' + response.status);
+
+  const blob = await response.blob();
+  const type = String(blob.type || response.headers.get('content-type') || '').split(';')[0].trim();
+  if (!type.startsWith('image/')) {
+    throw new Error('Полученный ресурс не является изображением: ' + (type || 'unknown content-type'));
+  }
+  if (!blob.size) throw new Error('Пустой файл изображения.');
+  if (blob.size > 12 * 1024 * 1024) {
+    throw new Error('Изображение больше 12 МБ; бинарная вставка пропущена.');
+  }
+
+  const buffer = await blob.arrayBuffer();
+  return {
+    ok: true,
+    dataUrl: 'data:' + type + ';base64,' + arrayBufferToBase64(buffer),
+    mimeType: type,
+    byteSize: blob.size,
+    finalUrl: response.url || url
+  };
+}
+
 async function checkForUpdate() {
   const localVersion = chrome.runtime.getManifest().version || '0.0.0';
   try {
@@ -4435,47 +4478,45 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    // Reproduce the pre-binary export path exactly: one rich HTML clipboard
-    // payload for the whole exported message range. This is the last version
-    // the user observed inserting ChatGPT images into Google Docs reliably.
-    // The newer per-image binary/debugger path remains a fallback only.
-    if (imageBearingCount > 0) {
-      try {
-        await pasteChunk(messages || [], includeHeader, {
-          stripImages: false,
-          preferOriginalImageSrc: true
-        });
-        imageInlinePasteCount = imageBearingCount;
-      } catch (legacyError) {
-        let buffer = [];
-        let headerPending = includeHeader;
+    const binaryReadyCount = (messages || []).reduce(
+      (total, message) => total + messageImagesReady(message).length,
+      0
+    );
 
-        for (const message of messages || []) {
-          const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-          if (!images.length) {
-            buffer.push(message);
-            continue;
-          }
+    if (imageBearingCount > 0 && binaryReadyCount > 0) {
+      // Prefer deterministic binary clipboard insertion whenever hydration
+      // succeeded. A remote-URL rich HTML paste can return success while
+      // Google Docs silently drops every image.
+      let buffer = [];
+      let headerPending = includeHeader;
 
-          if (buffer.length) {
-            await pasteChunk(buffer, headerPending, { stripImages: true });
-            buffer = [];
-            headerPending = false;
-          }
+      for (const message of messages || []) {
+        const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+        if (!images.length) {
+          buffer.push(message);
+          continue;
+        }
 
-          await pasteChunk([message], headerPending, { stripImages: true });
+        if (buffer.length) {
+          await pasteChunk(buffer, headerPending, { stripImages: true });
+          buffer = [];
           headerPending = false;
-          await pasteBinaryImages(message);
         }
 
-        await pasteChunk(buffer, headerPending, { stripImages: true });
-        if (!imageInsertedCount && !imageFailedCount) {
-          failedImages.push({
-            src: '',
-            error: legacyError?.message || String(legacyError)
-          });
-        }
+        await pasteChunk([message], headerPending, { stripImages: true });
+        headerPending = false;
+        await pasteBinaryImages(message);
       }
+
+      await pasteChunk(buffer, headerPending, { stripImages: true });
+    } else if (imageBearingCount > 0) {
+      // Last-resort compatibility path for archives whose binaries are still
+      // unavailable. Report this separately as an attempted rich-HTML transfer.
+      await pasteChunk(messages || [], includeHeader, {
+        stripImages: false,
+        preferOriginalImageSrc: true
+      });
+      imageInlinePasteCount = imageBearingCount;
     } else {
       await pasteChunk(messages || [], includeHeader, { stripImages: true });
     }
@@ -5305,6 +5346,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
     await captureRuntimeReady;
     switch (message?.type) {
+      case 'ARCHIVER_FETCH_IMAGE_BINARY':
+        return await fetchImageBinaryForContent(message.src || '');
       case 'ARCHIVER_CHECK_UPDATE':
         return await checkForUpdate();
       case 'ARCHIVER_TOGGLE_MARKING_CURRENT':

@@ -349,15 +349,21 @@ try {
     fail('service-worker.js: saved-archive reconcile/image routes are missing');
   }
   const offscreenSource = await readFile('offscreen.js', 'utf8');
+  const contentSource = await readFile('content-chatgpt.js', 'utf8');
+  const manifestSource = await readFile('manifest.json', 'utf8');
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'") ||
-      !serviceWorkerSource.includes('preferOriginalImageSrc: true') ||
-      !serviceWorkerSource.includes('one rich HTML clipboard') ||
-      !serviceWorkerSource.includes('await pasteChunk(messages || [], includeHeader, {') ||
+      !serviceWorkerSource.includes('binaryReadyCount > 0') ||
+      !serviceWorkerSource.includes('await pasteBinaryImages(message)') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
+      !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
+      !contentSource.includes("type: 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
+      !contentSource.includes('extension fetch:') ||
+      !manifestSource.includes('https://*.oaiusercontent.com/*') ||
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
-    fail('Google Docs images: exact legacy batch rich-HTML paste must be primary, linked export must aggregate its counter, and privileged binary clipboard must remain as fallback');
+    fail('Google Docs images: cross-origin worker hydration and binary-first export must remain wired; rich HTML is fallback only');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
