@@ -1382,15 +1382,15 @@ function render(data) {
   const savedDocUrl = archiveDestination?.saved && archiveDestination?.kind === 'google-doc'
     ? (archiveDestination.url || '')
     : '';
-  $('archiveStateLabel').textContent = savedDocUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
+  $('archiveStateLabel').textContent = savedDocUrl ? 'Архив подтверждён в Google Docs' : 'Чат сохранён локально';
   $('archiveStateHint').textContent = savedDocUrl
-    ? 'локальная копия также сохранена для продолжения'
-    : (linkedUrl ? 'локально · для переписки есть связанный документ' : 'локально в Chrome');
+    ? 'текст и картинки подтверждены для этой версии архива'
+    : (linkedUrl ? 'есть связанный Google Doc, но текущая версия ещё не подтверждена полностью' : 'локально в Chrome');
   $('archiveDocStatus').textContent = savedDocUrl
-    ? 'Этот локальный архив уже сохранён в документ Google Docs.'
+    ? 'Эта версия архива подтверждена в документе Google Docs.'
     : linkedUrl
-      ? 'Этот архив сохранён локально. Для переписки есть связанный документ: его можно обновить или создать новый документ.'
-      : 'Этот архив сохранён локально. Можно создать для него новый документ Google Docs.';
+      ? 'Связанный Google Doc есть. Нажмите «Обновить Google Doc», чтобы добавить недостающее и проверить картинки.'
+      : 'Google Doc ещё не создан для этой версии архива.';
   $('archiveDocLink').classList.toggle('hidden', !(savedDocUrl || linkedUrl));
   $('archiveDocLink').href = savedDocUrl || linkedUrl || '#';
   $('archiveDocLink').textContent = savedDocUrl
@@ -1401,8 +1401,8 @@ function render(data) {
   // local archive. Export is disabled only while a capture is actively running.
   $('newDoc').disabled = Boolean(running || !archive);
   $('activeDoc').textContent = linkedUrl
-    ? 'Добавить в связанный документ Google Docs'
-    : 'Добавить в открытый документ Google Docs';
+    ? 'Обновить Google Doc'
+    : 'Добавить в открытый Google Doc';
   $('activeDoc').disabled = Boolean(running || !archive);
   $('openPlanner').disabled = Boolean(running || !archive);
   $('reconcileArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
