@@ -4503,6 +4503,7 @@ async function pasteArchiveIntoGoogleDoc(
   let imagePasteAttemptCount = 0;
   let imageProcessedCount = 0;
   let imageFailedCount = 0;
+  let imageVerificationUnavailableCount = 0;
   const failedImages = [];
   const imageBearingCount = (messages || []).reduce(
     (total, message) => total + (message?.images || []).filter(
@@ -4582,6 +4583,7 @@ async function pasteArchiveIntoGoogleDoc(
         imageInsertedCount++;
       } else {
         imageFailedCount++;
+        if (!verified.available) imageVerificationUnavailableCount++;
         failedImages.push({
           src: image.src || '',
           error: verified.available
@@ -4660,12 +4662,9 @@ async function pasteArchiveIntoGoogleDoc(
   }
 
   const finalImageDelta = googleDocImageDelta(imageCountBefore, imageCountAfter);
-  const imageVerificationAvailable = imageBearingCount === 0
-    ? true
-    : Boolean(
-        imageProcessedCount === imageBearingCount &&
-        imageInsertedCount + imageFailedCount >= imageBearingCount
-      );
+  const imageVerificationAvailable = imageBearingCount === 0 || Boolean(
+    imageVerificationUnavailableCount === 0
+  );
   const imageComplete = imageBearingCount === 0 || Boolean(
     imageVerificationAvailable && imageInsertedCount >= imageBearingCount
   );
@@ -4690,6 +4689,7 @@ async function pasteArchiveIntoGoogleDoc(
     imageInsertedCount,
     imageInlinePasteCount: 0,
     imageFailedCount,
+    imageVerificationUnavailableCount,
     imageVerificationAvailable,
     imageComplete,
     documentImageCount:
