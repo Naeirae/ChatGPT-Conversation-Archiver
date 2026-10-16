@@ -1538,6 +1538,7 @@ async function startCapture({
   const captureStartedAt = Date.now();
   let captureTab = null;
   let domProbe = null;
+  let collectorStarted = false;
 
   await setJob({
     jobId,
@@ -1694,6 +1695,7 @@ async function startCapture({
       resumeNavigation,
       captureRange
     });
+    collectorStarted = true;
 
     if (captureTarget === 'copy') {
       // The capture tab was created inactive; do not steal the user's focus.
@@ -1748,9 +1750,22 @@ async function startCapture({
       linkedDoc: await getLinkedDoc(inspection.href)
     };
   } catch (error) {
-    // Never close a working copy on failure. Even a partially initialized tab
-    // may preserve a useful physical position for diagnosis/recovery.
     const failedCaptureTabId = captureTab?.id || null;
+
+    // A failed launch is not an unfinished capture. Stop any collector that may
+    // have received the start message, and remove an unproductive working copy.
+    // Recovery is reserved for a pass that has actually started and produced
+    // recoverable state/checkpoints.
+    if (collectorStarted && failedCaptureTabId != null) {
+      await chrome.tabs.sendMessage(failedCaptureTabId, {
+        type: 'ARCHIVER_CANCEL_CAPTURE',
+        jobId
+      }).catch(() => {});
+    }
+
+    if (captureTarget === 'copy' && failedCaptureTabId != null && !collectorStarted) {
+      await chrome.tabs.remove(failedCaptureTabId).catch(() => {});
+    }
 
     if (mode === 'sync' && existingArchive?.id) {
       await removeArchive(existingArchive.id).catch(() => {});
@@ -1766,7 +1781,7 @@ async function startCapture({
       jobId,
       tabId: sourceTab.id,
       sourceTabId: sourceTab.id,
-      captureTabId: failedCaptureTabId,
+      captureTabId: collectorStarted ? failedCaptureTabId : null,
       sourceUrl: inspection.href,
       status: 'error',
       phase: 'starting',
@@ -1774,6 +1789,8 @@ async function startCapture({
       captureTarget,
       pendingDocUrl,
       pendingDocMode,
+      recoveryAvailable: false,
+      autoRecoveryPending: false,
       message,
       startedAt: captureStartedAt,
       finishedAt: Date.now(),
@@ -1785,7 +1802,7 @@ async function startCapture({
         phase: 'starting',
         count: 0
       }]
-    });
+    }, { replace: true });
     await recordRunHistory(failedJob);
     throw new Error(message);
   }
@@ -1795,24 +1812,9 @@ async function cancelCapture() {
   const job = await getJob();
   if (!job || !['starting', 'running', 'paused'].includes(job.status)) return { ok: true, job };
 
-  try {
-    if (job.captureTabId != null) {
-      await chrome.tabs.sendMessage(job.captureTabId, { type: 'ARCHIVER_CANCEL_CAPTURE', jobId: job.jobId });
-    }
-  } catch (_) {}
-
-  // Give the content collector time to persist its current draft and report
-  // ARCHIVER_CAPTURE_FAILED(status=cancelled). Do not close the working tab:
-  // its scroll position is the cheapest and most reliable resume checkpoint.
-  const waitUntil = Date.now() + 3500;
-  while (Date.now() < waitUntil) {
-    await sleep(120);
-    const current = await getJob();
-    if (current?.jobId !== job.jobId || current?.status === 'cancelled') {
-      return { ok: true, job: current || job };
-    }
-  }
-
+  // Stop the job in the worker first. From this point physical scrolling/clicks
+  // are rejected immediately, so a slow content-script cleanup cannot keep the
+  // capture visibly alive after the user pressed Stop.
   const preservedDraft = job.draftId ? await getDraft(job.draftId) : null;
   const hasTopBoundary = Boolean(
     ['top', 'boundary'].includes(job.phase || '') &&
@@ -1824,6 +1826,28 @@ async function cancelCapture() {
     job.captureTabId != null &&
     (preservedDraft?.messages?.length || hasTopBoundary)
   );
+
+  const next = await appendRunLog({
+    status: 'cancelled',
+    phase: job.phase || 'top',
+    pauseReason: '',
+    autoRecoveryPending: false,
+    recoveryAvailable: canRecover,
+    draftCount: preservedDraft?.messages?.length || Number(job.draftCount || 0),
+    message: canRecover
+      ? 'Сбор остановлен. Сохранённую часть можно продолжить вручную.'
+      : 'Сбор остановлен.',
+    finishedAt: Date.now()
+  }, {
+    level: 'warn',
+    code: canRecover ? 'RUN_CANCELLED_RECOVERABLE' : 'RUN_CANCELLED',
+    message: canRecover
+      ? 'Сбор немедленно остановлен пользователем; сохранённая точка оставлена только для ручного продолжения.'
+      : 'Сбор немедленно остановлен пользователем.',
+    phase: job.phase || '',
+    count: Number(job.count || 0)
+  });
+
   if (canRecover && job.draftId) {
     await setDraftRecoveryTab(job.draftId, {
       tabId: job.captureTabId,
@@ -1831,27 +1855,21 @@ async function cancelCapture() {
       sourceTabId: job.sourceTabId ?? job.tabId ?? null,
       captureTarget: job.captureTarget || '',
       jobId: job.jobId
-    });
+    }).catch(() => {});
   }
-  await cleanupTemporaryBaseline(job);
 
-  const next = await appendRunLog({
-    status: 'cancelled',
-    message: canRecover
-      ? 'Сбор остановлен. Сохранённую часть можно продолжить с рабочей вкладки.'
-      : 'Сбор остановлен.',
-    finishedAt: Date.now(),
-    recoveryAvailable: canRecover,
-    draftCount: preservedDraft?.messages?.length || Number(job.draftCount || 0)
-  }, {
-    level: 'warn',
-    code: canRecover ? 'RUN_CANCELLED_RECOVERABLE' : 'RUN_CANCELLED',
-    message: canRecover
-      ? 'Сбор остановлен пользователем; рабочая вкладка и контрольная точка сохранены.'
-      : 'Сбор остановлен пользователем.',
-    phase: job.phase || '',
-    count: Number(job.count || 0)
-  });
+  await cleanupTemporaryBaseline(job).catch(() => {});
+
+  // Best-effort notification after the worker state is already terminal.
+  // The collector may still need a moment to unwind an in-flight fetch, but it
+  // can no longer request physical actions because the worker rejects them.
+  if (job.captureTabId != null) {
+    chrome.tabs.sendMessage(job.captureTabId, {
+      type: 'ARCHIVER_CANCEL_CAPTURE',
+      jobId: job.jobId
+    }).catch(() => {});
+  }
+
   await recordRunHistory(next);
   return { ok: true, job: next };
 }
