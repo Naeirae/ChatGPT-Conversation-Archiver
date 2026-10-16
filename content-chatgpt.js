@@ -1233,63 +1233,128 @@
     return normalizeImageBlob(await response.blob());
   }
 
-  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
-    const unique = new Map();
+  const imageBinaryCache = new Map();
+  const imageBinaryPending = new Map();
+
+  function applyCachedImageBinaries(messages) {
     for (const message of messages || []) {
-      for (const image of message.images || []) {
-        if (!image?.src) continue;
-        if (onlyMissing && image.binaryStatus === 'ready' && image.dataUrl) continue;
-        if (!unique.has(image.src)) unique.set(image.src, []);
-        unique.get(image.src).push(image);
+      for (const image of message?.images || []) {
+        const cached = image?.src ? imageBinaryCache.get(image.src) : null;
+        if (cached) Object.assign(image, cached);
       }
     }
+  }
 
-    let embedded = 0;
-    let failed = 0;
-    let processed = 0;
-    const total = unique.size;
+  function queueImageBinary(image) {
+    const src = String(image?.src || '');
+    if (!src || imageBinaryCache.has(src)) return null;
+    if (imageBinaryPending.has(src)) return imageBinaryPending.get(src);
 
-    for (const [src, refs] of unique) {
-      if (state.cancel) throw new Error('Сбор отменен.');
-
+    const pending = (async () => {
       try {
-        const blob = await fetchImageBinary(refs[0]);
+        const blob = await fetchImageBinary(image);
         const dataUrl = await blobToDataUrl(blob);
-        for (const image of refs) {
-          image.dataUrl = dataUrl;
-          image.mimeType = blob.type || 'image/png';
-          image.byteSize = blob.size || 0;
-          image.binaryStatus = 'ready';
-          image.binaryError = '';
-        }
-        embedded += refs.length;
+        const result = {
+          dataUrl,
+          mimeType: blob.type || 'image/png',
+          byteSize: blob.size || 0,
+          binaryStatus: 'ready',
+          binaryError: ''
+        };
+        imageBinaryCache.set(src, result);
+        return result;
       } catch (error) {
-        const message = error?.message || String(error);
-        for (const image of refs) {
-          image.binaryStatus = 'failed';
-          image.binaryError = message;
-        }
-        failed += refs.length;
+        const result = {
+          dataUrl: '',
+          mimeType: image?.mimeType || '',
+          byteSize: 0,
+          binaryStatus: 'failed',
+          binaryError: error?.message || String(error)
+        };
+        imageBinaryCache.set(src, result);
+        return result;
+      } finally {
+        imageBinaryPending.delete(src);
       }
+    })();
 
+    imageBinaryPending.set(src, pending);
+    return pending;
+  }
+
+  function queueMessageImages(messages) {
+    applyCachedImageBinaries(messages);
+    let queued = 0;
+    for (const message of messages || []) {
+      for (const image of message?.images || []) {
+        if (!image?.src) continue;
+        if (image.binaryStatus === 'ready' && image.dataUrl) {
+          if (!imageBinaryCache.has(image.src)) {
+            imageBinaryCache.set(image.src, {
+              dataUrl: image.dataUrl,
+              mimeType: image.mimeType || 'image/png',
+              byteSize: image.byteSize || 0,
+              binaryStatus: 'ready',
+              binaryError: ''
+            });
+          }
+          continue;
+        }
+        if (!imageBinaryCache.has(image.src) && !imageBinaryPending.has(image.src)) {
+          queueImageBinary(image);
+          queued++;
+        }
+      }
+    }
+    return queued;
+  }
+
+  async function flushQueuedImages(messages, { reportProgress = true } = {}) {
+    queueMessageImages(messages);
+    const srcs = [...new Set(
+      (messages || []).flatMap(message =>
+        (message?.images || []).map(image => String(image?.src || '')).filter(Boolean)
+      )
+    )];
+
+    let processed = 0;
+    for (const src of srcs) {
+      const pending = imageBinaryPending.get(src);
+      if (pending) await pending.catch(() => {});
       processed++;
       if (reportProgress) {
+        applyCachedImageBinaries(messages);
+        const stats = capturedImageStats(messages);
         await progress(
-          'Этап 3/3: забираю изображения · ' + processed + '/' + total,
+          'Этап 3/3: завершаю изображения · ' + processed + '/' + srcs.length,
           messages.length,
           {
             phase: 'finalizing',
             imageBinaryProcessed: processed,
-            imageBinaryTotal: total,
-            imageBinaryReady: embedded,
-            imageBinaryFailed: failed,
+            imageBinaryTotal: srcs.length,
+            imageBinaryReady: stats.ready,
+            imageBinaryFailed: stats.failed,
             force: true
           }
         );
       }
     }
 
-    return { embedded, failed, unique: total };
+    applyCachedImageBinaries(messages);
+    const stats = capturedImageStats(messages);
+    return { embedded: stats.ready, failed: stats.failed, unique: srcs.length };
+  }
+
+  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
+    const targets = onlyMissing
+      ? (messages || []).filter(message =>
+          (message?.images || []).some(image =>
+            image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+          )
+        )
+      : (messages || []);
+
+    return flushQueuedImages(targets, { reportProgress });
   }
 
   async function expandVisible() {
@@ -1309,12 +1374,14 @@
 
   function collect(map, order, settings, stopBoundary = null) {
     const turns = orderedTurns();
+    const captured = [];
 
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
       const message = captureTurn(turn, ordinal, settings);
 
       if (message) {
+        captured.push(message);
         const existing = map.get(message.id);
         if (!existing) {
           order.push(message.id);
@@ -1344,6 +1411,7 @@
       // walking back down.
       if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
     }
+    return captured;
   }
 
   function capturedImageStats(messages) {
@@ -2793,6 +2861,7 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
+    applyCachedImageBinaries(messages);
 
     const canonicalRecoveryDraftId =
       current.draftId || current.recoveryDraftId || '';
@@ -3036,7 +3105,9 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const visibleCaptured = collect(map, order, settings, boundary);
+      queueMessageImages(visibleCaptured);
+      applyCachedImageBinaries([...map.values()]);
 
       if (boundaryIsVisible(boundary)) {
         const stats = capturedImageStats([...map.values()]);
@@ -3103,7 +3174,9 @@
 
     await expandVisible();
     if (settings.includeReasoning) await expandReasoningVisible();
-    collect(map, order, settings, boundary);
+    const finalVisibleCaptured = collect(map, order, settings, boundary);
+    queueMessageImages(finalVisibleCaptured);
+    applyCachedImageBinaries([...map.values()]);
 
     if (!boundaryIsVisible(boundary)) {
       throw new Error(
@@ -4060,6 +4133,7 @@
       if (mode !== 'images-draft' &&
           (chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
+        applyCachedImageBinaries(draftMessages);
 
         let existingRecoveryDraft = null;
         if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
