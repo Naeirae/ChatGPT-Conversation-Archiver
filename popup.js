@@ -605,12 +605,21 @@ function renderSavedArchives(items = []) {
     const actions = document.createElement('div');
     actions.className = 'archive-link-actions';
 
-    const moreActions = document.createElement('details');
+    const moreActions = document.createElement('div');
     moreActions.className = 'archive-link-tools';
-    const moreSummary = document.createElement('summary');
+    const moreSummary = document.createElement('button');
+    moreSummary.type = 'button';
+    moreSummary.className = 'archive-link-more-toggle';
     moreSummary.textContent = 'Ещё';
+    moreSummary.setAttribute('aria-expanded', 'false');
     const secondaryActions = document.createElement('div');
-    secondaryActions.className = 'archive-link-secondary';
+    secondaryActions.className = 'archive-link-secondary hidden';
+    moreSummary.onclick = () => {
+      const opening = secondaryActions.classList.contains('hidden');
+      secondaryActions.classList.toggle('hidden', !opening);
+      moreSummary.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      moreSummary.textContent = opening ? 'Скрыть' : 'Ещё';
+    };
     moreActions.append(moreSummary, secondaryActions);
 
     const resume = document.createElement('button');
@@ -1253,9 +1262,6 @@ function render(data) {
   const unfinishedPanel = $('unfinishedPassesPanel');
   unfinishedPanel?.classList.toggle('hidden', !hasUnfinished);
   unfinishedPanel?.classList.toggle('has-items', hasUnfinished);
-  if (hasUnfinished && ['error', 'cancelled'].includes(job?.status)) {
-    unfinishedPanel.open = true;
-  }
 
   const isFragmentRun = job?.captureMode === 'fragment' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
@@ -2183,14 +2189,9 @@ const TOUR_STEPS = [
     text: 'Здесь можно продолжить чат, скопировать его, сохранить в документ Google Docs или разбить по темам.'
   },
   {
-    selector: '.accessibility-options > summary',
-    title: 'Настройте подписи',
-    text: 'Здесь можно изменить имена пользователя и ChatGPT в сохранённом тексте и выровнять реплики пользователя справа.'
-  },
-  {
     selector: '.settings-menu > summary',
-    title: 'Оформление и обновление',
-    text: 'Шестерёнка открывает настройки темы, шрифта и обновлений.'
+    title: 'Настройки документа и интерфейса',
+    text: 'Шестерёнка открывает имена в документе, выравнивание реплик, тему, шрифт и обновление расширения.'
   },
   {
     selector: '.help-menu > summary',
