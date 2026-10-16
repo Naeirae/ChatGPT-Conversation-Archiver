@@ -276,6 +276,7 @@ try {
 try {
   const popupHtml = await readFile('popup.html', 'utf8');
   const popupJs = await readFile('popup.js', 'utf8');
+  const popupCss = await readFile('popup.css', 'utf8');
   const serviceWorkerSource = await readFile('service-worker.js', 'utf8');
   const requiredUiIds = [
     'status',
@@ -364,6 +365,11 @@ try {
       !popupJs.includes("type: 'ARCHIVER_CLEAR_LINKED_DOC'") ||
       !popupJs.includes("item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc'")) {
     fail('linked Google Docs: missing explicit replace/unlink UX');
+  }
+  if (!popupJs.includes("moreActions.className = 'archive-link-tools'") ||
+      !popupJs.includes('secondaryActions.appendChild(reconcileButton)') ||
+      !popupCss.includes('.archive-link-secondary')) {
+    fail('saved-chat UX: secondary maintenance actions must stay collapsed under «Ещё»');
   }
   if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
       serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
