@@ -814,7 +814,7 @@ async function fetchImageBinaryForContent(src = '') {
   }
   if (!blob.size) throw new Error('Пустой файл изображения.');
   if (blob.size > 12 * 1024 * 1024) {
-    throw new Error('Изображение больше 12 МБ; бинарная вставка пропущена.');
+    throw new Error('Изображение больше 12 МБ; подготовить его для Google Docs не удалось.');
   }
 
   const buffer = await blob.arrayBuffer();
@@ -4292,7 +4292,7 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
 async function copyImageClipboardInGoogleDocs(tabId, image) {
   const dataUrl = String(image?.dataUrl || '');
   if (!/^data:image\//i.test(dataUrl)) {
-    return { ok: false, error: 'В архиве нет бинарных данных изображения.' };
+    return { ok: false, error: 'В архиве нет подготовленных данных изображения.' };
   }
 
   let offscreenError = '';
