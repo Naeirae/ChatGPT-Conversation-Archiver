@@ -354,9 +354,10 @@ try {
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'") ||
       !serviceWorkerSource.includes('preferOriginalImageSrc: true') ||
-      !serviceWorkerSource.includes('pre-34f7bcb path') ||
-      !serviceWorkerSource.includes('imageInlinePasteCount')) {
-    fail('Google Docs images: legacy inline rich-HTML paste must be primary and privileged binary clipboard must remain as fallback');
+      !serviceWorkerSource.includes('one rich HTML clipboard') ||
+      !serviceWorkerSource.includes('await pasteChunk(messages || [], includeHeader, {') ||
+      !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
+    fail('Google Docs images: exact legacy batch rich-HTML paste must be primary, linked export must aggregate its counter, and privileged binary clipboard must remain as fallback');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
