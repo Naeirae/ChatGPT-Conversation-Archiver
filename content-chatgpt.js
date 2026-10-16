@@ -2566,11 +2566,8 @@
     //   saved prefix is found, then turn down toward the exact checkpoint.
     if (capturePhase === 'walk') {
       let prefixEvidence = visibleSavedPrefixEvidence(savedRefs);
-
-      // A preserved working tab normally remains very close to the failure
-      // frontier. If the viewport already contains one of the last saved turns,
-      // resume immediately instead of searching toward the conversation top.
       const frontierSlack = Math.max(0, (savedRefs || []).length - 12);
+
       if (prefixEvidence.known && prefixEvidence.savedIndex >= frontierSlack) {
         await progress('Последняя сохранённая часть уже видна. Продолжаю прямо отсюда.', map.size, {
           phase: 'top',
@@ -2585,21 +2582,24 @@
           frontierMatched: true
         };
       }
+
       let knownVisible = prefixEvidence.known;
       let direction = knownVisible ? 'down' : 'up';
       let enteredSavedPrefix = knownVisible;
-      let overshotFrontier = false;
-      let unchanged = 0;
+      let crossedFrontier = false;
       let previousSignature = '';
+      let unchanged = 0;
+      let sameDirectionStalls = 0;
+      let reversals = 0;
 
-      for (let i = 0; i < 48; i++) {
+      for (let i = 0; i < 360; i++) {
         await waitIfPaused();
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
 
         if (checkpointWindowVisible(checkpointSignatures)) {
-          await progress('Найдена сохранённая контрольная точка.', map.size, {
+          await progress('Найдена сохранённая контрольная точка. Продолжаю с неё.', map.size, {
             phase: 'top',
             iteration: i + 1,
             anchorReached: true,
@@ -2648,12 +2648,13 @@
         if (!enteredSavedPrefix) {
           if (knownVisible) {
             enteredSavedPrefix = true;
-            overshotFrontier = false;
+            crossedFrontier = false;
             direction = 'down';
             unchanged = 0;
+            sameDirectionStalls = 0;
             previousSignature = '';
             await progress(
-              'Нашёл сохранённую часть; теперь иду вниз к месту остановки…',
+              'Нашёл знакомую сохранённую часть; иду по ней вниз к месту остановки…',
               map.size,
               {
                 phase: 'top',
@@ -2663,9 +2664,11 @@
               }
             );
           } else {
+            // Unknown content during a chronological prefix means we are below
+            // the saved frontier. Search upward until saved content reappears.
             direction = 'up';
             await progress(
-              'Текущий участок ниже сохранённой границы; иду вверх до сохранённой части…',
+              'Участок пока незнакомый; ищу вверх ближайшую уже сохранённую часть…',
               map.size,
               {
                 phase: 'top',
@@ -2675,12 +2678,11 @@
             );
           }
         } else if (knownVisible) {
-          // Any known message belongs to the saved prefix, so the saved frontier
-          // is at or below the current viewport.
+          // We are inside the saved prefix; the frontier is at or below us.
           direction = 'down';
-          overshotFrontier = false;
+          crossedFrontier = false;
           await progress(
-            'Я внутри сохранённой части; иду вниз к последней сохранённой точке…',
+            'Участок знакомый; продолжаю вниз к границе уже сохранённого…',
             map.size,
             {
               phase: 'top',
@@ -2689,42 +2691,96 @@
             }
           );
         } else {
-          // We had already been inside the saved prefix and then lost every
-          // known message while moving down: the viewport stepped below the
-          // frontier. Move back up, then approach the frontier more carefully.
+          // Known -> unknown while moving down means the frontier was crossed.
+          // Reverse and reduce the step. Keep searching instead of aborting.
+          if (direction === 'down') {
+            reversals++;
+            crossedFrontier = true;
+          }
           direction = 'up';
-          overshotFrontier = true;
           await progress(
-            'Прошёл ниже сохранённой границы; возвращаюсь вверх к последнему известному участку…',
+            'Перешёл из знакомой части в незнакомую; возвращаюсь к границе и сужаю шаг…',
             map.size,
             {
               phase: 'top',
               iteration: i + 1,
               resumeSearchDirection: direction,
+              frontierCrossed: true,
+              frontierReversals: reversals,
               force: true
             }
           );
         }
 
         const before = visibleTurnSignature();
-        const bursts = overshotFrontier ? 1 : (direction === 'down' ? 2 : 4);
-        await physicalScroll(direction, bursts);
-        const after = visibleTurnSignature();
+        const bursts = crossedFrontier
+          ? 1
+          : direction === 'down'
+            ? 2
+            : (enteredSavedPrefix ? 2 : 5);
 
-        if (after && after === before && after === previousSignature) unchanged++;
-        else unchanged = 0;
+        await physicalScroll(direction, bursts, {
+          settleTimeout: 2600,
+          quietWindow: 400
+        });
+
+        const after = visibleTurnSignature();
+        if (after && after === before && after === previousSignature) {
+          unchanged++;
+          sameDirectionStalls++;
+        } else {
+          unchanged = 0;
+          sameDirectionStalls = 0;
+        }
         previousSignature = after;
 
-        if (unchanged >= 7) {
+        // Do not stop merely because one direction stalled. Reverse once the
+        // current edge/window is exhausted and keep looking for known content.
+        if (sameDirectionStalls >= 4) {
+          const atEdge = direction === 'up'
+            ? physicalScrollStartVisible()
+            : physicalScrollEndVisible();
+
+          if (atEdge) {
+            const nextDirection = oppositeScrollDirection(direction);
+            direction = nextDirection;
+            enteredSavedPrefix = false;
+            crossedFrontier = false;
+            sameDirectionStalls = 0;
+            unchanged = 0;
+            previousSignature = '';
+            reversals++;
+
+            await progress(
+              'В этом направлении новых окон больше нет; проверяю противоположное направление…',
+              map.size,
+              {
+                phase: 'top',
+                iteration: i + 1,
+                resumeSearchDirection: direction,
+                resumeSearchEdgeReversal: true,
+                frontierReversals: reversals,
+                force: true
+              }
+            );
+            continue;
+          }
+        }
+
+        // 360 directional probes are intentionally generous. At this point the
+        // search has already reversed at physical edges and repeatedly failed
+        // to recover any saved evidence, so continuing would no longer be an
+        // evidence-based resume.
+        if (unchanged >= 18 && reversals >= 2) {
           throw new Error(
             enteredSavedPrefix
-              ? 'Сохранённую часть нашёл, но точную границу продолжения восстановить не удалось.'
-              : 'Не удалось найти сохранённую часть выше текущей позиции.'
+              ? 'Сохранённую часть нашёл, но точную границу продолжения восстановить не удалось после проверки обоих направлений.'
+              : 'Не удалось найти сохранённую часть после проверки обоих направлений.'
           );
         }
       }
 
-      throw new Error('Не удалось восстановить границу сохранённого прохода сверху вниз.');
+      throw new Error('Не удалось восстановить место остановки после полного ориентированного поиска.');
     }
 
     // Navigation-to-top drafts are not chronological prefixes. For them the
