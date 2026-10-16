@@ -5067,11 +5067,39 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     messageResult.imageVerificationAvailable ||
     previous?.imageVerificationAvailable
   );
-  const imageComplete = archiveImageExpectedCount === 0 || Boolean(
-    imageVerificationAvailable &&
+  const previousImageExpectedCount = Math.max(0, Number(previous?.imageExpectedCount || 0));
+  const deltaImageExpectedCount = Math.max(0, Number(messageResult.imageExpectedCount || 0));
+  const recoveredImageExpectedCount = Math.max(0, Number(oldRecoveredItems.length || 0));
+  const deltaImagesComplete = deltaImageExpectedCount === 0 || Boolean(
+    messageResult.imageActionComplete === true ||
+    (
+      messageResult.imageVerificationAvailable &&
+      Number(messageResult.imageInsertedCount || 0) >= deltaImageExpectedCount
+    )
+  );
+  const recoveredImagesComplete = recoveredImageExpectedCount === 0 || Boolean(
+    Number(patchResult.failed || 0) === 0 &&
+    Number(patchResult.inserted || 0) >= recoveredImageExpectedCount
+  );
+  const safeAbsoluteComplete = Boolean(
+    (
+      patchResult.documentImageCountAbsoluteSafe ||
+      messageResult.documentImageCountAbsoluteSafe
+    ) &&
     documentImageCount != null &&
     documentImageCount >= archiveImageExpectedCount
   );
+  const continuityComplete = Boolean(
+    previous?.imageComplete === true &&
+    archiveImageExpectedCount ===
+      previousImageExpectedCount + deltaImageExpectedCount + recoveredImageExpectedCount &&
+    deltaImagesComplete &&
+    recoveredImagesComplete
+  );
+  const imageComplete =
+    archiveImageExpectedCount === 0 ||
+    safeAbsoluteComplete ||
+    continuityComplete;
   const finalDocUrl = messageResult.docUrl || patchResult.docUrl || docUrl;
 
   const linkedDoc = await recordDocExport(conversation, finalDocUrl, {
@@ -5101,6 +5129,10 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     imageVerificationAvailable,
     imageComplete,
     documentImageCount,
+    documentImageCountAbsoluteSafe: Boolean(
+      patchResult.documentImageCountAbsoluteSafe ||
+      messageResult.documentImageCountAbsoluteSafe
+    ),
     failedImages,
     recoveredImagePatchAttempted: Boolean(oldRecoveredItems.length),
     recoveredImagePatchCandidateCount: oldRecoveredItems.length,
