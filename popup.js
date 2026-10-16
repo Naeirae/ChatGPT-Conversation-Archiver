@@ -45,9 +45,9 @@ const INTERFACE_FONT_STACKS = {
 
 const PHASE_LABELS = {
   boundary: 'Подготовка · Ищу нижнюю границу',
-  top: 'Этап 1/3 · Загружаю начало',
-  walk: 'Этап 2/3 · Собираю к зафиксированному концу',
-  finalizing: 'Этап 3/3 · Сохраняю локальный архив',
+  top: 'Этап 1/3 · Первый проход вверх',
+  walk: 'Этап 2/3 · Сверяю сверху вниз',
+  finalizing: 'Этап 3/3 · Завершаю архив',
   paused: 'Сбор приостановлен'
 };
 
@@ -90,9 +90,18 @@ function renderCaptureProgress(job, running) {
           : 'текущий проход: ' + Number(job.count || 0)
       );
     }
+  } else if (job?.comparisonComplete && Number(job?.firstPassCount || 0)) {
+    const first = Number(job.firstPassCount || 0);
+    const second = Number(job.secondPassCount || 0);
+    parts.push('первый проход: ' + first);
+    parts.push('второй проход: ' + second);
+    parts.push(job?.passCountMatch ? 'количество совпало' : 'количество не совпало');
+    if (Number(job?.reconciledInsertedCount || 0)) {
+      parts.push('добрано сообщений: ' + Number(job.reconciledInsertedCount || 0));
+    }
   } else if (job?.navigationHighWater && job?.phase === 'walk') {
-    parts.push('нашёл на первом проходе: ' + Number(job.navigationHighWater || 0));
-    parts.push('собрано по порядку: ' + Number(job.chronologicalCount ?? job.count ?? 0));
+    parts.push('первый проход: ' + Number(job.navigationHighWater || 0));
+    parts.push('второй проход сейчас: ' + Number(job.chronologicalCount ?? job.count ?? 0));
   } else {
     parts.push((job?.count || 0) + ' сообщений');
   }
