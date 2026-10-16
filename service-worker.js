@@ -4641,6 +4641,18 @@ async function locateGoogleDocAnchor(tabId, query) {
   return true;
 }
 
+function imageSourceIdentity(srcValue = '') {
+  const src = String(srcValue || '').trim();
+  if (!src) return '';
+  if (/^data:image\//i.test(src) || /^blob:/i.test(src)) return src;
+  try {
+    const url = new URL(src);
+    return url.origin + url.pathname;
+  } catch (_) {
+    return src.split('#')[0].split('?')[0];
+  }
+}
+
 function recoveredImageItems(archive) {
   const refs = Array.isArray(archive?.lastRecoveredImageRefs)
     ? archive.lastRecoveredImageRefs
@@ -4654,7 +4666,10 @@ function recoveredImageItems(archive) {
       (ref.messageSignature && messageSignature(item.role, item.text) === ref.messageSignature)
     );
     if (!message) continue;
-    const image = (message.images || []).find(item => item?.src === ref.src);
+    const refKey = imageSourceIdentity(ref.src);
+    const image = (message.images || []).find(item =>
+      imageSourceIdentity(item?.src) === refKey
+    );
     if (!image?.src && !image?.dataUrl) continue;
     items.push({ message, image, ref });
   }
@@ -4689,7 +4704,7 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
 
   const keyOf = item => hashText(
     String(item?.ref?.messageId || item?.ref?.messageSignature || '') + '|' +
-    String(item?.image?.src || '')
+    imageSourceIdentity(item?.image?.src || '')
   );
   const items = allItems.filter(item => !done.has(keyOf(item)));
   if (!items.length) {
