@@ -334,16 +334,20 @@ try {
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
-      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
-      !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
-    fail('popup.js: fragment-range/unified reconcile/unfinished recovery controls are not wired');
+      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE')) {
+    fail('popup.js: fragment-range and unified reconcile controls are not wired');
   }
+  const disclosureCount = (popupHtml.match(/<details\b/g) || []).length;
   if (popupHtml.includes('id="recoverImages"') ||
       popupJs.includes("imagesButton.textContent = 'Сверить изображения'") ||
       !popupHtml.includes('id="reconcileArchive" class="primary">Сверить</button>') ||
+      !popupHtml.includes('id="savedArchivesPanel" class="workspace-section archives-panel"') ||
+      !popupHtml.includes('id="archive" class="current-archive hidden"') ||
+      disclosureCount > 3 ||
       !popupCss.includes('.inline-progress::before') ||
-      !popupCss.includes('.status.busy::before')) {
-    fail('archive UX: one primary sync action and visible progress indicators must remain in place');
+      !popupCss.includes('.status.busy::before') ||
+      !popupCss.includes('.library-scroll')) {
+    fail('archive UX: keep one sync action, flat archive/library sections, <=3 disclosures and visible progress');
   }
   if (popupJs.includes("$('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue)") ||
       !popupJs.includes("type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',\n      archiveId: state.archive.id")) {
@@ -374,11 +378,15 @@ try {
       !serviceWorkerSource.includes('await pasteBinaryImages(message)') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
+      !serviceWorkerSource.includes('async function captureRenderedImageForContent') ||
       !contentSource.includes("type: 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
-      !contentSource.includes('extension fetch:') ||
+      !contentSource.includes("type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
+      !contentSource.includes('async function captureRenderedImageBlob') ||
+      !contentSource.includes("hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft'") ||
       !manifestSource.includes('https://*.oaiusercontent.com/*') ||
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
-    fail('Google Docs images: cross-origin worker hydration and binary-first export must remain wired; rich HTML is fallback only');
+    fail('Google Docs images: page/worker/rendered-pixel hydration chain and binary-first export must remain wired');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
