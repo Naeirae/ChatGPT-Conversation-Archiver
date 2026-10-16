@@ -1041,14 +1041,22 @@ function docImageOutcome(result = {}, expectedFallback = 0) {
   const expected = Math.max(
     0,
     Number(
-      result.imageExpectedCount != null
-        ? result.imageExpectedCount
-        : expectedFallback
+      result.archiveImageExpectedCount != null
+        ? result.archiveImageExpectedCount
+        : result.imageExpectedCount != null
+          ? result.imageExpectedCount
+          : expectedFallback
     ) || 0
   );
   if (!expected) return { text: '', error: false };
 
-  const verified = Math.max(0, Number(result.imageInsertedCount || 0));
+  const documentCount = Number.isFinite(Number(result.documentImageCount))
+    ? Math.max(0, Number(result.documentImageCount))
+    : null;
+  const verified = documentCount != null
+    ? documentCount
+    : Math.max(0, Number(result.imageInsertedCount || 0));
+
   if (result.imageVerificationAvailable) {
     const complete = result.imageComplete === true || verified >= expected;
     return {
