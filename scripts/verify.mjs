@@ -302,12 +302,11 @@ try {
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
-      !popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
       !popupJs.includes('ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE') ||
       !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
-    fail('popup.js: manual range/reconcile/image recovery controls are not wired');
+    fail('popup.js: fragment-range/reconcile/image recovery controls are not wired');
   }
   if (!popupJs.includes("passId: item.exportPassId") ||
       !popupJs.includes("job?.captureMode === 'images-draft'") ||
