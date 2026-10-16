@@ -1662,19 +1662,34 @@
     };
   }
 
+  function imageIdentity(srcValue) {
+    const src = String(srcValue || '').trim();
+    if (!src) return '';
+    if (/^data:image\//i.test(src) || /^blob:/i.test(src)) return src;
+    try {
+      const url = new URL(src, location.href);
+      // OpenAI media URLs are commonly signed. Query parameters can expire and
+      // change between passes while the underlying image path remains stable.
+      return url.origin + url.pathname;
+    } catch (_) {
+      return src.split('#')[0].split('?')[0];
+    }
+  }
+
   function mergeImageRecords(existingImages, scannedImages) {
     const merged = (existingImages || []).map(image => ({ ...image }));
-    const bySrc = new Map();
+    const byIdentity = new Map();
     merged.forEach((image, index) => {
-      const src = String(image?.src || '');
-      if (src && !bySrc.has(src)) bySrc.set(src, index);
+      const key = imageIdentity(image?.src);
+      if (key && !byIdentity.has(key)) byIdentity.set(key, index);
     });
     const added = [];
 
     for (const image of scannedImages || []) {
       const src = String(image?.src || '');
-      if (!src) continue;
-      const index = bySrc.get(src);
+      const key = imageIdentity(src);
+      if (!key) continue;
+      const index = byIdentity.get(key);
       if (index == null) {
         const next = {
           ...image,
@@ -1683,7 +1698,7 @@
           binaryStatus: image?.binaryStatus || 'pending',
           binaryError: image?.binaryError || ''
         };
-        bySrc.set(src, merged.length);
+        byIdentity.set(key, merged.length);
         merged.push(next);
         added.push(next);
         continue;
@@ -1692,8 +1707,10 @@
       const current = merged[index] || {};
       const currentReady = current.binaryStatus === 'ready' && current.dataUrl;
       const incomingReady = image?.binaryStatus === 'ready' && image?.dataUrl;
+      const incomingHasFreshSource = Boolean(src && src !== current.src);
       merged[index] = {
         ...current,
+        src: incomingHasFreshSource ? src : (current.src || src),
         alt: current.alt || image?.alt || '',
         width: current.width || image?.width || null,
         height: current.height || image?.height || null,
@@ -1701,8 +1718,10 @@
         mimeType: currentReady ? current.mimeType : (image?.mimeType || current.mimeType || ''),
         byteSize: currentReady ? current.byteSize : (image?.byteSize || current.byteSize || 0),
         dataUrl: currentReady ? current.dataUrl : (incomingReady ? image.dataUrl : (current.dataUrl || '')),
-        binaryStatus: currentReady ? 'ready' : (incomingReady ? 'ready' : (image?.binaryStatus || current.binaryStatus || 'pending')),
-        binaryError: currentReady || incomingReady ? '' : (current.binaryError || image?.binaryError || ''),
+        binaryStatus: currentReady ? 'ready' : (incomingReady ? 'ready' : (image?.binaryStatus || 'pending')),
+        binaryError: currentReady || incomingReady || incomingHasFreshSource
+          ? ''
+          : (current.binaryError || image?.binaryError || ''),
         index
       };
     }
@@ -1725,7 +1744,8 @@
   function appendRecoveredImageMarkup(html, images, addedImages) {
     let next = String(html || '');
     for (const image of addedImages || []) {
-      const index = images.findIndex(item => item.src === image.src);
+      const key = imageIdentity(image.src);
+      const index = images.findIndex(item => imageIdentity(item.src) === key);
       if (index < 0) continue;
       next += imageAttachmentHtml(image, index);
     }
@@ -1792,14 +1812,15 @@
 
       const beforeImages = target.images || [];
       const beforeReady = new Map(beforeImages.map(image => [
-        String(image?.src || ''),
+        imageIdentity(image?.src),
         Boolean(image?.binaryStatus === 'ready' && image?.dataUrl)
       ]));
       const merged = mergeImageRecords(beforeImages, source.images || []);
       const enrichedExisting = merged.images.filter(image => {
         const src = String(image?.src || '');
-        return src && beforeReady.has(src) &&
-          !beforeReady.get(src) &&
+        const key = imageIdentity(src);
+        return key && beforeReady.has(key) &&
+          !beforeReady.get(key) &&
           image?.binaryStatus === 'ready' &&
           image?.dataUrl;
       });
