@@ -4998,9 +4998,14 @@ async function appendMessagesToGoogleDocUrl(
       archiveImageExpectedCount === previousImageExpectedCount + actionImageExpectedCount &&
       pasted.imageComplete === true
     );
+    const fullActionComplete = Boolean(
+      archiveImageExpectedCount === actionImageExpectedCount &&
+      pasted.imageComplete === true
+    );
     const archiveImageComplete =
       archiveImageExpectedCount === 0 ||
       safeAbsoluteComplete ||
+      fullActionComplete ||
       continuityComplete;
 
     const linkedDoc = await recordDocExport(
@@ -5191,9 +5196,15 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     deltaImagesComplete &&
     recoveredImagesComplete
   );
+  const fullActionComplete = Boolean(
+    archiveImageExpectedCount === deltaImageExpectedCount + recoveredImageExpectedCount &&
+    deltaImagesComplete &&
+    recoveredImagesComplete
+  );
   const imageComplete =
     archiveImageExpectedCount === 0 ||
     safeAbsoluteComplete ||
+    fullActionComplete ||
     continuityComplete;
   const finalDocUrl = messageResult.docUrl || patchResult.docUrl || docUrl;
 
