@@ -396,10 +396,11 @@ try {
       !popupJs.includes("item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc'")) {
     fail('linked Google Docs: missing explicit replace/unlink UX');
   }
-  if (!popupJs.includes("moreActions.className = 'archive-link-tools'") ||
+  if (popupJs.includes("moreActions.className = 'archive-link-tools'") ||
+      !popupJs.includes("secondaryActions.className = 'archive-link-secondary'") ||
       !popupJs.includes('secondaryActions.appendChild(reconcileButton)') ||
       !popupCss.includes('.archive-link-secondary')) {
-    fail('saved-chat UX: secondary maintenance actions must stay collapsed under «Ещё»');
+    fail('saved-chat UX: maintenance actions must stay visible as compact secondary actions without nested «Ещё» menus');
   }
   if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
       serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
