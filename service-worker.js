@@ -3081,6 +3081,8 @@ async function handleCaptureComplete(message) {
       count: archive.messages?.length || 0,
       addedCount: repaired,
       imageCount: archive.imageCount || 0,
+      imageBinaryReady: archive.imageBinaryReady || 0,
+      imageBinaryFailed: archive.imageBinaryFailed || 0,
       archiveId: archive.id,
       finishedAt: Date.now(),
       captureTabId: null,
@@ -3114,6 +3116,8 @@ async function handleCaptureComplete(message) {
       addedCount: 0,
       imageRecoveredCount: recovered,
       imageCount: archive.imageCount || 0,
+      imageBinaryReady: archive.imageBinaryReady || 0,
+      imageBinaryFailed: archive.imageBinaryFailed || 0,
       archiveId: archive.id,
       finishedAt: Date.now(),
       captureTabId: null
@@ -3159,6 +3163,12 @@ async function handleCaptureComplete(message) {
       ? ('Архив продолжен: +' + addedCount + ' сообщений.')
       : 'Переписка собрана.';
 
+  if (!isContinuation && !isDraftRecovery && Number(archive.imageCount || 0) > 0) {
+    finalMessage += ' Изображения в локальном архиве: ' + Number(archive.imageCount || 0) +
+      '; бинарно готовы ' + Number(archive.imageBinaryReady || 0) +
+      ', ошибок ' + Number(archive.imageBinaryFailed || 0) + '.';
+  }
+
   if (shouldAutoAppend) {
     if (docError) finalMessage += ' Документ Google Docs не обновлён: ' + docError;
     else if (docResult?.addedCount) {
@@ -3178,6 +3188,8 @@ async function handleCaptureComplete(message) {
     count: archive.messages?.length || 0,
     addedCount,
     imageCount: archive.imageCount || 0,
+    imageBinaryReady: archive.imageBinaryReady || 0,
+    imageBinaryFailed: archive.imageBinaryFailed || 0,
     archiveId: archive.id,
     docUrl: docResult?.docUrl || (shouldAutoAppend ? job.pendingDocUrl : '') || '',
     docExportError: docError,
