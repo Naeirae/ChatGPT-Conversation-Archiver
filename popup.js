@@ -345,15 +345,24 @@ function renderUnfinishedPasses(items = []) {
     };
     primaryActions.appendChild(saveCurrent);
 
-    const more = document.createElement('details');
+    const more = document.createElement('div');
     more.className = 'unfinished-more';
 
-    const moreSummary = document.createElement('summary');
+    const moreSummary = document.createElement('button');
+    moreSummary.type = 'button';
+    moreSummary.className = 'archive-link-more-toggle';
     moreSummary.textContent = 'Ещё';
-    more.appendChild(moreSummary);
+    moreSummary.setAttribute('aria-expanded', 'false');
 
     const secondary = document.createElement('div');
-    secondary.className = 'unfinished-secondary-actions';
+    secondary.className = 'unfinished-secondary-actions hidden';
+    moreSummary.onclick = () => {
+      const opening = secondary.classList.contains('hidden');
+      secondary.classList.toggle('hidden', !opening);
+      moreSummary.setAttribute('aria-expanded', opening ? 'true' : 'false');
+      moreSummary.textContent = opening ? 'Скрыть' : 'Ещё';
+    };
+    more.append(moreSummary, secondary);
 
     if (item.recoveryTabAvailable) {
       const openCapture = document.createElement('button');
@@ -378,57 +387,6 @@ function renderUnfinishedPasses(items = []) {
         await chrome.tabs.create({ url });
       };
       secondary.appendChild(view);
-    }
-
-    if (item.canExportCurrent && item.exportPassId) {
-      const reconcileSaved = document.createElement('button');
-      reconcileSaved.textContent = 'Сверить с локальным архивом и добрать';
-      reconcileSaved.onclick = async () => {
-        reconcileSaved.disabled = true;
-        setStatus('Сверяю сохранённую часть с локальным архивом…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_RECONCILE_UNFINISHED_PASS',
-            passId: item.exportPassId
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось выполнить сверку.');
-          setStatus(
-            'Сверка завершена: восстановлено ' +
-            Number(result.addedCount || 0) + ' сообщений; в архиве ' +
-            Number(result.messageCount || 0) + '.'
-          );
-          await getState();
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-        } finally {
-          reconcileSaved.disabled = false;
-        }
-      };
-      secondary.appendChild(reconcileSaved);
-    }
-
-    if (item.exportPassId && item.canExportCurrent) {
-      const hydrateImages = document.createElement('button');
-      hydrateImages.textContent = 'Сверить и добрать изображения';
-      hydrateImages.onclick = async () => {
-        hydrateImages.disabled = true;
-        setStatus('Добираю изображения в сохранённой части незавершённого сбора…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES',
-            passId: item.exportPassId
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось добрать изображения.');
-          setStatus('Сверка изображений сохранённой части запущена…');
-          if (result.job) render({ ...state, job: result.job });
-          startPolling();
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-        } finally {
-          hydrateImages.disabled = false;
-        }
-      };
-      secondary.appendChild(hydrateImages);
     }
 
     if (item.copyPassId) {
@@ -477,7 +435,6 @@ function renderUnfinishedPasses(items = []) {
     };
     secondary.appendChild(remove);
 
-    more.appendChild(secondary);
     row.append(head, meta);
     if (saveHint) row.appendChild(saveHint);
     if (documentStatus) row.appendChild(documentStatus);
