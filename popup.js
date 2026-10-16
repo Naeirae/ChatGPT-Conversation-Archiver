@@ -996,6 +996,14 @@ function renderHistory(history = []) {
     const parts = [time, captureTargetLabel(item.captureTarget), (item.count || 0) + ' сообщений'];
     if (item.startedAt && item.finishedAt) parts.push(formatDuration(item.finishedAt - item.startedAt));
     if (item.addedCount) parts.push('+' + item.addedCount + ' новых');
+    if (item.imageCount) {
+      const ready = Number(item.imageBinaryReady || 0);
+      const failed = Number(item.imageBinaryFailed || 0);
+      parts.push(
+        Number(item.imageCount || 0) + ' изображений' +
+        (ready || failed ? ' · бинарно ' + ready + ' / ошибок ' + failed : '')
+      );
+    }
     meta.textContent = parts.join(' · ');
 
     row.append(head, meta);
