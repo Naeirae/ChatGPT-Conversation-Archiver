@@ -4655,7 +4655,7 @@ function recoveredImageItems(archive) {
     );
     if (!message) continue;
     const image = (message.images || []).find(item => item?.src === ref.src);
-    if (!image?.dataUrl || image.binaryStatus !== 'ready') continue;
+    if (!image?.src && !image?.dataUrl) continue;
     items.push({ message, image, ref });
   }
   return items;
@@ -4740,17 +4740,29 @@ async function patchRecoveredImagesToLinkedDoc(archiveId = '', { excludeMessages
       }
 
       for (const item of group) {
+        const before = await googleDocImageCountAttached(tab.id);
         const copied = await copyImageClipboardInGoogleDocs(tab.id, item.image);
         if (!copied?.ok) {
           failures.push({ src: item.image.src || '', error: copied?.error || 'clipboard failed' });
           continue;
         }
         await dispatchKey(tab.id, 'v', 'KeyV', 86, 2);
-        await sleep(850);
+        await sleep(900);
         await dispatchKey(tab.id, 'Enter', 'Enter', 13, 0);
-        await sleep(120);
-        inserted++;
-        done.add(keyOf(item));
+        await sleep(180);
+        const after = await googleDocImageCountAttached(tab.id);
+
+        if (before.available && after.available && after.count > before.count) {
+          inserted++;
+          done.add(keyOf(item));
+        } else {
+          failures.push({
+            src: item.image.src || '',
+            error: before.available && after.available
+              ? 'Google Docs не подтвердил появление изображения после вставки.'
+              : 'Не удалось автоматически подтвердить изображение в Google Docs.'
+          });
+        }
       }
     }
 
