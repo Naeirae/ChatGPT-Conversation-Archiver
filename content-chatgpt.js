@@ -2861,7 +2861,6 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
-    applyCachedImageBinaries(messages);
 
     const canonicalRecoveryDraftId =
       current.draftId || current.recoveryDraftId || '';
@@ -3126,7 +3125,6 @@
             force: true
           }
         );
-        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
         return { boundaryReached: true, physicalEndReached: false };
       }
 
@@ -3146,7 +3144,6 @@
         }
       );
 
-      await saveRecoveryCheckpoint(map, order, boundary);
 
       // Exact old normal step: 7 wheel bursts and short settle.
       await physicalScroll('down', 7, {
@@ -3185,7 +3182,6 @@
       );
     }
 
-    await saveRecoveryCheckpoint(map, order, boundary, { force: true });
     return { boundaryReached: true, physicalEndReached: false };
   }
 
