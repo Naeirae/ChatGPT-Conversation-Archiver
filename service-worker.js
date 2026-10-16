@@ -4442,6 +4442,17 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
   };
 }
 
+async function reportDocExportProgress(patch = {}) {
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_DOC_EXPORT_PROGRESS',
+      ...patch
+    });
+  } catch (_) {
+    // The popup may be closed while Google Docs stays open. Export continues.
+  }
+}
+
 async function pasteArchiveIntoGoogleDoc(
   tabId,
   conversation,
@@ -4452,6 +4463,7 @@ async function pasteArchiveIntoGoogleDoc(
   let attached = false;
   let imageInsertedCount = 0;
   let imagePasteAttemptCount = 0;
+  let imageProcessedCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
   const imageBearingCount = (messages || []).reduce(
@@ -4487,10 +4499,26 @@ async function pasteArchiveIntoGoogleDoc(
   const pasteImages = async message => {
     const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
     for (const image of images) {
+      await reportDocExportProgress({
+        phase: 'images',
+        processed: imageProcessedCount,
+        total: imageBearingCount,
+        attempted: imagePasteAttemptCount,
+        failed: imageFailedCount
+      });
+
       const copied = await copyImageClipboardInGoogleDocs(tabId, image);
       if (!copied?.ok) {
         imageFailedCount++;
+        imageProcessedCount++;
         failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
+        await reportDocExportProgress({
+          phase: 'images',
+          processed: imageProcessedCount,
+          total: imageBearingCount,
+          attempted: imagePasteAttemptCount,
+          failed: imageFailedCount
+        });
         continue;
       }
 
@@ -4502,6 +4530,14 @@ async function pasteArchiveIntoGoogleDoc(
       await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
       await sleep(140);
       imagePasteAttemptCount++;
+      imageProcessedCount++;
+      await reportDocExportProgress({
+        phase: 'images',
+        processed: imageProcessedCount,
+        total: imageBearingCount,
+        attempted: imagePasteAttemptCount,
+        failed: imageFailedCount
+      });
     }
   };
 
@@ -4516,6 +4552,13 @@ async function pasteArchiveIntoGoogleDoc(
     }
 
     imageCountBefore = await googleDocImageCountAttached(tabId);
+    await reportDocExportProgress({
+      phase: imageBearingCount ? 'text' : 'text-only',
+      processed: 0,
+      total: imageBearingCount,
+      attempted: 0,
+      failed: 0
+    });
 
     let buffer = [];
     let headerPending = includeHeader;
@@ -4539,6 +4582,15 @@ async function pasteArchiveIntoGoogleDoc(
     await pasteTextChunk(buffer, headerPending);
 
     await sleep(700);
+    if (imageBearingCount > 0) {
+      await reportDocExportProgress({
+        phase: 'verify',
+        processed: imageProcessedCount,
+        total: imageBearingCount,
+        attempted: imagePasteAttemptCount,
+        failed: imageFailedCount
+      });
+    }
     imageCountAfter = await googleDocImageCountAttached(tabId);
 
     if (imageBearingCount > 0 &&
@@ -4571,10 +4623,23 @@ async function pasteArchiveIntoGoogleDoc(
     imageVerificationAvailable && imageInsertedCount >= imageBearingCount
   );
 
+  if (imageBearingCount > 0) {
+    await reportDocExportProgress({
+      phase: 'done',
+      processed: imageProcessedCount,
+      total: imageBearingCount,
+      attempted: imagePasteAttemptCount,
+      verified: imageInsertedCount,
+      failed: imageFailedCount,
+      complete: imageComplete
+    });
+  }
+
   return {
     tab: await chrome.tabs.get(tabId),
     imageExpectedCount: imageBearingCount,
     imagePasteAttemptCount,
+    imageProcessedCount,
     imageInsertedCount,
     imageInlinePasteCount: 0,
     imageFailedCount,
