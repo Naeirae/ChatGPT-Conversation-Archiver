@@ -72,9 +72,13 @@ function renderCaptureProgress(job, running) {
     finalizing: 'Фрагмент · Сохраняю выбранные сообщения',
     paused: 'Сбор фрагмента приостановлен'
   };
-  $('capturePhase').textContent = isFragment
-    ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
-    : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
+  const imageHydrationActive = job?.phase === 'finalizing' &&
+    Number(job?.imageBinaryTotal || 0) > 0;
+  $('capturePhase').textContent = imageHydrationActive
+    ? 'Этап 3/3 · Загружаю картинки'
+    : isFragment
+      ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
+      : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
   const resumed = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
     Number(job?.resumeBaseCount || job?.draftCount || 0) > 0;
@@ -765,12 +769,10 @@ function renderSavedArchives(items = []) {
         const inlineImages = Number(result.imageInlinePasteCount || 0);
         const binaryImages = Number(result.imageInsertedCount || 0);
         const failedImages = Number(result.imageFailedCount || 0);
-        const imagePart = inlineImages || binaryImages || failedImages
-          ? ' Изображения: ' +
-            (inlineImages ? inlineImages + ' передано через rich HTML' : '') +
-            (inlineImages && binaryImages ? ', ' : '') +
-            (binaryImages ? binaryImages + ' вставлено бинарно' : '') +
-            (failedImages ? ', ' + failedImages + ' ошибок' : '') + '.'
+        const imageAdded = binaryImages || inlineImages;
+        const imagePart = imageAdded || failedImages
+          ? ' Картинки: добавлено ' + imageAdded +
+            (failedImages ? ', не удалось ' + failedImages : '') + '.'
           : '';
         setStatus(
           'Сохранено в новый документ Google Docs: ' +
@@ -982,7 +984,7 @@ function renderHistory(history = []) {
       const failed = Number(item.imageBinaryFailed || 0);
       parts.push(
         Number(item.imageCount || 0) + ' изображений' +
-        (ready || failed ? ' · бинарно ' + ready + ' / ошибок ' + failed : '')
+        (ready || failed ? ' · готово ' + ready + ' / не удалось ' + failed : '')
       );
     }
     meta.textContent = parts.join(' · ');
@@ -1025,9 +1027,11 @@ function renderCaptureState(job) {
   else if (job.status === 'error') badge.classList.add('error');
 }
 
-function setStatus(text, error = false) {
+function setStatus(text, error = false, busy = false) {
   $('status').textContent = text;
   $('status').classList.toggle('error', error);
+  $('status').classList.toggle('busy', Boolean(busy && !error));
+  $('status').setAttribute('aria-busy', busy && !error ? 'true' : 'false');
 }
 
 function normalizeHex(value, fallback) {
@@ -1911,7 +1915,7 @@ $('reconcileArchive').onclick = async () => {
     return;
   }
   $('reconcileArchive').disabled = true;
-  setStatus('Открываю исходный чат и сверяю архив: сообщения и картинки…');
+  setStatus('Открываю исходный чат и сверяю архив: сообщения и картинки…', false, true);
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
@@ -2023,7 +2027,7 @@ $('openPlanner').onclick = async () => {
 
 $('newDoc').onclick = async () => {
   $('newDoc').disabled = true;
-  setStatus('Открываю документ Google Docs и вставляю переписку…');
+  setStatus('Открываю документ Google Docs и вставляю переписку…', false, true);
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
     const imageInline = Number(result.imageInlinePasteCount || 0);
@@ -2046,9 +2050,13 @@ $('newDoc').onclick = async () => {
 $('activeDoc').onclick = async () => {
   $('activeDoc').disabled = true;
   const linked = Boolean(state?.linkedDoc?.url);
-  setStatus(linked
-    ? 'Открываю связанный документ Google Docs и проверяю, что уже вставлено…'
-    : 'Проверяю, что уже вставлено в открытый документ Google Docs…');
+  setStatus(
+    linked
+      ? 'Открываю связанный документ Google Docs и проверяю, что уже вставлено…'
+      : 'Проверяю, что уже вставлено в открытый документ Google Docs…',
+    false,
+    true
+  );
   try {
     const result = await exportToDoc(
       linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
