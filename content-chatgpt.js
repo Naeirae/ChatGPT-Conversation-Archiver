@@ -2948,16 +2948,90 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
+  async function reachTopFullLegacy(map, order, settings) {
+    let stable = 0;
+    let previousSignature = '';
+    let previousSize = -1;
+
+    for (let i = 0; i < 260; i++) {
+      await waitIfPaused();
+
+      if (state.manualTopConfirmed) {
+        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          manualTopConfirmed: true,
+          force: true
+        });
+        return;
+      }
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
+
+      const signature = visibleTurnSignature();
+      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
+        phase: 'top',
+        iteration: i + 1
+      });
+
+      // Historical working cadence from 0.3.14.
+      await physicalScroll('up', 7, {
+        settleTimeout: 1600,
+        quietWindow: 360
+      });
+
+      if (state.manualTopConfirmed) {
+        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          manualTopConfirmed: true,
+          force: true
+        });
+        return;
+      }
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings);
+
+      const nextSignature = visibleTurnSignature();
+      if (
+        nextSignature &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        map.size === previousSize
+      ) {
+        stable++;
+      } else {
+        stable = 0;
+      }
+
+      previousSignature = nextSignature;
+      previousSize = map.size;
+
+      // This is intentionally the old conservative stop rule. If ChatGPT is
+      // slow at the top, the user can press "I'm at the beginning".
+      if (stable >= 4) {
+        await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          force: true
+        });
+        return;
+      }
+    }
+
+    throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
+  }
+
   async function walkDownFullLegacy(map, order, settings, boundary) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
 
-    // This is the proven full-capture hot path from the early binary-image
-    // releases: capture the current virtual window, move by a normal physical
-    // wheel step, and let the next iteration capture the replacement window.
-    // Recovery logic is deliberately NOT executed on every viewport.
-    for (let i = 0; i < 900; i++) {
+    for (let i = 0; i < 520; i++) {
       await waitIfPaused();
 
       await expandVisible();
@@ -3001,13 +3075,9 @@
         }
       );
 
-      // Keep resumability, but checkpoint persistence is internally throttled
-      // (time + message delta) and therefore does not become part of every step.
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      // Historical working cadence: seven physical wheel bursts followed by a
-      // short DOM-settle window. Do not run overlap recovery unless this path
-      // actually stalls at the end.
+      // Exact old normal step: 7 wheel bursts and short settle.
       await physicalScroll('down', 7, {
         settleTimeout: 1600,
         quietWindow: 360
@@ -3028,32 +3098,22 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 4) {
-        // Only now, after a real stall, inspect whether ChatGPT exposed an
-        // actual local loading error. Never pay this cost on healthy steps.
-        if (await recoverVisibleLoadError('walk', map.size)) {
-          stable = 0;
-          previousSignature = '';
-          previousSize = -1;
-          continue;
-        }
-        break;
-      }
+      if (stable >= 4) break;
     }
 
     await expandVisible();
     if (settings.includeReasoning) await expandReasoningVisible();
     collect(map, order, settings, boundary);
 
-    if (boundaryIsVisible(boundary)) {
-      await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-      return { boundaryReached: true, physicalEndReached: false };
+    if (!boundaryIsVisible(boundary)) {
+      throw new Error(
+        'Не удалось дойти до зафиксированного конца снимка. ' +
+        'Собранная часть сохранена как незавершённый проход.'
+      );
     }
 
-    throw new Error(
-      'Не удалось дойти до зафиксированного конца снимка. ' +
-      'Собранная непрерывная часть сохранена как незавершённый проход.'
-    );
+    await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+    return { boundaryReached: true, physicalEndReached: false };
   }
 
   async function walkDown(map, order, settings, boundary, { bursts = 3, requireBoundary = false } = {}) {
@@ -3239,7 +3299,7 @@
     state.boundarySearchActive = false;
     lastProgressAt = 0;
 
-    const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'images-draft', 'resume-draft', 'retry-walk', 'fragment', 'manual-full'].includes(options.mode) ? options.mode : 'full';
+    const mode = ['continue', 'sync', 'compare', 'reconcile', 'images', 'images-draft', 'resume-draft', 'retry-walk', 'fragment'].includes(options.mode) ? options.mode : 'full';
     const resumeAnchorId = String(options.resumeAnchorId || '');
     const resumeAnchorSignature = String(options.resumeAnchorSignature || '');
     const resumeTailSignatures = Array.isArray(options.resumeTailSignatures)
@@ -3376,13 +3436,10 @@
         }
 
         if (mode === 'full') {
-          // Full capture no longer extracts the whole chat while travelling
-          // upward. It fixes the lower boundary first, then navigates quickly
-          // to the top. The user may manually drag/scroll upward at any time;
-          // the next probe simply continues from the new viewport.
-          map.clear();
-          order.length = 0;
-          await reachTopWithoutCapture(0, { fullCapture: true });
+          // Historical 0.3.14 behavior: the upward pass may inspect/capture
+          // visible turns, but it is navigation only. Throw it away before the
+          // real chronological save from top to bottom.
+          await reachTopFullLegacy(map, order, settings);
         } else {
           // Rich upward scans normally begin at the fixed lower boundary. Manual
           // full-range capture is different: the user already chose an explicit
@@ -3460,7 +3517,11 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'full') {
+        navigationHighWater = 0;
+        navigationMessages = [];
+        navigationSequence = [];
+      } else if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -3508,13 +3569,15 @@
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
-      const acceptedPhysicalEnd = Boolean(!bounded.found && walkResult?.physicalEndReached);
+      const acceptedPhysicalEnd = Boolean(
+        mode !== 'full' && !bounded.found && walkResult?.physicalEndReached
+      );
       if (!bounded.found && !acceptedPhysicalEnd) {
         throw new Error('Метка конца снимка не найдена в итоговом проходе. Архив не сохранён, чтобы не смешать сообщения, появившиеся после запуска.');
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3551,7 +3614,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
+        if (mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -3588,7 +3651,7 @@
         }
       }
 
-      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment' && mode !== 'manual-full') {
+      if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment') {
         const anchorIndex = capturedMessages.findIndex(item =>
           (matchedAnchorId && item.id === matchedAnchorId) ||
           (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
@@ -3899,7 +3962,6 @@
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
         isFragment: mode === 'fragment',
-        manualFullRange: mode === 'manual-full' ? selectedFragment : undefined,
         fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
         lastCaptureAddedCount: addedCount,
         lastImageRecoveredCount: recoveredImageRefs.length,
