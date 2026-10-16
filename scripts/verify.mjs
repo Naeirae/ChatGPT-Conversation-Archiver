@@ -347,6 +347,21 @@ try {
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
     fail('service-worker.js: saved-archive reconcile/image routes are missing');
   }
+  const offscreenSource = await readFile('offscreen.js', 'utf8');
+  if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
+      !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
+      !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
+      !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'")) {
+    fail('Google Docs images: privileged offscreen image clipboard and legacy rich-HTML fallback must remain available');
+  }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
+      !serviceWorkerSource.includes('async function replaceLinkedGoogleDoc') ||
+      !popupJs.includes("type: 'ARCHIVER_REPLACE_LINKED_DOC'") ||
+      !popupJs.includes("type: 'ARCHIVER_CLEAR_LINKED_DOC'") ||
+      !popupJs.includes("item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc'")) {
+    fail('linked Google Docs: missing explicit replace/unlink UX');
+  }
   if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
       serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
       !serviceWorkerSource.includes("return settings.userName ? \`${settings.userName}:\` : 'Пользователь:'") ||
