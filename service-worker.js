@@ -3511,6 +3511,67 @@ async function openLinkedGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
   return { ok: true, docUrl, tabId: tab.id, linkedDoc: linked };
 }
 
+async function replaceLinkedGoogleDoc({ archiveId = '', sourceUrl = '', docUrl = '' } = {}) {
+  const archive = archiveId ? await getArchive(archiveId) : null;
+  const source = sourceUrl || archive?.sourceUrl || '';
+  if (!source) throw new Error('Не удалось определить исходный чат для замены связанного документа.');
+
+  const normalized = normalizeGoogleDocUrl(docUrl);
+  if (!normalized) {
+    throw new Error('Нужна ссылка на документ Google Docs вида docs.google.com/document/d/...');
+  }
+
+  const previous = await getLinkedDoc(source);
+  let probeTab = null;
+  try {
+    probeTab = await openExistingGoogleDocTab(normalized, {
+      sourceUrl: source,
+      active: false,
+      clearMissingLink: false
+    });
+  } finally {
+    if (probeTab?.id != null) await chrome.tabs.remove(probeTab.id).catch(() => {});
+  }
+
+  const linkedDoc = await setLinkedDoc(source, {
+    url: normalized,
+    docId: googleDocKey(normalized),
+    lastMessageId: '',
+    lastMessageSignature: '',
+    tailSignatures: [],
+    relinkedManually: true
+  });
+
+  const previousUrl = normalizeGoogleDocUrl(previous?.url || '');
+  if (previousUrl && previousUrl !== normalized) {
+    await clearLinkedDoc(source, previousUrl).catch(() => {});
+  }
+
+  return {
+    ok: true,
+    linkedDoc,
+    previousUrl,
+    docUrl: normalized,
+    verificationRequired: true
+  };
+}
+
+async function unlinkGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
+  const archive = archiveId ? await getArchive(archiveId) : null;
+  const source = sourceUrl || archive?.sourceUrl || '';
+  if (!source) throw new Error('Не удалось определить исходный чат для отвязки документа.');
+
+  const linked = await getLinkedDoc(source);
+  if (!linked?.url) return { ok: true, cleared: false };
+
+  const result = await clearLinkedDoc(source, linked.url);
+  return {
+    ok: true,
+    cleared: Boolean(result?.cleared),
+    previousUrl: linked.url
+  };
+}
+
 async function waitForTabComplete(tabId, timeout = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -5537,6 +5598,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, ...(await exportConversationToLinkedDoc(message.archiveId || '')) };
       case 'ARCHIVER_OPEN_LINKED_DOC':
         return await openLinkedGoogleDoc({
+          archiveId: message.archiveId || '',
+          sourceUrl: message.sourceUrl || ''
+        });
+      case 'ARCHIVER_REPLACE_LINKED_DOC':
+        return await replaceLinkedGoogleDoc({
+          archiveId: message.archiveId || '',
+          sourceUrl: message.sourceUrl || '',
+          docUrl: message.docUrl || ''
+        });
+      case 'ARCHIVER_CLEAR_LINKED_DOC':
+        return await unlinkGoogleDoc({
           archiveId: message.archiveId || '',
           sourceUrl: message.sourceUrl || ''
         });
