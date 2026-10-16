@@ -67,6 +67,7 @@ const {
   getLastArchive,
   getArchiveForUrl,
   indexArchive,
+  registerArchive,
   getLinkedDoc,
   setLinkedDoc,
   clearLinkedDoc,
@@ -550,6 +551,55 @@ async function refreshCaptureJobHealth() {
   return failed?.job || await getJob();
 }
 
+function docExportCoversArchive(entry, archive) {
+  const messages = archive?.messages || [];
+  const last = messages[messages.length - 1] || null;
+  if (!entry || !last) return false;
+
+  if (entry.lastMessageId && last.id && entry.lastMessageId === last.id) return true;
+
+  const lastSignature = messageSignature(last.role, last.text);
+  if (entry.lastMessageSignature && lastSignature &&
+      entry.lastMessageSignature === lastSignature) return true;
+
+  const exportedTail = Array.isArray(entry.tailSignatures)
+    ? entry.tailSignatures.filter(Boolean)
+    : [];
+  const archiveTail = exportTailSignatures(messages).filter(Boolean);
+  if (!exportedTail.length || !archiveTail.length) return false;
+  if (exportedTail.length !== archiveTail.length) return false;
+  return exportedTail.every((signature, index) => signature === archiveTail[index]);
+}
+
+function exactDocExportForArchive(docExports = {}, archive = null) {
+  if (!archive?.id) return null;
+  const matches = Object.entries(docExports)
+    .filter(([, entry]) =>
+      entry?.archiveId === archive.id &&
+      docExportCoversArchive(entry, archive)
+    )
+    .sort((left, right) =>
+      Number(right[1]?.updatedAt || 0) - Number(left[1]?.updatedAt || 0)
+    );
+  if (!matches.length) return null;
+  const [docId, entry] = matches[0];
+  return {
+    docId,
+    docUrl: entry?.docUrl || ('https://docs.google.com/document/d/' + docId + '/edit'),
+    updatedAt: entry?.updatedAt || 0
+  };
+}
+
+async function validatedArchiveDestination(archive, destination = null) {
+  if (!archive?.id || !destination?.saved) return null;
+  if (destination.kind !== 'google-doc') return destination;
+
+  const docId = googleDocKey(destination.url || '');
+  if (!docId) return null;
+  const exportRecord = await getDocExport(docId);
+  return docExportCoversArchive(exportRecord, archive) ? destination : null;
+}
+
 async function listLinkedArchives() {
   // Never deserialize every archive just to render the popup. Large archives
   // contain thousands of messages and can stall both UI polling and capture.
@@ -557,6 +607,7 @@ async function listLinkedArchives() {
   // user-visible archives.
   const meta = await chrome.storage.local.get([
     STORAGE_KEYS.archiveIndex,
+    STORAGE_KEYS.archiveLibrary,
     STORAGE_KEYS.lastArchiveId,
     STORAGE_KEYS.archiveDestinations,
     STORAGE_KEYS.docExports,
@@ -565,11 +616,13 @@ async function listLinkedArchives() {
   ]);
 
   const index = meta[STORAGE_KEYS.archiveIndex] || {};
+  const library = meta[STORAGE_KEYS.archiveLibrary] || {};
   const destinations = meta[STORAGE_KEYS.archiveDestinations] || {};
   const docExports = meta[STORAGE_KEYS.docExports] || {};
   const docLinks = meta[STORAGE_KEYS.docLinks] || {};
 
   const ids = new Set([
+    ...Object.keys(library),
     ...Object.values(index),
     meta[STORAGE_KEYS.lastArchiveId] || '',
     meta.fragmentLatestId || '',
@@ -585,7 +638,8 @@ async function listLinkedArchives() {
 
   for (const id of ids) {
     const archive = stored[STORAGE_KEYS.archivePrefix + id];
-    if (!archive?.id || !archive?.sourceUrl || archive.partial) continue;
+    if (!archive?.id || !archive?.sourceUrl) continue;
+    if (archive.partial && archive.complete !== true) continue;
 
     const sourceKey = conversationKey(archive.sourceUrl || '');
     let linked = !archive.isFragment && sourceKey ? (docLinks[sourceKey] || null) : null;
@@ -607,15 +661,25 @@ async function listLinkedArchives() {
     }
 
     let destination = destinations[archive.id] || null;
-    if (!destination && linked?.url) {
+    if (destination?.kind === 'google-doc') {
+      const destinationDocId = googleDocKey(destination.url || '');
+      const destinationExport = destinationDocId ? docExports[destinationDocId] : null;
+      if (!docExportCoversArchive(destinationExport, archive)) destination = null;
+    }
+
+    const exactExport = exactDocExportForArchive(docExports, archive);
+    if (!destination && exactExport?.docUrl) {
       destination = {
         saved: true,
-        url: linked.url,
+        url: exactExport.docUrl,
         kind: 'google-doc',
         label: 'Google Docs',
-        updatedAt: linked.updatedAt || archive.capturedAt || ''
+        updatedAt: exactExport.updatedAt || archive.capturedAt || ''
       };
     }
+    const exactDocUrl = destination?.kind === 'google-doc'
+      ? (destination.url || exactExport?.docUrl || '')
+      : (exactExport?.docUrl || '');
 
     rows.push({
       id: archive.id,
@@ -631,9 +695,10 @@ async function listLinkedArchives() {
       imageBinaryFailed: archive.imageBinaryFailed || 0,
       capturedAt: archive.capturedAt || '',
       sourceUrl: archive.sourceUrl,
-      docUrl: linked?.url || '',
+      docUrl: exactDocUrl,
+      linkedDocUrl: linked?.url || '',
       destination,
-      updatedAt: destination?.updatedAt || linked?.updatedAt || archive.capturedAt || ''
+      updatedAt: destination?.updatedAt || archive.capturedAt || linked?.updatedAt || ''
     });
   }
 
@@ -2877,6 +2942,7 @@ async function reconcileUnfinishedPassIntoArchive(passId = '') {
 
   await putArchive(updated);
   await indexArchive(updated);
+  await registerArchive(updated);
   await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: updated.id });
 
   return {
@@ -2927,7 +2993,7 @@ async function handleCaptureComplete(message) {
   const job = await getJob();
   if (!job || job.jobId !== message.jobId) return;
 
-  const archive = await getArchive(message.archiveId);
+  let archive = await getArchive(message.archiveId);
   if (!archive) {
     return finishJobWithError(
       message.jobId,
@@ -2937,6 +3003,15 @@ async function handleCaptureComplete(message) {
       Number(job.draftCount || 0),
       'error'
     );
+  }
+
+  if (message.mode !== 'compare' && (archive.partial || archive.complete !== true)) {
+    archive = {
+      ...archive,
+      partial: false,
+      complete: true
+    };
+    await putArchive(archive);
   }
 
   const partialSourceId = job.recoveryDraftId || job.draftId || '';
@@ -2950,6 +3025,15 @@ async function handleCaptureComplete(message) {
     }
   } else if (message.mode !== 'compare' && message.mode !== 'fragment') {
     await indexArchive(archive);
+  }
+
+  if (message.mode !== 'compare') {
+    const libraryArchive = partialMerge.applied
+      ? await getArchive(partialMerge.archiveId)
+      : archive;
+    if (libraryArchive?.id && !libraryArchive.partial && libraryArchive.complete !== false) {
+      await registerArchive(libraryArchive);
+    }
   }
 
   if (job.restoreCanonicalArchiveId) {
@@ -3036,6 +3120,8 @@ async function handleCaptureComplete(message) {
       count: archive.messages?.length || 0,
       addedCount: repaired,
       imageCount: archive.imageCount || 0,
+      imageBinaryReady: archive.imageBinaryReady || 0,
+      imageBinaryFailed: archive.imageBinaryFailed || 0,
       archiveId: archive.id,
       finishedAt: Date.now(),
       captureTabId: null,
@@ -3069,6 +3155,8 @@ async function handleCaptureComplete(message) {
       addedCount: 0,
       imageRecoveredCount: recovered,
       imageCount: archive.imageCount || 0,
+      imageBinaryReady: archive.imageBinaryReady || 0,
+      imageBinaryFailed: archive.imageBinaryFailed || 0,
       archiveId: archive.id,
       finishedAt: Date.now(),
       captureTabId: null
@@ -3114,6 +3202,12 @@ async function handleCaptureComplete(message) {
       ? ('Архив продолжен: +' + addedCount + ' сообщений.')
       : 'Переписка собрана.';
 
+  if (!isContinuation && !isDraftRecovery && Number(archive.imageCount || 0) > 0) {
+    finalMessage += ' Изображения в локальном архиве: ' + Number(archive.imageCount || 0) +
+      '; бинарно готовы ' + Number(archive.imageBinaryReady || 0) +
+      ', ошибок ' + Number(archive.imageBinaryFailed || 0) + '.';
+  }
+
   if (shouldAutoAppend) {
     if (docError) finalMessage += ' Документ Google Docs не обновлён: ' + docError;
     else if (docResult?.addedCount) {
@@ -3133,6 +3227,8 @@ async function handleCaptureComplete(message) {
     count: archive.messages?.length || 0,
     addedCount,
     imageCount: archive.imageCount || 0,
+    imageBinaryReady: archive.imageBinaryReady || 0,
+    imageBinaryFailed: archive.imageBinaryFailed || 0,
     archiveId: archive.id,
     docUrl: docResult?.docUrl || (shouldAutoAppend ? job.pendingDocUrl : '') || '',
     docExportError: docError,
@@ -3163,11 +3259,18 @@ function escapeHtml(value) {
 }
 
 function speakerLabel(role, settings) {
-  if (role === 'user') return settings.userName ? `Пользователь / ${settings.userName}:` : 'Пользователь:';
-  return settings.assistantName ? `ChatGPT / ${settings.assistantName}:` : 'ChatGPT:';
+  if (role === 'user') return settings.userName ? `${settings.userName}:` : 'Пользователь:';
+  return settings.assistantName ? `${settings.assistantName}:` : 'ChatGPT:';
 }
-function messageHtmlForExport(message, { stripImages = false } = {}) {
+function messageHtmlForExport(message, {
+  stripImages = false,
+  preferOriginalImageSrc = false
+} = {}) {
   let html = String(message?.html || `<p>${escapeHtml(message?.text || '')}</p>`);
+
+  // Exact legacy path: before 34f7bcb the rich clipboard received the captured
+  // message HTML untouched, including its original absolute image URLs.
+  if (preferOriginalImageSrc && !stripImages) return html;
 
   html = html.replace(/<img\b[^>]*>/gi, tag => {
     const indexMatch = tag.match(/data-archiver-image-index=["']?(\d+)["']?/i);
@@ -3176,7 +3279,9 @@ function messageHtmlForExport(message, { stripImages = false } = {}) {
 
     if (stripImages) return '';
 
-    const src = image?.dataUrl || image?.src || '';
+    const src = preferOriginalImageSrc
+      ? (image?.src || image?.dataUrl || '')
+      : (image?.dataUrl || image?.src || '');
     if (!src) return '';
 
     const escaped = escapeHtml(src);
@@ -3224,7 +3329,10 @@ function buildRichHtml(conversation, settings, options = {}) {
       chunks.push(msg.reasoningHtml);
       chunks.push('</div>');
     }
-    chunks.push(`<div>${messageHtmlForExport(msg, { stripImages: Boolean(options.stripImages) })}</div>`);
+    chunks.push(`<div>${messageHtmlForExport(msg, {
+      stripImages: Boolean(options.stripImages),
+      preferOriginalImageSrc: Boolean(options.preferOriginalImageSrc)
+    })}</div>`);
     chunks.push('</div>');
     chunks.push('<p><br></p>');
   }
@@ -3464,6 +3572,67 @@ async function openLinkedGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
     clearMissingLink: true
   });
   return { ok: true, docUrl, tabId: tab.id, linkedDoc: linked };
+}
+
+async function replaceLinkedGoogleDoc({ archiveId = '', sourceUrl = '', docUrl = '' } = {}) {
+  const archive = archiveId ? await getArchive(archiveId) : null;
+  const source = sourceUrl || archive?.sourceUrl || '';
+  if (!source) throw new Error('Не удалось определить исходный чат для замены связанного документа.');
+
+  const normalized = normalizeGoogleDocUrl(docUrl);
+  if (!normalized) {
+    throw new Error('Нужна ссылка на документ Google Docs вида docs.google.com/document/d/...');
+  }
+
+  const previous = await getLinkedDoc(source);
+  let probeTab = null;
+  try {
+    probeTab = await openExistingGoogleDocTab(normalized, {
+      sourceUrl: source,
+      active: false,
+      clearMissingLink: false
+    });
+  } finally {
+    if (probeTab?.id != null) await chrome.tabs.remove(probeTab.id).catch(() => {});
+  }
+
+  const linkedDoc = await setLinkedDoc(source, {
+    url: normalized,
+    docId: googleDocKey(normalized),
+    lastMessageId: '',
+    lastMessageSignature: '',
+    tailSignatures: [],
+    relinkedManually: true
+  });
+
+  const previousUrl = normalizeGoogleDocUrl(previous?.url || '');
+  if (previousUrl && previousUrl !== normalized) {
+    await clearLinkedDoc(source, previousUrl).catch(() => {});
+  }
+
+  return {
+    ok: true,
+    linkedDoc,
+    previousUrl,
+    docUrl: normalized,
+    verificationRequired: true
+  };
+}
+
+async function unlinkGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
+  const archive = archiveId ? await getArchive(archiveId) : null;
+  const source = sourceUrl || archive?.sourceUrl || '';
+  if (!source) throw new Error('Не удалось определить исходный чат для отвязки документа.');
+
+  const linked = await getLinkedDoc(source);
+  if (!linked?.url) return { ok: true, cleared: false };
+
+  const result = await clearLinkedDoc(source, linked.url);
+  return {
+    ok: true,
+    cleared: Boolean(result?.cleared),
+    previousUrl: linked.url
+  };
 }
 
 async function waitForTabComplete(tabId, timeout = 30000) {
@@ -4072,64 +4241,115 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
     return { ok: false, error: 'В архиве нет бинарных данных изображения.' };
   }
 
-  const expression = `(async () => {
-    const dataUrl = ${JSON.stringify(dataUrl)};
-    let clipboardError = '';
-
-    try {
-      const response = await fetch(dataUrl);
-      const blob = await response.blob();
-      const type = blob.type || 'image/png';
-      if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-        await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-        return { ok: true, method: 'navigator.clipboard', type, size: blob.size };
-      }
-    } catch (error) {
-      clipboardError = String(error?.message || error);
-    }
-
-    try {
-      const host = document.createElement('div');
-      host.contentEditable = 'true';
-      host.style.position = 'fixed';
-      host.style.left = '-10000px';
-      host.style.top = '0';
-      host.style.opacity = '0';
-
-      const img = document.createElement('img');
-      img.src = dataUrl;
-      host.appendChild(img);
-      document.body.appendChild(host);
-      if (img.decode) await img.decode();
-
-      const selection = getSelection();
-      const range = document.createRange();
-      range.selectNode(img);
-      selection.removeAllRanges();
-      selection.addRange(range);
-      host.focus();
-
-      const ok = document.execCommand('copy');
-      selection.removeAllRanges();
-      host.remove();
-
-      if (!ok) throw new Error('document.execCommand(copy) returned false');
-      return { ok: true, method: 'execCommand-image', type: 'image/png', size: dataUrl.length };
-    } catch (error) {
+  let offscreenError = '';
+  try {
+    await ensureOffscreen();
+    const offscreen = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE',
+      target: 'offscreen',
+      dataUrl,
+      alt: String(image?.alt || '')
+    });
+    if (offscreen?.ok) {
       return {
-        ok: false,
-        error: (clipboardError ? clipboardError + ' | ' : '') + String(error?.message || error)
+        ok: true,
+        method: offscreen.method || 'offscreen-image-selection',
+        size: offscreen.size || dataUrl.length
       };
     }
-  })()`;
+    offscreenError = offscreen?.error || 'offscreen image clipboard failed';
+  } catch (error) {
+    offscreenError = error?.message || String(error);
+  }
 
-  const result = await cdp(tabId, 'Runtime.evaluate', {
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-    userGesture: true
-  });
-  return result?.result?.value || { ok: false, error: 'Не удалось подготовить image clipboard.' };
+  // 0.3.x/early 0.4.x successfully relied on a rich-HTML clipboard payload
+  // containing the original image URL. Keep that proven route as the second
+  // fallback when Chromium refuses an image-only clipboard item.
+  try {
+    const source = String(image?.src || dataUrl);
+    const alt = String(image?.alt || '');
+    const html =
+      '<img src="' + escapeHtml(source) + '" alt="' + escapeHtml(alt) + '">';
+    await writeClipboard(html, alt);
+    return {
+      ok: true,
+      method: 'offscreen-rich-html-image',
+      size: source.length,
+      fallbackFrom: offscreenError
+    };
+  } catch (error) {
+    const richHtmlError = error?.message || String(error);
+
+    // Last resort: retain the in-page clipboard path introduced later. This is
+    // no longer the primary path because Google Docs can report success here
+    // while the clipboard image is not actually accepted by the editor.
+    const expression = `(async () => {
+      const dataUrl = ${JSON.stringify(dataUrl)};
+      let clipboardError = '';
+
+      try {
+        const response = await fetch(dataUrl);
+        const blob = await response.blob();
+        const type = blob.type || 'image/png';
+        if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
+          await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+          return { ok: true, method: 'navigator.clipboard', type, size: blob.size };
+        }
+      } catch (error) {
+        clipboardError = String(error?.message || error);
+      }
+
+      try {
+        const host = document.createElement('div');
+        host.contentEditable = 'true';
+        host.style.position = 'fixed';
+        host.style.left = '-10000px';
+        host.style.top = '0';
+        host.style.opacity = '0';
+
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        host.appendChild(img);
+        document.body.appendChild(host);
+        if (img.decode) await img.decode();
+
+        const selection = getSelection();
+        const range = document.createRange();
+        range.selectNode(img);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        host.focus();
+
+        const ok = document.execCommand('copy');
+        selection.removeAllRanges();
+        host.remove();
+
+        if (!ok) throw new Error('document.execCommand(copy) returned false');
+        return { ok: true, method: 'execCommand-image', type: 'image/png', size: dataUrl.length };
+      } catch (error) {
+        return {
+          ok: false,
+          error: (clipboardError ? clipboardError + ' | ' : '') + String(error?.message || error)
+        };
+      }
+    })()`;
+
+    const result = await cdp(tabId, 'Runtime.evaluate', {
+      expression,
+      awaitPromise: true,
+      returnByValue: true,
+      userGesture: true
+    });
+    const value = result?.result?.value || { ok: false, error: 'Не удалось подготовить image clipboard.' };
+    if (!value.ok) {
+      value.error = [
+        offscreenError,
+        richHtmlError,
+        value.error || ''
+      ].filter(Boolean).join(' | ');
+    }
+    return value;
+  }
 }
 
 async function pasteArchiveIntoGoogleDoc(
@@ -4141,15 +4361,21 @@ async function pasteArchiveIntoGoogleDoc(
 ) {
   let attached = false;
   let imageInsertedCount = 0;
+  let imageInlinePasteCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
 
-  const flushText = async (buffer, withHeader) => {
+  const pasteChunk = async (
+    buffer,
+    withHeader,
+    { stripImages = true, preferOriginalImageSrc = false } = {}
+  ) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
-      stripImages: true
+      stripImages,
+      preferOriginalImageSrc
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -4162,7 +4388,35 @@ async function pasteArchiveIntoGoogleDoc(
     await dispatchKey(tabId, 'End', 'End', 35, 2);
     await sleep(100);
     await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
-    await sleep(450);
+    await sleep(stripImages ? 450 : 950);
+  };
+
+  const pasteBinaryImages = async message => {
+    const ready = messageImagesReady(message);
+    const failed = (message.images || []).filter(image => !image?.dataUrl);
+
+    for (const image of ready) {
+      const copied = await copyImageClipboardInGoogleDocs(tabId, image);
+      if (!copied?.ok) {
+        imageFailedCount++;
+        failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
+        continue;
+      }
+
+      await focusGoogleDocEditor(tabId);
+      await dispatchKey(tabId, 'End', 'End', 35, 2);
+      await sleep(100);
+      await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
+      await sleep(850);
+      await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+      await sleep(120);
+      imageInsertedCount++;
+    }
+
+    for (const image of failed) {
+      imageFailedCount++;
+      failedImages.push({ src: image.src || '', error: image.binaryError || 'binary unavailable' });
+    }
   };
 
   try {
@@ -4179,41 +4433,44 @@ async function pasteArchiveIntoGoogleDoc(
     let headerPending = includeHeader;
 
     for (const message of messages || []) {
-      buffer.push(message);
-      const ready = messageImagesReady(message);
-      const failed = (message.images || []).filter(image => !image?.dataUrl);
-
-      if (!ready.length && !failed.length) continue;
-
-      await flushText(buffer, headerPending);
-      buffer = [];
-      headerPending = false;
-
-      for (const image of ready) {
-        const copied = await copyImageClipboardInGoogleDocs(tabId, image);
-        if (!copied?.ok) {
-          imageFailedCount++;
-          failedImages.push({ src: image.src || '', error: copied?.error || 'clipboard failed' });
-          continue;
-        }
-
-        await focusGoogleDocEditor(tabId);
-        await dispatchKey(tabId, 'End', 'End', 35, 2);
-        await sleep(100);
-        await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
-        await sleep(850);
-        await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
-        await sleep(120);
-        imageInsertedCount++;
+      const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+      if (!images.length) {
+        buffer.push(message);
+        continue;
       }
 
-      for (const image of failed) {
-        imageFailedCount++;
-        failedImages.push({ src: image.src || '', error: image.binaryError || 'binary unavailable' });
+      // Restore the pre-34f7bcb path that was observed to work in Google Docs:
+      // text and image markup for an image-bearing message travel through one
+      // rich HTML clipboard paste, using the original ChatGPT image URL first.
+      if (buffer.length) {
+        await pasteChunk(buffer, headerPending, { stripImages: true });
+        buffer = [];
+        headerPending = false;
+      }
+
+      try {
+        await pasteChunk([message], headerPending, {
+          stripImages: false,
+          preferOriginalImageSrc: true
+        });
+        headerPending = false;
+        imageInlinePasteCount += images.length;
+      } catch (error) {
+        // If the old rich-HTML route itself errors, keep the newer binary
+        // clipboard path as a fallback instead of losing the whole export.
+        await pasteChunk([message], headerPending, { stripImages: true });
+        headerPending = false;
+        await pasteBinaryImages(message);
+        if (!imageInsertedCount && !imageFailedCount) {
+          failedImages.push({
+            src: images[0]?.src || '',
+            error: error?.message || String(error)
+          });
+        }
       }
     }
 
-    await flushText(buffer, headerPending);
+    await pasteChunk(buffer, headerPending, { stripImages: true });
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
@@ -4221,6 +4478,7 @@ async function pasteArchiveIntoGoogleDoc(
   return {
     tab: await chrome.tabs.get(tabId),
     imageInsertedCount,
+    imageInlinePasteCount,
     imageFailedCount,
     failedImages
   };
@@ -4479,6 +4737,7 @@ async function appendMessagesToGoogleDocUrl(
       noChanges: false,
       linkedDoc,
       imageInsertedCount: pasted.imageInsertedCount || 0,
+      imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
       imageFailedCount: pasted.imageFailedCount || 0,
       failedImages: pasted.failedImages || []
     };
@@ -4588,6 +4847,7 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     addedCount: Number(messageResult.addedCount || 0),
     noChanges: !delta.length && !imageInsertedCount && !imageFailedCount,
     imageInsertedCount,
+    imageInlinePasteCount,
     imageFailedCount,
     failedImages,
     recoveredImagePatchAttempted: Boolean(oldRecoveredItems.length),
@@ -4691,6 +4951,7 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     exportMode,
     addedCount: messages.length,
     imageInsertedCount: pasted.imageInsertedCount || 0,
+    imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
     imageFailedCount: pasted.imageFailedCount || 0,
     failedImages: pasted.failedImages || [],
     noChanges: false
@@ -4882,6 +5143,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
   const settings = await getSettings();
   const docs = [];
   let imageInsertedCount = 0;
+  let imageInlinePasteCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
   let totalTabs = 0;
@@ -4946,6 +5208,7 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
         );
 
         imageInsertedCount += Number(pasted.imageInsertedCount || 0);
+        imageInlinePasteCount += Number(pasted.imageInlinePasteCount || 0);
         imageFailedCount += Number(pasted.imageFailedCount || 0);
         failedImages.push(...(pasted.failedImages || []));
         completedTabs++;
@@ -5113,6 +5376,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const archive = activeIsConversation
           ? currentArchive
           : (currentArchive || await getLastArchive());
+        if (archive?.id && !archive.partial && archive.complete !== false) {
+          await registerArchive(archive);
+        }
         if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
@@ -5167,10 +5433,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           activeUnfinished = pseudo;
         }
 
+        const rawArchiveDestination = archive?.id
+          ? await getArchiveDestination(archive.id)
+          : null;
+        const archiveDestination = await validatedArchiveDestination(
+          archive,
+          rawArchiveDestination
+        );
+
         return {
           ok: true,
           job,
           archive: summarize(archive),
+          archiveDestination,
           unfinishedPass: activeUnfinished,
           unfinishedPasses,
           linkedDoc,
@@ -5433,6 +5708,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, ...(await exportConversationToLinkedDoc(message.archiveId || '')) };
       case 'ARCHIVER_OPEN_LINKED_DOC':
         return await openLinkedGoogleDoc({
+          archiveId: message.archiveId || '',
+          sourceUrl: message.sourceUrl || ''
+        });
+      case 'ARCHIVER_REPLACE_LINKED_DOC':
+        return await replaceLinkedGoogleDoc({
+          archiveId: message.archiveId || '',
+          sourceUrl: message.sourceUrl || '',
+          docUrl: message.docUrl || ''
+        });
+      case 'ARCHIVER_CLEAR_LINKED_DOC':
+        return await unlinkGoogleDoc({
           archiveId: message.archiveId || '',
           sourceUrl: message.sourceUrl || ''
         });

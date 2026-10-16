@@ -276,6 +276,7 @@ try {
 try {
   const popupHtml = await readFile('popup.html', 'utf8');
   const popupJs = await readFile('popup.js', 'utf8');
+  const popupCss = await readFile('popup.css', 'utf8');
   const serviceWorkerSource = await readFile('service-worker.js', 'utf8');
   const requiredUiIds = [
     'status',
@@ -346,6 +347,51 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_RECONCILE_SAVED_ARCHIVE'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_RECOVER_IMAGES_SAVED_ARCHIVE'")) {
     fail('service-worker.js: saved-archive reconcile/image routes are missing');
+  }
+  const offscreenSource = await readFile('offscreen.js', 'utf8');
+  if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
+      !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
+      !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
+      !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'") ||
+      !serviceWorkerSource.includes('preferOriginalImageSrc: true') ||
+      !serviceWorkerSource.includes('pre-34f7bcb path') ||
+      !serviceWorkerSource.includes('imageInlinePasteCount')) {
+    fail('Google Docs images: legacy inline rich-HTML paste must be primary and privileged binary clipboard must remain as fallback');
+  }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
+      !serviceWorkerSource.includes('async function replaceLinkedGoogleDoc') ||
+      !popupJs.includes("type: 'ARCHIVER_REPLACE_LINKED_DOC'") ||
+      !popupJs.includes("type: 'ARCHIVER_CLEAR_LINKED_DOC'") ||
+      !popupJs.includes("item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc'")) {
+    fail('linked Google Docs: missing explicit replace/unlink UX');
+  }
+  if (!popupJs.includes("moreActions.className = 'archive-link-tools'") ||
+      !popupJs.includes('secondaryActions.appendChild(reconcileButton)') ||
+      !popupCss.includes('.archive-link-secondary')) {
+    fail('saved-chat UX: secondary maintenance actions must stay collapsed under «Ещё»');
+  }
+  if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
+      serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
+      !serviceWorkerSource.includes("return settings.userName ? \`${settings.userName}:\` : 'Пользователь:'") ||
+      !serviceWorkerSource.includes("return settings.assistantName ? \`${settings.assistantName}:\` : 'ChatGPT:'")) {
+    fail('speaker labels: custom names must replace the default role label, not be appended to it');
+  }
+  const archiveStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
+  if (!archiveStoreSource.includes("archiveLibrary: 'archiveLibrary'") ||
+      !archiveStoreSource.includes('async function registerArchive(conversation)') ||
+      !serviceWorkerSource.includes('exactDocExportForArchive') ||
+      !serviceWorkerSource.includes('docExportCoversArchive') ||
+      !serviceWorkerSource.includes('validatedArchiveDestination') ||
+      !serviceWorkerSource.includes('linkedDocUrl: linked?.url') ||
+      !serviceWorkerSource.includes('await registerArchive(libraryArchive)')) {
+    fail('saved archive library: completed captures must be registered independently of linked Google Docs and stale Doc exports must not label a newer snapshot as saved');
+  }
+  if (!popupJs.includes('state.archiveDestination || null') ||
+      !popupJs.includes("destinationText.textContent = 'Сохранён локально · документ не создан'") ||
+      !popupJs.includes("exportButton.textContent = 'Новый документ Google Docs'") ||
+      popupJs.includes("$('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs'")) {
+    fail('saved archive UI: local completion and conversation-level linked Docs must stay separate');
   }
   const iconSizes = new Map([
     ['icons/icon-16.png', 16],

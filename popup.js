@@ -571,18 +571,24 @@ function renderSavedArchives(items = []) {
       } else {
         destinationText.textContent = 'Сохранён отдельно';
       }
+    } else if (item.linkedDocUrl) {
+      destinationText.textContent = 'Сохранён локально · есть связанный документ';
     } else {
-      destinationText.textContent = 'Не перенесён в документ';
+      destinationText.textContent = 'Сохранён локально · документ не создан';
     }
     destination.appendChild(destinationText);
 
-    const destinationUrl = item.destination?.url || item.docUrl || '';
+    const destinationUrl = item.destination?.url || item.docUrl || item.linkedDocUrl || '';
     if (destinationUrl) {
       const destinationLink = document.createElement('a');
       destinationLink.href = destinationUrl;
       destinationLink.target = '_blank';
       destinationLink.rel = 'noopener noreferrer';
-      destinationLink.textContent = item.destination?.kind === 'google-doc' ? 'Открыть документ Google Docs ↗' : 'Открыть ↗';
+      destinationLink.textContent = item.docUrl || item.destination?.kind === 'google-doc'
+        ? 'Открыть документ Google Docs ↗'
+        : item.linkedDocUrl
+          ? 'Открыть связанный Google Doc ↗'
+          : 'Открыть ↗';
       destination.appendChild(destinationLink);
     }
 
@@ -590,6 +596,14 @@ function renderSavedArchives(items = []) {
 
     const actions = document.createElement('div');
     actions.className = 'archive-link-actions';
+
+    const moreActions = document.createElement('details');
+    moreActions.className = 'archive-link-tools';
+    const moreSummary = document.createElement('summary');
+    moreSummary.textContent = 'Ещё';
+    const secondaryActions = document.createElement('div');
+    secondaryActions.className = 'archive-link-secondary';
+    moreActions.append(moreSummary, secondaryActions);
 
     const resume = document.createElement('button');
     resume.className = 'archive-link-open';
@@ -649,7 +663,7 @@ function renderSavedArchives(items = []) {
         copyButton.disabled = false;
       }
     };
-    actions.appendChild(copyButton);
+    secondaryActions.appendChild(copyButton);
 
     if (!item.isFragment && !item.partial) {
       const reconcileButton = document.createElement('button');
@@ -674,7 +688,7 @@ function renderSavedArchives(items = []) {
           reconcileButton.disabled = false;
         }
       };
-      actions.appendChild(reconcileButton);
+      secondaryActions.appendChild(reconcileButton);
 
       const imagesButton = document.createElement('button');
       imagesButton.className = 'archive-link-open';
@@ -698,32 +712,16 @@ function renderSavedArchives(items = []) {
           imagesButton.disabled = false;
         }
       };
-      actions.appendChild(imagesButton);
+      secondaryActions.appendChild(imagesButton);
     }
 
     if (item.docUrl) {
-      const open = document.createElement('button');
+      const open = document.createElement('a');
       open.className = 'archive-link-open';
-      open.type = 'button';
+      open.href = item.docUrl;
+      open.target = '_blank';
+      open.rel = 'noopener noreferrer';
       open.textContent = 'Документ Google Docs ↗';
-      open.disabled = busy;
-      open.onclick = async () => {
-        open.disabled = true;
-        setStatus('Открываю и проверяю связанный документ Google Docs…');
-        try {
-          const result = await chrome.runtime.sendMessage({
-            type: 'ARCHIVER_OPEN_LINKED_DOC',
-            archiveId: item.id
-          });
-          if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть связанный документ Google Docs.');
-          setStatus('Связанный документ Google Docs открыт.');
-        } catch (error) {
-          setStatus(error.message || String(error), true);
-          await getState().catch(() => {});
-        } finally {
-          open.disabled = false;
-        }
-      };
       actions.appendChild(open);
     } else if (item.isFragment && item.destination?.url && item.destination.kind === 'google-doc') {
       const open = document.createElement('a');
@@ -733,48 +731,86 @@ function renderSavedArchives(items = []) {
       open.rel = 'noopener noreferrer';
       open.textContent = 'Документ Google Docs ↗';
       actions.appendChild(open);
-    } else {
-      const exportButton = document.createElement('button');
-      exportButton.className = 'archive-link-open';
-      exportButton.type = 'button';
-      exportButton.textContent = 'В документ Google Docs';
-      exportButton.disabled = busy;
-      exportButton.onclick = async () => {
-        exportButton.disabled = true;
-        setStatus('Создаю документ Google Docs…');
+    } else if (item.linkedDocUrl && !item.isFragment) {
+      const appendLinked = document.createElement('button');
+      appendLinked.className = 'archive-link-open';
+      appendLinked.type = 'button';
+      appendLinked.textContent = 'В связанный документ';
+      appendLinked.disabled = busy;
+      appendLinked.onclick = async () => {
+        appendLinked.disabled = true;
+        setStatus('Проверяю связанный документ и добавляю недостающее…');
         try {
-          const sameTitle = rows.filter(record => record.id !== item.id &&
-            normalizedTitle(record.title) === normalizedTitle(item.title));
-          if (sameTitle.length) {
-            const sameChat = sameTitle.filter(record => chatKey(record.sourceUrl) &&
-              chatKey(record.sourceUrl) === chatKey(item.sourceUrl));
-            const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
-              record.docUrl);
-            const explanation = existingDoc
-              ? 'Для этой переписки уже найден сохранённый документ Google Docs.'
-              : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
-            if (!confirm(explanation + '\n\nСоздать ещё один документ Google Docs? Нажмите «Отмена», чтобы избежать дубля.')) {
-              setStatus('Создание документа отменено. Сохранённые данные не изменены.');
-              return;
-            }
-          }
-          const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
-          setStatus('Сохранено в документ Google Docs: ' + (result.addedCount || 0) + ' сообщений.');
+          const result = await exportToDoc('ARCHIVER_EXPORT_LINKED_DOC', { archiveId: item.id });
+          setStatus(result.noChanges
+            ? 'Связанный документ уже содержит сохранённый хвост архива.'
+            : 'В связанный документ добавлено ' + Number(result.addedCount || 0) + ' сообщений.');
           await getState();
         } catch (error) {
           setStatus(error.message || String(error), true);
-          exportButton.disabled = false;
+        } finally {
+          appendLinked.disabled = false;
         }
       };
-      actions.appendChild(exportButton);
+      actions.appendChild(appendLinked);
     }
 
-    const mark = document.createElement('button');
-    mark.className = 'archive-link-more';
-    mark.type = 'button';
-    mark.textContent = item.destination?.saved ? 'Изменить' : 'Отметить как сохранённый';
-    mark.disabled = busy;
-    actions.appendChild(mark);
+    const exportButton = document.createElement('button');
+    exportButton.className = 'archive-link-open';
+    exportButton.type = 'button';
+    exportButton.textContent = 'Новый документ Google Docs';
+    exportButton.disabled = busy;
+    exportButton.onclick = async () => {
+      exportButton.disabled = true;
+      setStatus('Создаю новый документ Google Docs…');
+      try {
+        const sameTitle = rows.filter(record => record.id !== item.id &&
+          normalizedTitle(record.title) === normalizedTitle(item.title));
+        if (sameTitle.length) {
+          const sameChat = sameTitle.filter(record => chatKey(record.sourceUrl) &&
+            chatKey(record.sourceUrl) === chatKey(item.sourceUrl));
+          const existingDoc = sameChat.find(record => record.destination?.kind === 'google-doc' ||
+            record.docUrl || record.linkedDocUrl);
+          const explanation = existingDoc
+            ? 'Для этой переписки уже найден документ Google Docs.'
+            : 'В Архиваторе есть ' + sameTitle.length + ' других записей с таким названием.';
+          if (!confirm(explanation + '\n\nСоздать ещё один документ Google Docs? Нажмите «Отмена», чтобы избежать дубля.')) {
+            setStatus('Создание документа отменено. Сохранённые данные не изменены.');
+            exportButton.disabled = false;
+            return;
+          }
+        }
+        const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: item.id });
+        const inlineImages = Number(result.imageInlinePasteCount || 0);
+        const binaryImages = Number(result.imageInsertedCount || 0);
+        const failedImages = Number(result.imageFailedCount || 0);
+        const imagePart = inlineImages || binaryImages || failedImages
+          ? ' Изображения: ' +
+            (inlineImages ? inlineImages + ' передано через rich HTML' : '') +
+            (inlineImages && binaryImages ? ', ' : '') +
+            (binaryImages ? binaryImages + ' вставлено бинарно' : '') +
+            (failedImages ? ', ' + failedImages + ' ошибок' : '') + '.'
+          : '';
+        setStatus(
+          'Сохранено в новый документ Google Docs: ' +
+          (result.addedCount || 0) + ' сообщений.' + imagePart
+        );
+        await getState();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        exportButton.disabled = false;
+      }
+    };
+    actions.appendChild(exportButton);
+
+    const editLinkedDoc = document.createElement('button');
+    editLinkedDoc.className = 'archive-link-more';
+    editLinkedDoc.type = 'button';
+    editLinkedDoc.textContent = item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc';
+    editLinkedDoc.disabled = Boolean(busy || item.isFragment);
+    editLinkedDoc.classList.toggle('hidden', Boolean(item.isFragment));
+    secondaryActions.appendChild(editLinkedDoc);
 
     const plan = document.createElement('button');
     plan.className = 'archive-link-more';
@@ -785,7 +821,7 @@ function renderSavedArchives(items = []) {
       const url = chrome.runtime.getURL('planner.html?archiveId=' + encodeURIComponent(item.id));
       await chrome.tabs.create({ url });
     };
-    actions.appendChild(plan);
+    secondaryActions.appendChild(plan);
 
     const deleteSaved = document.createElement('button');
     deleteSaved.type = 'button';
@@ -813,15 +849,15 @@ function renderSavedArchives(items = []) {
         deleteSaved.disabled = false;
       }
     };
-    actions.appendChild(deleteSaved);
+    secondaryActions.appendChild(deleteSaved);
 
     const destinationEditor = document.createElement('div');
     destinationEditor.className = 'archive-destination-editor hidden';
 
     const destinationInput = document.createElement('input');
     destinationInput.type = 'url';
-    destinationInput.placeholder = 'Ссылка на документ или страницу — необязательно';
-    destinationInput.value = item.destination?.kind === 'manual' ? (item.destination?.url || '') : '';
+    destinationInput.placeholder = 'https://docs.google.com/document/d/...';
+    destinationInput.value = item.linkedDocUrl || '';
     destinationInput.autocomplete = 'off';
 
     const editorActions = document.createElement('div');
@@ -830,42 +866,58 @@ function renderSavedArchives(items = []) {
     const saveDestination = document.createElement('button');
     saveDestination.type = 'button';
     saveDestination.className = 'primary';
-    saveDestination.textContent = 'Сохранить отметку';
+    saveDestination.textContent = item.linkedDocUrl ? 'Заменить ссылку' : 'Привязать';
     saveDestination.onclick = async () => {
+      const docUrl = destinationInput.value.trim();
+      if (!docUrl) {
+        setStatus('Вставьте ссылку на документ Google Docs.', true);
+        destinationInput.focus();
+        return;
+      }
       saveDestination.disabled = true;
       try {
         const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_SET_ARCHIVE_DESTINATION',
+          type: 'ARCHIVER_REPLACE_LINKED_DOC',
           archiveId: item.id,
-          saved: true,
-          url: destinationInput.value.trim()
+          sourceUrl: item.sourceUrl || '',
+          docUrl
         });
-        if (!result?.ok) throw new Error(result?.error || 'Не удалось сохранить отметку.');
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось заменить связанный документ.');
         await getState();
-        setStatus('Отметка сохранена.');
+        setStatus(
+          item.linkedDocUrl
+            ? 'Ссылка на связанный Google Doc заменена. Перед автодобавлением Архиватор заново проверит точку продолжения.'
+            : 'Google Doc привязан. Перед автодобавлением Архиватор заново проверит точку продолжения.'
+        );
       } catch (error) {
         setStatus(error.message || String(error), true);
+      } finally {
         saveDestination.disabled = false;
       }
     };
     editorActions.appendChild(saveDestination);
 
-    if (item.destination?.saved && item.destination.kind !== 'google-doc') {
+    if (item.linkedDocUrl) {
       const clearDestination = document.createElement('button');
       clearDestination.type = 'button';
       clearDestination.className = 'danger-outline';
-      clearDestination.textContent = 'Снять отметку';
+      clearDestination.textContent = 'Отвязать документ';
       clearDestination.onclick = async () => {
-        const result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_SET_ARCHIVE_DESTINATION',
-          archiveId: item.id,
-          saved: false
-        });
-        if (!result?.ok) {
-          setStatus(result?.error || 'Не удалось снять отметку.', true);
-          return;
+        clearDestination.disabled = true;
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_CLEAR_LINKED_DOC',
+            archiveId: item.id,
+            sourceUrl: item.sourceUrl || ''
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось отвязать документ.');
+          await getState();
+          setStatus('Связанный Google Doc отвязан. Сам документ не изменён.');
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+        } finally {
+          clearDestination.disabled = false;
         }
-        await getState();
       };
       editorActions.appendChild(clearDestination);
     }
@@ -877,12 +929,12 @@ function renderSavedArchives(items = []) {
     editorActions.appendChild(cancelDestination);
 
     destinationEditor.append(destinationInput, editorActions);
-    mark.onclick = () => {
+    editLinkedDoc.onclick = () => {
       destinationEditor.classList.toggle('hidden');
       if (!destinationEditor.classList.contains('hidden')) destinationInput.focus();
     };
 
-    row.append(main, actions, destinationEditor);
+    row.append(main, actions, moreActions, destinationEditor);
     list.appendChild(row);
   }
 }
@@ -944,6 +996,14 @@ function renderHistory(history = []) {
     const parts = [time, captureTargetLabel(item.captureTarget), (item.count || 0) + ' сообщений'];
     if (item.startedAt && item.finishedAt) parts.push(formatDuration(item.finishedAt - item.startedAt));
     if (item.addedCount) parts.push('+' + item.addedCount + ' новых');
+    if (item.imageCount) {
+      const ready = Number(item.imageBinaryReady || 0);
+      const failed = Number(item.imageBinaryFailed || 0);
+      parts.push(
+        Number(item.imageCount || 0) + ' изображений' +
+        (ready || failed ? ' · бинарно ' + ready + ' / ошибок ' + failed : '')
+      );
+    }
     meta.textContent = parts.join(' · ');
 
     row.append(head, meta);
@@ -1291,13 +1351,24 @@ function render(data) {
       (archive.lastImageRecoveredCount ? ' · добор изображений +' + archive.lastImageRecoveredCount : ''))
     : '';
   const linkedUrl = state.linkedDoc?.url || '';
-  $('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
-  $('archiveStateHint').textContent = linkedUrl ? 'локальная копия сохранена для продолжения' : '';
-  $('archiveDocStatus').textContent = linkedUrl
-    ? 'Документ Google Docs связан с этим архивом. Локальная копия нужна, чтобы продолжать чат без повторного полного сбора.'
-    : 'Архив пока хранится только локально.';
-  $('archiveDocLink').classList.toggle('hidden', !linkedUrl);
-  $('archiveDocLink').href = linkedUrl || '#';
+  const archiveDestination = state.archiveDestination || null;
+  const savedDocUrl = archiveDestination?.saved && archiveDestination?.kind === 'google-doc'
+    ? (archiveDestination.url || '')
+    : '';
+  $('archiveStateLabel').textContent = savedDocUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
+  $('archiveStateHint').textContent = savedDocUrl
+    ? 'локальная копия также сохранена для продолжения'
+    : (linkedUrl ? 'локально · для переписки есть связанный документ' : 'локально в Chrome');
+  $('archiveDocStatus').textContent = savedDocUrl
+    ? 'Этот локальный архив уже сохранён в документ Google Docs.'
+    : linkedUrl
+      ? 'Этот архив сохранён локально. Для переписки есть связанный документ: его можно обновить или создать новый документ.'
+      : 'Этот архив сохранён локально. Можно создать для него новый документ Google Docs.';
+  $('archiveDocLink').classList.toggle('hidden', !(savedDocUrl || linkedUrl));
+  $('archiveDocLink').href = savedDocUrl || linkedUrl || '#';
+  $('archiveDocLink').textContent = savedDocUrl
+    ? 'Открыть документ Google Docs ↗'
+    : 'Открыть связанный документ Google Docs ↗';
 
   // A failed new capture must not hide or disable the previously completed
   // local archive. Export is disabled only while a capture is actively running.
@@ -1997,8 +2068,15 @@ $('newDoc').onclick = async () => {
   setStatus('Открываю документ Google Docs и вставляю переписку…');
   try {
     const result = await exportToDoc('ARCHIVER_EXPORT_NEW_DOC', { archiveId: state?.archive?.id || '' });
-    const imagePart = (result.imageInsertedCount || result.imageFailedCount)
-      ? ` Изображения: ${result.imageInsertedCount || 0} вставлено, ${result.imageFailedCount || 0} ошибок.`
+    const imageInline = Number(result.imageInlinePasteCount || 0);
+    const imageInserted = Number(result.imageInsertedCount || 0);
+    const imageFailed = Number(result.imageFailedCount || 0);
+    const imagePart = (imageInline || imageInserted || imageFailed)
+      ? ' Изображения: ' +
+        (imageInline ? imageInline + ' передано через rich HTML' : '') +
+        (imageInline && imageInserted ? ', ' : '') +
+        (imageInserted ? imageInserted + ' вставлено бинарно' : '') +
+        (imageFailed ? ', ' + imageFailed + ' ошибок' : '') + '.'
       : '';
     setStatus(`Готово. В новый документ Google Docs вставлено ${result.addedCount || 0} сообщений.` + imagePart);
     await getState();
@@ -2020,14 +2098,18 @@ $('activeDoc').onclick = async () => {
       linked ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_ACTIVE_DOC',
       { archiveId: state?.archive?.id || '' }
     );
+    const imageInline = Number(result.imageInlinePasteCount || 0);
     const imageInserted = Number(result.imageInsertedCount || 0);
     const imageFailed = Number(result.imageFailedCount || 0);
     const imageAttempted = Number(result.recoveredImagePatchCandidateCount || 0);
     const failureReason = String(result.firstImageFailure || '').trim();
-    const imagePart = (imageInserted || imageFailed || imageAttempted)
-      ? ` Изображения: ${imageInserted} вставлено отдельно через debugger` +
-        (imageFailed ? `, ${imageFailed} не вставлено` : '') +
-        (failureReason ? `. Причина: ${failureReason}` : '') + '.'
+    const imagePart = (imageInline || imageInserted || imageFailed || imageAttempted)
+      ? ' Изображения: ' +
+        (imageInline ? imageInline + ' передано через rich HTML' : '') +
+        (imageInline && imageInserted ? ', ' : '') +
+        (imageInserted ? imageInserted + ' вставлено бинарно' : '') +
+        (imageFailed ? ', ' + imageFailed + ' не вставлено' : '') +
+        (failureReason ? '. Причина: ' + failureReason : '') + '.'
       : '';
 
     if (result.noChanges) {
@@ -2041,7 +2123,7 @@ $('activeDoc').onclick = async () => {
         `Готово. В конец документа добавлено ${result.addedCount || 0} новых сообщений.` +
         imagePart
       );
-    } else if (imageInserted || imageFailed || imageAttempted) {
+    } else if (imageInline || imageInserted || imageFailed || imageAttempted) {
       setStatus(
         'Текст повторно не вставлялся.' + imagePart,
         Boolean(imageFailed && !imageInserted)
