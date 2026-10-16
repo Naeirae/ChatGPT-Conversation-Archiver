@@ -4867,6 +4867,8 @@ async function appendMessagesToGoogleDocUrl(
   }
 
   const settings = await getSettings();
+  const exportDocId = googleDocKey(normalizedUrl);
+  const previousExport = exportDocId ? await getDocExport(exportDocId) : null;
   let tab = null;
   try {
     tab = await openExistingGoogleDocTab(normalizedUrl, {
@@ -4885,18 +4887,41 @@ async function appendMessagesToGoogleDocUrl(
     );
 
     const finalTab = pasted.tab;
+    const archiveImageExpectedCount = Math.max(0, Number(conversation.imageCount || 0));
+    const previousImageExpectedCount = Math.max(
+      0,
+      Number(previousExport?.imageExpectedCount || 0)
+    );
+    const actionImageExpectedCount = Math.max(0, Number(pasted.imageExpectedCount || 0));
+    const safeAbsoluteComplete = Boolean(
+      pasted.documentImageCountAbsoluteSafe &&
+      pasted.documentImageCount != null &&
+      Number(pasted.documentImageCount) >= archiveImageExpectedCount
+    );
+    const continuityComplete = Boolean(
+      previousExport?.imageComplete === true &&
+      archiveImageExpectedCount === previousImageExpectedCount + actionImageExpectedCount &&
+      pasted.imageComplete === true
+    );
+    const archiveImageComplete =
+      archiveImageExpectedCount === 0 ||
+      safeAbsoluteComplete ||
+      continuityComplete;
+
     const linkedDoc = await recordDocExport(
       conversation,
       finalTab.url || normalizedUrl,
       {
         link: linkTarget,
-        imageVerificationAvailable: pasted.imageVerificationAvailable,
-        imageExpectedCount: Number(conversation.imageCount || 0),
-        imageVerifiedCount: pasted.documentImageCount ?? pasted.imageInsertedCount ?? 0,
+        imageVerificationAvailable:
+          Boolean(pasted.imageVerificationAvailable) ||
+          Boolean(previousExport?.imageVerificationAvailable),
+        imageExpectedCount: archiveImageExpectedCount,
+        imageVerifiedCount: archiveImageComplete
+          ? archiveImageExpectedCount
+          : Math.max(0, Number(pasted.imageInsertedCount || 0)),
         documentImageCount: pasted.documentImageCount,
-        imageComplete: pasted.imageVerificationAvailable
-          ? Number(pasted.documentImageCount || 0) >= Number(conversation.imageCount || 0)
-          : false
+        imageComplete: archiveImageComplete
       }
     );
     return {
@@ -4911,8 +4936,10 @@ async function appendMessagesToGoogleDocUrl(
       imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
       imageFailedCount: pasted.imageFailedCount || 0,
       imageVerificationAvailable: Boolean(pasted.imageVerificationAvailable),
-      imageComplete: Boolean(pasted.imageComplete),
+      imageActionComplete: Boolean(pasted.imageComplete),
+      imageComplete: archiveImageComplete,
       documentImageCount: pasted.documentImageCount,
+      documentImageCountAbsoluteSafe: Boolean(pasted.documentImageCountAbsoluteSafe),
       failedImages: pasted.failedImages || []
     };
   } finally {
