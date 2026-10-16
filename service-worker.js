@@ -4894,9 +4894,15 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     docUrl,
     addedCount: 0,
     noChanges: true,
+    imageExpectedCount: 0,
+    imagePasteAttemptCount: 0,
     imageInsertedCount: 0,
     imageInlinePasteCount: 0,
     imageFailedCount: 0,
+    imageVerificationAvailable: Boolean(previous?.imageVerificationAvailable),
+    documentImageCount: Number.isFinite(Number(previous?.documentImageCount))
+      ? Number(previous.documentImageCount)
+      : null,
     failedImages: []
   };
 
@@ -4919,6 +4925,10 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     inserted: 0,
     failed: 0,
     noChanges: true,
+    imageVerificationAvailable: Boolean(previous?.imageVerificationAvailable),
+    documentImageCount: Number.isFinite(Number(previous?.documentImageCount))
+      ? Number(previous.documentImageCount)
+      : null,
     failures: []
   };
   const oldRecoveredItems = recoveredImageItems(conversation).filter(item => {
@@ -4951,14 +4961,53 @@ async function exportConversationToLinkedDoc(archiveId = '') {
     ...(patchResult.failures || [])
   ];
 
+  const archiveImageExpectedCount = Math.max(0, Number(conversation.imageCount || 0));
+  const documentImageCount = Number.isFinite(Number(patchResult.documentImageCount))
+    ? Number(patchResult.documentImageCount)
+    : Number.isFinite(Number(messageResult.documentImageCount))
+      ? Number(messageResult.documentImageCount)
+      : Number.isFinite(Number(previous?.documentImageCount))
+        ? Number(previous.documentImageCount)
+        : null;
+  const imageVerificationAvailable = Boolean(
+    patchResult.imageVerificationAvailable ||
+    messageResult.imageVerificationAvailable ||
+    previous?.imageVerificationAvailable
+  );
+  const imageComplete = archiveImageExpectedCount === 0 || Boolean(
+    imageVerificationAvailable &&
+    documentImageCount != null &&
+    documentImageCount >= archiveImageExpectedCount
+  );
+  const finalDocUrl = messageResult.docUrl || patchResult.docUrl || docUrl;
+
+  const linkedDoc = await recordDocExport(conversation, finalDocUrl, {
+    link: true,
+    imageVerificationAvailable,
+    imageExpectedCount: archiveImageExpectedCount,
+    imageVerifiedCount: documentImageCount ?? imageInsertedCount,
+    documentImageCount,
+    imageComplete
+  });
+
   return {
-    docUrl: messageResult.docUrl || patchResult.docUrl || docUrl,
-    linkedDoc: await getLinkedDoc(conversation.sourceUrl || ''),
+    docUrl: finalDocUrl,
+    linkedDoc,
     addedCount: Number(messageResult.addedCount || 0),
     noChanges: !delta.length && !imageInsertedCount && !imageFailedCount,
+    imageExpectedCount:
+      Number(messageResult.imageExpectedCount || 0) +
+      Number(oldRecoveredItems.length || 0),
+    archiveImageExpectedCount,
+    imagePasteAttemptCount:
+      Number(messageResult.imagePasteAttemptCount || 0) +
+      Number(oldRecoveredItems.length || 0),
     imageInsertedCount,
     imageInlinePasteCount,
     imageFailedCount,
+    imageVerificationAvailable,
+    imageComplete,
+    documentImageCount,
     failedImages,
     recoveredImagePatchAttempted: Boolean(oldRecoveredItems.length),
     recoveredImagePatchCandidateCount: oldRecoveredItems.length,
