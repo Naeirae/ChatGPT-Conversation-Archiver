@@ -393,14 +393,16 @@ try {
       !serviceWorkerSource.includes('async function replaceLinkedGoogleDoc') ||
       !popupJs.includes("type: 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !popupJs.includes("type: 'ARCHIVER_CLEAR_LINKED_DOC'") ||
-      !popupJs.includes("item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc'")) {
-    fail('linked Google Docs: missing explicit replace/unlink UX');
+      !popupHtml.includes('id="editCurrentDoc"') ||
+      !popupHtml.includes('id="currentDocEditor"')) {
+    fail('linked Google Docs: missing explicit replace/unlink UX on the current archive card');
   }
-  if (popupJs.includes("moreActions.className = 'archive-link-tools'") ||
-      !popupJs.includes("secondaryActions.className = 'archive-link-secondary'") ||
-      !popupJs.includes('secondaryActions.appendChild(reconcileButton)') ||
-      !popupCss.includes('.archive-link-secondary')) {
-    fail('saved-chat UX: maintenance actions must stay visible as compact secondary actions without nested «Ещё» menus');
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
+      !popupJs.includes("type: 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
+      popupJs.includes("moreActions.className = 'archive-link-tools'") ||
+      popupJs.includes("secondaryActions.className = 'archive-link-secondary'") ||
+      !popupJs.includes("openArchive.textContent = 'Открыть'")) {
+    fail('saved-chat UX: library rows must stay simple and select one archive for the main action card');
   }
   if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
       serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
