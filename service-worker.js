@@ -4298,16 +4298,11 @@ async function googleDocImageCountAttached(tabId) {
   try {
     const result = await cdp(tabId, 'Runtime.evaluate', {
       expression: `(() => {
-        const selectors = [
-          '.kix-embeddedobject-image',
-          '.kix-canvas-tile-content image',
-          'svg.kix-embeddedobject-image'
-        ];
-        const nodes = new Set();
-        for (const selector of selectors) {
-          document.querySelectorAll(selector).forEach(node => nodes.add(node));
-        }
-        return nodes.size;
+        const primary = document.querySelectorAll('.kix-embeddedobject-image').length;
+        const fallback = document.querySelectorAll(
+          '.kix-canvas-tile-content image, svg.kix-embeddedobject-image'
+        ).length;
+        return primary || fallback || 0;
       })()`,
       returnByValue: true
     });
