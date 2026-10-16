@@ -334,16 +334,20 @@ try {
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
-      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE') ||
-      !popupJs.includes('ARCHIVER_HYDRATE_UNFINISHED_IMAGES')) {
-    fail('popup.js: fragment-range/unified reconcile/unfinished recovery controls are not wired');
+      !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE')) {
+    fail('popup.js: fragment-range and unified reconcile controls are not wired');
   }
+  const disclosureCount = (popupHtml.match(/<details\b/g) || []).length;
   if (popupHtml.includes('id="recoverImages"') ||
       popupJs.includes("imagesButton.textContent = 'Сверить изображения'") ||
-      !popupHtml.includes('id="reconcileArchive" class="primary">Сверить</button>') ||
+      !popupHtml.includes('id="reconcileArchive">Сверить</button>') ||
+      !popupHtml.includes('id="savedArchivesPanel" class="workspace-section archives-panel"') ||
+      !popupHtml.includes('id="archive" class="current-archive hidden"') ||
+      disclosureCount > 3 ||
       !popupCss.includes('.inline-progress::before') ||
-      !popupCss.includes('.status.busy::before')) {
-    fail('archive UX: one primary sync action and visible progress indicators must remain in place');
+      !popupCss.includes('.status.busy::before') ||
+      !popupCss.includes('.library-scroll')) {
+    fail('archive UX: keep one sync action, flat archive/library sections, <=3 disclosures and visible progress');
   }
   if (popupJs.includes("$('reconcileArchive').disabled = Boolean(running || !archive || !state.canContinue)") ||
       !popupJs.includes("type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',\n      archiveId: state.archive.id")) {
@@ -374,24 +378,31 @@ try {
       !serviceWorkerSource.includes('await pasteBinaryImages(message)') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
+      !serviceWorkerSource.includes('async function captureRenderedImageForContent') ||
       !contentSource.includes("type: 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
-      !contentSource.includes('extension fetch:') ||
+      !contentSource.includes("type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
+      !contentSource.includes('async function captureRenderedImageBlob') ||
+      !contentSource.includes("hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft'") ||
       !manifestSource.includes('https://*.oaiusercontent.com/*') ||
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
-    fail('Google Docs images: cross-origin worker hydration and binary-first export must remain wired; rich HTML is fallback only');
+    fail('Google Docs images: page/worker/rendered-pixel hydration chain and binary-first export must remain wired');
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
       !serviceWorkerSource.includes('async function replaceLinkedGoogleDoc') ||
       !popupJs.includes("type: 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !popupJs.includes("type: 'ARCHIVER_CLEAR_LINKED_DOC'") ||
-      !popupJs.includes("item.linkedDocUrl ? 'Сменить Google Doc' : 'Привязать Google Doc'")) {
-    fail('linked Google Docs: missing explicit replace/unlink UX');
+      !popupHtml.includes('id="editCurrentDoc"') ||
+      !popupHtml.includes('id="currentDocEditor"')) {
+    fail('linked Google Docs: missing explicit replace/unlink UX on the current archive card');
   }
-  if (!popupJs.includes("moreActions.className = 'archive-link-tools'") ||
-      !popupJs.includes('secondaryActions.appendChild(reconcileButton)') ||
-      !popupCss.includes('.archive-link-secondary')) {
-    fail('saved-chat UX: secondary maintenance actions must stay collapsed under «Ещё»');
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
+      !popupJs.includes("type: 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
+      popupJs.includes("moreActions.className = 'archive-link-tools'") ||
+      popupJs.includes("secondaryActions.className = 'archive-link-secondary'") ||
+      !popupJs.includes("openArchive.textContent = 'Открыть'")) {
+    fail('saved-chat UX: library rows must stay simple and select one archive for the main action card');
   }
   if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
       serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
@@ -410,8 +421,9 @@ try {
     fail('saved archive library: completed captures must be registered independently of linked Google Docs and stale Doc exports must not label a newer snapshot as saved');
   }
   if (!popupJs.includes('state.archiveDestination || null') ||
-      !popupJs.includes("destinationText.textContent = 'Сохранён локально · документ не создан'") ||
-      !popupJs.includes("exportButton.textContent = 'Новый документ Google Docs'") ||
+      !popupJs.includes("destinationText.textContent = 'Только локально'") ||
+      !popupJs.includes("openArchive.textContent = 'Открыть'") ||
+      !popupHtml.includes('id="newDoc">Новый Google Doc</button>') ||
       popupJs.includes("$('archiveStateLabel').textContent = linkedUrl ? 'Сохранён в документ Google Docs'")) {
     fail('saved archive UI: local completion and conversation-level linked Docs must stay separate');
   }

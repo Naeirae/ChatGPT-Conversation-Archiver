@@ -93,6 +93,23 @@
               <div id="interfaceSettingsSaved" class="saved" aria-live="polite"></div>
             </section>
 
+            <section class="settings-section archive-format-settings">
+              <div class="settings-title">Оформление документа</div>
+              <label class="field">
+                <span>Имя пользователя</span>
+                <input id="userName" type="text" maxlength="80" placeholder="Пользователь" autocomplete="off">
+              </label>
+              <label class="field">
+                <span>Имя ChatGPT</span>
+                <input id="assistantName" type="text" maxlength="80" placeholder="ChatGPT" autocomplete="off">
+              </label>
+              <label class="check">
+                <input id="alignUserRight" type="checkbox">
+                <span>Реплики пользователя — справа</span>
+              </label>
+              <div id="settingsSaved" class="saved" aria-live="polite"></div>
+            </section>
+
             <section class="settings-section update-section">
               <div class="settings-title">Обновление</div>
               <div class="update-actions">
@@ -157,17 +174,18 @@
       </div>
 
       <button id="capture" class="primary capture-primary">Собрать чат</button>
-      <details id="fragmentPanel" class="accessibility-options">
-        <summary>Ручные границы фрагмента</summary>
-        <p class="muted">Нажмите «Отметить границы» в текущем чате или откройте отдельную рабочую вкладку. В режиме разметки сначала кликните по нужной реплике, затем нажмите «Начало» или «Конец» на постоянной панели Архиватора. Для фрагмента достаточно одной границы; для ручного полного диапазона нужны обе.</p>
-        <button id="markFragment" class="compact-button" type="button">Отметить границы в текущей вкладке</button>
-        <button id="clearMarkers" class="compact-button" type="button">Сбросить отметки</button>
-        <button id="openMarkingTab" class="compact-button" type="button">Открыть рабочую вкладку для разметки</button>
-        <button id="captureFragment" class="compact-button" type="button">Собрать отмеченный фрагмент</button>
-        
-        <button id="copyFragment" class="compact-button" type="button">Скопировать последний фрагмент</button>
+      <button id="fragmentToggle" class="text-action" type="button" aria-expanded="false" aria-controls="fragmentPanel">Собрать фрагмент…</button>
+      <div id="fragmentPanel" class="inline-options hidden">
+        <p class="muted">Отметьте начало и/или конец прямо в чате. Обычная кнопка «Собрать чат» всегда собирает чат целиком.</p>
+        <div class="inline-option-actions">
+          <button id="markFragment" class="compact-button" type="button">Отметить границы</button>
+          <button id="openMarkingTab" class="compact-button" type="button">Открыть рабочую вкладку</button>
+          <button id="captureFragment" class="compact-button primary" type="button">Собрать фрагмент</button>
+          <button id="clearMarkers" class="compact-button" type="button">Сбросить отметки</button>
+          <button id="copyFragment" class="compact-button" type="button">Скопировать последний фрагмент</button>
+        </div>
         <div id="fragmentHint" class="muted"></div>
-      </details>
+      </div>
 
       <div id="captureControls" class="capture-controls">
         <button id="confirmTop" class="hidden">Я в начале</button>
@@ -178,93 +196,89 @@
 
       <div id="compareResult" class="hidden" aria-live="polite"></div>
 
-      <details class="accessibility-options" data-tour="accessibility">
-        <summary>Оформление переписки</summary>
-        <label class="field">
-          <span>Имя пользователя в документе</span>
-          <input id="userName" type="text" maxlength="80" placeholder="Например, Иван Петрович" autocomplete="off">
-        </label>
-        <label class="field">
-          <span>Имя ChatGPT в документе</span>
-          <input id="assistantName" type="text" maxlength="80" placeholder="Например, Пётр Иваныч" autocomplete="off">
-        </label>
-        <label class="check">
-          <input id="alignUserRight" type="checkbox">
-          <span>Реплики пользователя — справа</span>
-        </label>
-        <div id="settingsSaved" class="saved" aria-live="polite"></div>
-      </details>
-
-      <div id="archive" class="saved-run-row hidden">
-        <details class="saved-run-details">
-          <summary>
-            <span id="archiveStateLabel">Сохранён последний запуск</span>
-            <small id="archiveStateHint"></small>
-          </summary>
-          <div class="saved-run-body">
+      <section id="archive" class="current-archive hidden">
+        <div class="current-archive-head">
+          <div>
+            <div class="archive-label">Локальный архив</div>
             <strong id="archiveTitle"></strong>
-            <div id="archiveMeta" class="muted"></div>
-            <div class="archive-doc-status">
-              <span id="archiveDocStatus"></span>
-              <a id="archiveDocLink" class="hidden" href="#" target="_blank" rel="noopener">Открыть документ Google Docs ↗</a>
-            </div>
-            <div class="archive-primary-actions">
-              <button id="reconcileArchive" class="primary">Сверить</button>
-              <button id="activeDoc">Обновить связанный Google Doc</button>
-              <button id="newDoc">Сохранить в новый Google Doc</button>
-            </div>
-            <details class="archive-more-actions">
-              <summary>Ещё действия</summary>
-              <div class="compact-actions">
-                <button id="copyArchive">Скопировать</button>
-                <button id="openPlanner">Разбить по вкладкам и темам</button>
-              </div>
-            </details>
           </div>
-        </details>
-        <button id="deleteArchive" class="text-danger" type="button">Сбросить</button>
-      </div>
+          <button id="deleteArchive" class="text-danger" type="button">Удалить</button>
+        </div>
+        <div class="archive-state-line">
+          <span id="archiveStateLabel">Сохранён локально</span>
+          <small id="archiveStateHint"></small>
+        </div>
+        <div id="archiveMeta" class="muted"></div>
+        <div class="archive-doc-status">
+          <span id="archiveDocStatus"></span>
+          <a id="archiveDocLink" class="hidden" href="#" target="_blank" rel="noopener">Открыть Google Doc ↗</a>
+        </div>
+        <div class="archive-primary-actions">
+          <button id="continueArchive" class="primary">Продолжить чат</button>
+          <button id="reconcileArchive">Сверить</button>
+          <button id="activeDoc">Обновить Google Doc</button>
+          <button id="newDoc">Новый Google Doc</button>
+        </div>
+        <div class="archive-secondary-actions">
+          <button id="copyArchive" class="text-action" type="button">Скопировать</button>
+          <button id="openPlanner" class="text-action" type="button">Разбить по темам</button>
+          <button id="editCurrentDoc" class="text-action" type="button">Связать / сменить Google Doc</button>
+        </div>
+        <div id="currentDocEditor" class="current-doc-editor hidden">
+          <input id="currentDocUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
+          <div class="current-doc-editor-actions">
+            <button id="saveCurrentDocLink" class="primary" type="button">Сохранить ссылку</button>
+            <button id="clearCurrentDocLink" class="danger-outline" type="button">Отвязать</button>
+            <button id="cancelCurrentDocEdit" type="button">Отмена</button>
+          </div>
+        </div>
+      </section>
     </section>
 
-    <details id="unfinishedPassesPanel" class="compact-panel unfinished-panel hidden">
-      <summary><span>Незавершённые сборы</span><small id="unfinishedPassesCount">0</small></summary>
+    <section id="unfinishedPassesPanel" class="workspace-section unfinished-panel hidden">
+      <div class="section-bar">
+        <strong>Незавершённые сборы</strong>
+        <small id="unfinishedPassesCount">0</small>
+      </div>
       <div id="unfinishedPassesList" class="history-list compact-list"></div>
-    </details>
+    </section>
 
-    <details id="savedArchivesPanel" class="compact-panel archives-panel" data-tour="library">
-      <summary><span>Сохранённые чаты</span><small id="savedArchivesCount">…</small></summary>
+    <section id="savedArchivesPanel" class="workspace-section archives-panel" data-tour="library">
+      <div class="section-bar">
+        <strong>Сохранённые чаты</strong>
+        <small id="savedArchivesCount">…</small>
+      </div>
       <div id="savedArchivesNotice" class="archive-save-notice hidden"></div>
-      <div id="savedArchivesList" class="archive-links-list"></div>
-    </details>
+      <div id="savedArchivesList" class="archive-links-list library-scroll"></div>
+    </section>
 
     <details id="technicalPanel" class="compact-panel technical-panel">
-      <summary><span>Техническая информация</span><small>логи · история</small></summary>
+      <summary><span>Техническая информация</span><small>восстановление · логи</small></summary>
       <div class="panel-body">
-        <details class="manual-recovery">
-          <summary>Восстановить продолжение по документу Google Docs</summary>
+        <section class="technical-block manual-recovery">
+          <strong>Восстановить продолжение по Google Doc</strong>
           <label class="field doc-link-field">
-            <span>Ссылка на документ Google Docs</span>
+            <span>Ссылка на документ</span>
             <input id="docUrl" type="url" placeholder="https://docs.google.com/document/d/..." autocomplete="off">
           </label>
           <div id="linkedDocHint" class="muted"></div>
           <button id="syncDoc" class="compact-button">Найти точку продолжения</button>
           <button id="continue" class="hidden" type="button" aria-hidden="true" tabindex="-1">Продолжить</button>
-        </details>
+        </section>
 
-        <details id="runLog" class="run-log hidden">
-          <summary>Последний запуск</summary>
-          <strong id="runLogTitle"></strong>
+        <section id="runLog" class="run-log technical-block hidden">
+          <strong>Последний запуск: <span id="runLogTitle"></span></strong>
           <div id="runLogMeta" class="muted"></div>
           <div id="runLogMessage" class="muted"></div>
           <button id="copyRunLog" class="compact-button">Скопировать журнал и ошибки</button>
           <button id="resetCapture" class="text-danger technical-reset" type="button">Сбросить состояние запуска</button>
-        </details>
+        </section>
 
-        <details id="historyPanel" class="history-panel">
-          <summary><span>История запусков</span><small id="historyCount">0</small></summary>
+        <section id="historyPanel" class="history-panel technical-block">
+          <div class="section-bar compact"><strong>История запусков</strong><small id="historyCount">0</small></div>
           <div id="captureHistory" class="history-list"></div>
           <button id="clearHistory" class="compact-button danger-outline">Очистить историю</button>
-        </details>
+        </section>
       </div>
     </details>
 
