@@ -4294,6 +4294,36 @@ async function pasteIntoGoogleDoc(tabId, { appendToEnd = false } = {}) {
 }
 
 async function googleDocImageCountAttached(tabId) {
+  let domError = '';
+  try {
+    const result = await cdp(tabId, 'Runtime.evaluate', {
+      expression: `(() => {
+        const selectors = [
+          '.kix-embeddedobject-image',
+          '.kix-canvas-tile-content image',
+          'svg.kix-embeddedobject-image'
+        ];
+        const nodes = new Set();
+        for (const selector of selectors) {
+          document.querySelectorAll(selector).forEach(node => nodes.add(node));
+        }
+        return nodes.size;
+      })()`,
+      returnByValue: true
+    });
+    const count = Number(result?.result?.value);
+    if (Number.isFinite(count)) {
+      return {
+        available: true,
+        count,
+        method: 'docs-dom',
+        absoluteSafe: true
+      };
+    }
+  } catch (error) {
+    domError = error?.message || String(error);
+  }
+
   try {
     await cdp(tabId, 'Accessibility.enable');
     const tree = await cdp(tabId, 'Accessibility.getFullAXTree');
@@ -4302,27 +4332,23 @@ async function googleDocImageCountAttached(tabId) {
       const role = String(node?.role?.value || '').toLowerCase();
       return role === 'image' || role === 'img' || role === 'graphics-symbol';
     }).length;
-    return { available: true, count, method: 'accessibility-tree' };
+    return {
+      available: true,
+      count,
+      method: 'accessibility-tree',
+      // The AX tree can include toolbar/profile images. It is useful for a
+      // before/after delta, but never for archive-wide completeness.
+      absoluteSafe: false
+    };
   } catch (accessibilityError) {
-    try {
-      const result = await cdp(tabId, 'Runtime.evaluate', {
-        expression: `(() => {
-          const primary = document.querySelectorAll('.kix-embeddedobject-image').length;
-          if (primary) return primary;
-          return document.querySelectorAll('.kix-canvas-tile-content image, svg.kix-embeddedobject-image').length;
-        })()`,
-        returnByValue: true
-      });
-      const count = Number(result?.result?.value);
-      if (Number.isFinite(count)) {
-        return { available: true, count, method: 'docs-dom' };
-      }
-    } catch (_) {}
     return {
       available: false,
       count: 0,
       method: '',
-      error: accessibilityError?.message || String(accessibilityError)
+      absoluteSafe: false,
+      error: [domError, accessibilityError?.message || String(accessibilityError)]
+        .filter(Boolean)
+        .join(' | ')
     };
   }
 }
@@ -4517,7 +4543,8 @@ async function pasteArchiveIntoGoogleDoc(
 
     if (imageBearingCount > 0 &&
         imageCountBefore.available &&
-        imageCountAfter.available) {
+        imageCountAfter.available &&
+        imageCountBefore.method === imageCountAfter.method) {
       const verifiedDelta = Math.max(0, imageCountAfter.count - imageCountBefore.count);
       imageInsertedCount = Math.min(imagePasteAttemptCount, verifiedDelta);
       const verificationShortfall = Math.max(0, imagePasteAttemptCount - imageInsertedCount);
@@ -4536,7 +4563,9 @@ async function pasteArchiveIntoGoogleDoc(
   }
 
   const imageVerificationAvailable = Boolean(
-    imageCountBefore.available && imageCountAfter.available
+    imageCountBefore.available &&
+    imageCountAfter.available &&
+    imageCountBefore.method === imageCountAfter.method
   );
   const imageComplete = imageBearingCount === 0 || Boolean(
     imageVerificationAvailable && imageInsertedCount >= imageBearingCount
@@ -4551,8 +4580,17 @@ async function pasteArchiveIntoGoogleDoc(
     imageFailedCount,
     imageVerificationAvailable,
     imageComplete,
-    documentImageCount: imageCountAfter.available ? imageCountAfter.count : null,
-    imageVerificationMethod: imageCountAfter.method || imageCountBefore.method || '',
+    documentImageCount:
+      imageCountAfter.available && imageCountAfter.absoluteSafe
+        ? imageCountAfter.count
+        : null,
+    documentImageCountAbsoluteSafe: Boolean(
+      imageCountAfter.available && imageCountAfter.absoluteSafe
+    ),
+    imageVerificationMethod:
+      imageVerificationAvailable
+        ? imageCountAfter.method
+        : (imageCountAfter.method || imageCountBefore.method || ''),
     imageVerificationError:
       imageVerificationAvailable
         ? ''
