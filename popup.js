@@ -66,24 +66,15 @@ function renderCaptureProgress(job, running) {
   if (!running) return;
 
   const isFragment = job?.captureMode === 'fragment';
-  const isManualFull = job?.captureMode === 'manual-full';
   const fragmentPhaseLabels = {
     top: 'Фрагмент · Ищу отмеченное начало',
     walk: 'Фрагмент · Собираю до отмеченного конца',
     finalizing: 'Фрагмент · Сохраняю выбранные сообщения',
     paused: 'Сбор фрагмента приостановлен'
   };
-  const manualFullPhaseLabels = {
-    top: 'Полный диапазон · Ищу отмеченное начало',
-    walk: 'Полный диапазон · Собираю до отмеченного конца',
-    finalizing: 'Полный диапазон · Сверяю и сохраняю',
-    paused: 'Сбор полного диапазона приостановлен'
-  };
   $('capturePhase').textContent = isFragment
     ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
-    : isManualFull
-      ? (manualFullPhaseLabels[job?.phase] || 'Сбор полного диапазона')
-      : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
+    : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
   const resumed = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
     Number(job?.resumeBaseCount || job?.draftCount || 0) > 0;
@@ -157,9 +148,7 @@ function renderRunLog(job) {
                 ? 'сверка и добор изображений'
                 : job.captureMode === 'retry-walk'
                   ? 'повтор только прохода вниз'
-                  : job.captureMode === 'manual-full'
-                    ? 'ручной полный диапазон'
-                    : 'полный сбор'
+                  : 'полный сбор'
   );
   if (job.captureTarget) meta.push(captureTargetLabel(job.captureTarget));
   if (job.phase) meta.push(PHASE_LABELS[job.phase] || job.phase);
@@ -1200,7 +1189,7 @@ function render(data) {
   $('capture').textContent = 'Собрать чат';
   if (!running && hasManualRange) {
     $('fragmentHint').textContent =
-      'Начало и конец отмечены. Они используются только отдельными ручными режимами ниже; обычный «Собрать чат» всегда собирает весь чат.';
+      'Начало и конец отмечены для фрагмента. Обычный «Собрать чат» всегда собирает весь чат.';
   }
 
   renderCaptureState(job);
@@ -1224,7 +1213,6 @@ function render(data) {
       ? 'Собирается ручной полный диапазон'
       : 'Собрать чат целиком';
   $('captureFragment').disabled = Boolean(running);
-  $('captureManualFull').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
   $('clearMarkers').disabled = Boolean(running);
   $('openMarkingTab').disabled = Boolean(running);
@@ -1563,28 +1551,10 @@ $('openMarkingTab').onclick = async () => {
     $('captureTarget').value = 'current';
     updateCaptureTargetHint('current');
     $('fragmentHint').textContent =
-      'Рабочая вкладка открыта. Там кликните по реплике, отметьте «Начало» и «Конец», затем снова откройте Архиватор и запустите полный диапазон.';
+      'Рабочая вкладка открыта. Там отметьте «Начало» и/или «Конец» фрагмента, затем снова откройте Архиватор и нажмите «Собрать отмеченный фрагмент».';
   } catch (error) {
     setStatus(error.message || String(error), true);
     button.disabled = false;
-  }
-};
-
-$('captureManualFull').onclick = async () => {
-  $('captureManualFull').disabled = true;
-  try {
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_CAPTURE_MANUAL_FULL',
-      captureTarget: $('captureTarget').value
-    });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить ручной полный диапазон.');
-    $('fragmentHint').textContent = 'Сбор полного диапазона между отмеченными репликами запущен.';
-    startPolling();
-  } catch (error) {
-    $('fragmentHint').textContent = error.message || String(error);
-    setStatus(error.message || String(error), true);
-  } finally {
-    $('captureManualFull').disabled = false;
   }
 };
 
