@@ -4806,16 +4806,30 @@ async function appendMessagesToGoogleDocUrl(
     const linkedDoc = await recordDocExport(
       conversation,
       finalTab.url || normalizedUrl,
-      { link: linkTarget }
+      {
+        link: linkTarget,
+        imageVerificationAvailable: pasted.imageVerificationAvailable,
+        imageExpectedCount: Number(conversation.imageCount || 0),
+        imageVerifiedCount: pasted.documentImageCount ?? pasted.imageInsertedCount ?? 0,
+        documentImageCount: pasted.documentImageCount,
+        imageComplete: pasted.imageVerificationAvailable
+          ? Number(pasted.documentImageCount || 0) >= Number(conversation.imageCount || 0)
+          : false
+      }
     );
     return {
       docUrl: finalTab.url || normalizedUrl,
       addedCount: messages.length,
       noChanges: false,
       linkedDoc,
+      imageExpectedCount: pasted.imageExpectedCount || 0,
+      imagePasteAttemptCount: pasted.imagePasteAttemptCount || 0,
       imageInsertedCount: pasted.imageInsertedCount || 0,
       imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
       imageFailedCount: pasted.imageFailedCount || 0,
+      imageVerificationAvailable: Boolean(pasted.imageVerificationAvailable),
+      imageComplete: Boolean(pasted.imageComplete),
+      documentImageCount: pasted.documentImageCount,
       failedImages: pasted.failedImages || []
     };
   } finally {
@@ -5019,9 +5033,27 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     { includeHeader, appendToEnd }
   );
   const finalTab = pasted.tab;
-  const linkedDoc = conversation.isFragment
-    ? await setArchiveDestination(conversation.id, { saved: true, url: finalTab.url, kind: 'google-doc', label: 'Google Docs' })
-    : await recordDocExport(conversation, finalTab.url);
+  let linkedDoc = null;
+  if (conversation.isFragment) {
+    if (pasted.imageComplete) {
+      linkedDoc = await setArchiveDestination(conversation.id, {
+        saved: true,
+        url: finalTab.url,
+        kind: 'google-doc',
+        label: 'Google Docs'
+      });
+    }
+  } else {
+    linkedDoc = await recordDocExport(conversation, finalTab.url, {
+      imageVerificationAvailable: pasted.imageVerificationAvailable,
+      imageExpectedCount: Number(conversation.imageCount || 0),
+      imageVerifiedCount: pasted.documentImageCount ?? pasted.imageInsertedCount ?? 0,
+      documentImageCount: pasted.documentImageCount,
+      imageComplete: pasted.imageVerificationAvailable
+        ? Number(pasted.documentImageCount || 0) >= Number(conversation.imageCount || 0)
+        : false
+    });
+  }
 
   return {
     docUrl: finalTab.url,
@@ -5029,9 +5061,14 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     linkedDoc,
     exportMode,
     addedCount: messages.length,
+    imageExpectedCount: pasted.imageExpectedCount || 0,
+    imagePasteAttemptCount: pasted.imagePasteAttemptCount || 0,
     imageInsertedCount: pasted.imageInsertedCount || 0,
     imageInlinePasteCount: pasted.imageInlinePasteCount || 0,
     imageFailedCount: pasted.imageFailedCount || 0,
+    imageVerificationAvailable: Boolean(pasted.imageVerificationAvailable),
+    imageComplete: Boolean(pasted.imageComplete),
+    documentImageCount: pasted.documentImageCount,
     failedImages: pasted.failedImages || [],
     noChanges: false
   };
