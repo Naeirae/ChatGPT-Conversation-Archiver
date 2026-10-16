@@ -68,6 +68,12 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_CHECKPOINT_SAVED'")) {
     fail('service-worker.js: missing worker-owned checkpoint metadata handler');
   }
+  if (!serviceWorkerSource.includes('collectorStarted = false') ||
+      !serviceWorkerSource.includes('RUN_CANCELLED_RECOVERABLE') ||
+      !serviceWorkerSource.includes('autoRecoveryPending: false') ||
+      !serviceWorkerSource.includes('Best-effort notification after the worker state is already terminal')) {
+    fail('capture lifecycle: missing immediate stop or clean launch-failure contract');
+  }
   if (!contentSource.includes("'compare'") ||
       !contentSource.includes("type: 'ARCHIVER_CAPTURE_COMPLETE'")) {
     fail('content-chatgpt.js: missing legacy non-mutating compare mode');
@@ -132,6 +138,26 @@ try {
       !contentSource.includes('reconciledInsertedCount') ||
       !contentSource.includes('повторный полный проход автоматически не запускается')) {
     fail('content-chatgpt.js: missing non-destructive navigation reconciliation');
+  }
+  if (!contentSource.includes('firstPassCount') ||
+      !contentSource.includes('secondPassCount') ||
+      !contentSource.includes('passCountMatch') ||
+      !contentSource.includes('hydrateSequentialImages') ||
+      !contentSource.includes('await reachTopFullLegacy(map, order, settings, navigationWindows, boundary)')) {
+    fail('full capture: missing two-pass count comparison or sequential image hydration');
+  }
+  const pauseResumeBlock = contentSource.slice(
+    contentSource.indexOf("message.type === 'ARCHIVER_RESUME_CAPTURE'"),
+    contentSource.indexOf("message.type === 'ARCHIVER_CANCEL_CAPTURE'")
+  );
+  if (pauseResumeBlock.includes('recoverPauseCheckpoint') ||
+      !pauseResumeBlock.includes('state.paused = false')) {
+    fail('pause/resume: resume must be immediate and must not launch hidden navigation');
+  }
+  if (!contentSource.includes('unknownSearchDirection') ||
+      !contentSource.includes('frontierCrossed') ||
+      !contentSource.includes('resumeSearchEdgeReversal')) {
+    fail('unfinished resume: missing directional known/unknown frontier search');
   }
   if (contentSource.includes('coverageRetry') ||
       contentSource.includes('повторяю медленнее')) {
