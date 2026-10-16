@@ -420,10 +420,14 @@
     const wrapper = turn.closest?.('[data-turn-key]') || turn.querySelector?.('[data-turn-key]');
     const wrapperKey = String(wrapper?.getAttribute?.('data-turn-key') || '').trim();
     if (wrapperKey) {
-      // The wrapper UUID is the stable identity. Do not mix mutable rendered
-      // text into it: streaming/status/DOM rebuilds can change text without
-      // changing the underlying conversation turn.
-      return 'turn:' + wrapperKey + ':' + role;
+      // data-turn-key belongs to ChatGPT's virtualized rendering layer. The DOM
+      // wrapper can be recycled for another message while walking a very long
+      // conversation, so the wrapper key alone is not a message identity.
+      // Preserve the pre-recovery behavior: combine the virtual wrapper key
+      // with role + rendered message signature. This prevents a finite wrapper
+      // pool from capping a 1000-message chat at roughly the pool size.
+      return 'turn:' + wrapperKey + ':' + role + ':' +
+        hashText(normalizeMatchText(turnMessageText(turn)));
     }
 
     const searchUnit = String(turn.getAttribute?.('data-chatgpt-search-unit-key') || '').trim();
