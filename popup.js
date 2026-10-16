@@ -1036,6 +1036,49 @@ function docImageOutcome(result = {}, expectedFallback = 0) {
   };
 }
 
+chrome.runtime.onMessage.addListener(message => {
+  if (message?.type !== 'ARCHIVER_DOC_EXPORT_PROGRESS') return;
+
+  const total = Math.max(0, Number(message.total || 0));
+  const processed = Math.max(0, Number(message.processed || 0));
+  if (message.phase === 'text') {
+    setStatus(
+      total
+        ? 'Google Docs: вставляю текст; затем ' + total + ' картинок…'
+        : 'Google Docs: вставляю текст…',
+      false,
+      true
+    );
+    return;
+  }
+  if (message.phase === 'images') {
+    setStatus(
+      'Google Docs: вставляю картинки ' + processed + '/' + total + '…',
+      false,
+      true
+    );
+    return;
+  }
+  if (message.phase === 'verify') {
+    setStatus(
+      'Google Docs: проверяю картинки ' + processed + '/' + total + '…',
+      false,
+      true
+    );
+    return;
+  }
+  if (message.phase === 'done') {
+    const verified = Math.max(0, Number(message.verified || 0));
+    setStatus(
+      message.complete
+        ? 'Google Docs: картинки подтверждены ' + verified + '/' + total + '.'
+        : 'Google Docs: подтверждено картинок ' + verified + '/' + total + '.',
+      !message.complete,
+      false
+    );
+  }
+});
+
 function normalizeHex(value, fallback) {
   const raw = String(value || '').trim();
   return /^#[0-9a-f]{6}$/i.test(raw) ? raw.toLowerCase() : fallback;
