@@ -951,7 +951,7 @@ function renderHistory(history = []) {
     sync: 'Восстановление',
     images: 'Сверка и добор изображений',
     'images-draft': 'Сверка изображений незавершённой части',
-    reconcile: 'Сверка и добор сообщений',
+    reconcile: 'Сверка',
     'retry-walk': 'Повтор прохода вниз'
   };
 
