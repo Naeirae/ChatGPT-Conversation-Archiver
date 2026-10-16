@@ -385,9 +385,14 @@ try {
       !serviceWorkerSource.includes("method: 'docs-dom'") ||
       !serviceWorkerSource.includes("method: 'accessibility-tree'") ||
       !serviceWorkerSource.includes('absoluteSafe: false') ||
-      !serviceWorkerSource.includes('imageCountBefore.method === imageCountAfter.method') ||
+      !serviceWorkerSource.includes('function googleDocImageDelta') ||
+      !serviceWorkerSource.includes('before.domAvailable') ||
+      !serviceWorkerSource.includes('before.axAvailable') ||
       !serviceWorkerSource.includes('documentImageCountAbsoluteSafe') ||
       !serviceWorkerSource.includes('imagePasteAttemptCount') ||
+      !serviceWorkerSource.includes("type: 'ARCHIVER_DOC_EXPORT_PROGRESS'") ||
+      !popupJs.includes("message?.type !== 'ARCHIVER_DOC_EXPORT_PROGRESS'") ||
+      !popupJs.includes("'Google Docs: вставляю картинки '") ||
       !serviceWorkerSource.includes('imageComplete') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
