@@ -131,7 +131,7 @@ Popup открывает отдельную **визуальную страни�
 - **Найти стык и продолжить** — найти последнюю реплику, уже сохранённую в черновике, и продолжить сбор в этой же вкладке;
 - продолжение идёт только до **нижней метки снимка**, зафиксированной в момент исходного запуска; сообщения, написанные после старта, в восстановленный архив не попадают;
 - если автоматический поиск стыка не сработал с текущей позиции, recovery-проход умеет искать в обе стороны, а пользователь может вручную приблизить вкладку к месту обрыва и повторить действие;
-- recovery применяется к полному сбору, ручному полному диапазону, сверке сообщений, сверке изображений и повторному recovery; все эти режимы используют ту же сохранённую рабочую вкладку и фиксированную нижнюю границу снимка.
+- recovery применяется к полному сбору, ручному диапазону, единой сверке архива и повторному recovery; все эти режимы используют ту же сохранённую рабочую вкладку и фиксированную нижнюю границу снимка.
 
 В карточке незавершённого сбора отдельно показываются три счётчика: сколько было сохранено до продолжения, сколько подтверждено в последней контрольной точке и сколько видит текущий физический проход. Эти числа имеют разные значения и не складываются автоматически.
 
@@ -141,11 +141,9 @@ Popup открывает отдельную **визуальную страни�
 
 ## Сверка, продолжение и Google Docs
 
-В расширении есть два разных вида сверки.
+В обычном интерфейсе есть одна ремонтная команда **«Сверить»**. Она одним физическим проходом до зафиксированной нижней границы одновременно проверяет порядок сообщений, добирает доказуемо пропущенные сообщения, повторно обнаруживает изображения и пытается подготовить изображения, которые раньше не удалось сохранить. Если хотя бы одно уже сохранённое сообщение не удаётся подтвердить, локальный архив не меняется.
 
-**Диагностическая сверка** — старый non-mutating compare. Она считает новые сообщения относительно подтверждённого стыка и не меняет локальный архив.
-
-**Сверить и добрать сообщения** — ремонтный режим. Он проходит текущий чат целиком до зафиксированной нижней границы и проверяет, что все уже сохранённые сообщения встречаются в том же порядке. Только после такого доказанного совпадения сообщения, которых не было в архиве, вставляются в их подтверждённые хронологические места. Если хотя бы одно сохранённое сообщение не удаётся подтвердить, локальный архив не меняется.
+Старый non-mutating compare остаётся внутренним диагностическим режимом и не показывается как отдельная основная кнопка.
 
 Сохранённую непрерывную часть незавершённого сбора можно сверить с готовым локальным архивом отдельно. Добор разрешён только для доказанно совместимого общего диапазона; расхождение внутри него останавливает операцию без изменения архива.
 
@@ -170,15 +168,15 @@ Popup открывает отдельную **визуальную страни�
 
 Image discovery is message-level rather than text-root-only: the collector also inspects attachment images rendered as siblings inside the same virtualized turn wrapper. Tiny avatars/icons are filtered out.
 
-From 0.3.14 the archive stores more than the source URL. During finalization the collector tries to fetch every detected image while the ChatGPT page/session is still available, converts it to a clipboard-friendly image blob (normally PNG), and stores a data URL plus MIME type/size/status in the local archive.
+The original export path (before commits `6e5f9df` / `34f7bcb`) copied the whole conversation as one rich-HTML clipboard payload and left `<img src=...>` intact. That path was simple and worked while Google Docs could retrieve those image URLs itself. It became unreliable once ChatGPT media URLs became private/short-lived/cross-origin: Docs can accept the HTML paste while silently dropping every image.
 
-Google Docs export no longer asks Docs to fetch private ChatGPT image URLs from rich HTML. Text is pasted as rich HTML with image tags removed. When an archived message contains a prepared binary image, the debugger keeps the Docs tab active, writes the real image to the clipboard (ClipboardItem first, selected-image execCommand fallback), and performs a physical Ctrl+V at that point in the message sequence.
+The current archive therefore persists image bytes while the image is still visible in ChatGPT. Preparation uses a fallback chain: page fetch → extension service-worker fetch with host permissions → rendered-pixel capture from the actual visible `<img>` through Chrome Debugger. The rendered-pixel fallback exists specifically for cases where the browser can display an image but both fetch paths are blocked by CORS, expiring URLs or authentication.
 
-The popup reports separately how many images were detected, how many were prepared as binary data, and how many were actually inserted into Google Docs. Normal full capture prepares image binaries incrementally before unfinished checkpoints where possible, so a partial capture is not intentionally text-only.
+Image preparation runs incrementally during the physical downward pass, not only after the whole chat is collected. Failed sources are not permanently marked as attempted: a later viewport can retry them. The same behavior is used by the unified **«Сверить»** pass.
 
-If poor network conditions or virtualization leave missing image records or missing binaries, **Сверить и добрать изображения** re-walks the whole fixed chat snapshot. It unions image sightings from the upward and downward passes, retries unresolved binaries, and merges richer same-source image records without replacing message text. Prepared binary data is monotonic: a ready data URL must never be replaced by a pending or failed record.
+For Google Docs, prepared images are pasted as actual clipboard images at their message position. Remote rich-HTML image URLs remain only a last-resort compatibility fallback when no prepared image bytes are available. The popup reports user-facing progress as **«картинки X/Y»** and final counts as **«готово / не удалось»** instead of exposing transport terms such as binary/rich HTML.
 
-Unfinished captures expose their own **Добрать изображения** action, using either the preserved working tab or the currently open source chat. If the completed archive is linked to a Google Doc, **Довставить добранные картинки** attempts to insert only recovered images, using a unique text anchor for the owning message and failing closed when placement cannot be proven.
+Image data is monotonic: once a stored image has usable prepared data, a later pending/failed observation must not replace it.
 
 ## Engineering status
 
@@ -249,8 +247,8 @@ ChatGPT Conversation Archiver uses one product-wide proprietary source-available
 
 ## Настройки архива
 
-- **Имя пользователя:** если поле пустое, маркировка остается `Пользователь:`; если заполнено — `Пользователь / Имя:`.
-- **Имя ChatGPT:** необязательное имя для маркировки реплик ассистента.
+- **Имя пользователя:** если поле пустое, маркировка остаётся `Пользователь:`; если заполнено — указанное имя полностью заменяет служебную подпись.
+- **Имя ChatGPT:** если заполнено, указанное имя полностью заменяет подпись `ChatGPT:`.
 - **Пользовательские реплики — по правому краю:** переносит пользовательский блок в правую часть документа; для ручного/резервного форматирования в Google Docs используется `Ctrl+Shift+R`.
 - **Сохранять доступные размышления:** расширение раскрывает доступные пользователю блоки «Думаю»/«Размышляю» и сохраняет их, если они присутствуют в DOM. Скрытое внутреннее содержимое, недоступное интерфейсу, не извлекается.
 - **Палитра:** Океан, Кобальт, Небо или Полночь.
