@@ -2584,7 +2584,8 @@
       }
 
       let knownVisible = prefixEvidence.known;
-      let direction = knownVisible ? 'down' : 'up';
+      let unknownSearchDirection = 'up';
+      let direction = knownVisible ? 'down' : unknownSearchDirection;
       let enteredSavedPrefix = knownVisible;
       let crossedFrontier = false;
       let previousSignature = '';
@@ -2664,11 +2665,15 @@
               }
             );
           } else {
-            // Unknown content during a chronological prefix means we are below
-            // the saved frontier. Search upward until saved content reappears.
-            direction = 'up';
+            // Normally unknown content is below the saved frontier, so search
+            // upward first. If that physical direction is exhausted without
+            // evidence, unknownSearchDirection is reversed and the search
+            // continues instead of repeatedly forcing the same edge.
+            direction = unknownSearchDirection;
             await progress(
-              'Участок пока незнакомый; ищу вверх ближайшую уже сохранённую часть…',
+              direction === 'up'
+                ? 'Участок пока незнакомый; ищу вверх ближайшую уже сохранённую часть…'
+                : 'Участок пока незнакомый; после проверки верхнего края ищу знакомую часть вниз…',
               map.size,
               {
                 phase: 'top',
@@ -2744,6 +2749,7 @@
           if (atEdge) {
             const nextDirection = oppositeScrollDirection(direction);
             direction = nextDirection;
+            if (!enteredSavedPrefix) unknownSearchDirection = nextDirection;
             enteredSavedPrefix = false;
             crossedFrontier = false;
             sameDirectionStalls = 0;
