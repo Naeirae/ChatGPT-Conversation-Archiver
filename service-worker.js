@@ -1735,6 +1735,16 @@ async function startCapture({
   if ((mode === 'continue' || mode === 'compare' || mode === 'reconcile' || mode === 'images') && !existingArchive?.messages?.length) {
     throw new Error('Для этого чата нет локального архива. Сначала соберите переписку или восстановите стык по документу Google Docs.');
   }
+
+  // Continuation must carry a multi-message tail whenever the local archive
+  // can provide one. A single regenerated ID or repeated line of text is too
+  // weak to define the append boundary safely.
+  if (!resumeTailSignatures.length &&
+      existingArchive?.messages?.length &&
+      ['continue', 'compare'].includes(mode)) {
+    resumeTailSignatures = buildResumeTailSignatures(existingArchive.messages, 4);
+  }
+
   if ((mode === 'resume-draft' || mode === 'images-draft') && !existingDraft?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
   }
