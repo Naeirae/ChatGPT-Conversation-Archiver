@@ -1963,6 +1963,73 @@
     return result;
   }
 
+  async function reachLiveBottomForSnapshot() {
+    let stableAtBottom = 0;
+    let previous = '';
+
+    for (let i = 0; i < 240; i++) {
+      await waitIfPaused();
+      await expandVisible();
+
+      const before = visibleTurnSignature();
+      const atBottomBefore = physicalScrollEndVisible();
+      if (atBottomBefore && before && before === previous) {
+        stableAtBottom++;
+      } else if (!atBottomBefore) {
+        stableAtBottom = 0;
+      }
+
+      if (stableAtBottom >= 2) {
+        await progress('Нижняя граница живого снимка подтверждена.', 0, {
+          phase: 'top',
+          snapshotBottomConfirmed: true,
+          force: true
+        });
+        return;
+      }
+
+      await progress('Фиксирую реальный конец текущего снимка…', 0, {
+        phase: 'top',
+        snapshotBottomProbe: i + 1
+      });
+
+      await physicalScroll('down', atBottomBefore ? 2 : 10, {
+        settleTimeout: 2600,
+        quietWindow: 420
+      });
+      await expandVisible();
+
+      const after = visibleTurnSignature();
+      const atBottomAfter = physicalScrollEndVisible();
+      if (atBottomAfter && after && after === before) {
+        stableAtBottom++;
+      } else if (!atBottomAfter || after !== before) {
+        stableAtBottom = 0;
+      }
+      previous = after || before;
+
+      if (stableAtBottom >= 2) {
+        await sleep(500);
+        await expandVisible();
+        const confirmed = visibleTurnSignature();
+        if (physicalScrollEndVisible() && confirmed && confirmed === previous) {
+          await progress('Нижняя граница живого снимка подтверждена.', 0, {
+            phase: 'top',
+            snapshotBottomConfirmed: true,
+            force: true
+          });
+          return;
+        }
+        stableAtBottom = 0;
+        previous = confirmed;
+      }
+    }
+
+    throw new Error(
+      'Не удалось надёжно подтвердить конец текущего чата перед фиксацией снимка.'
+    );
+  }
+
   function hasResumeAnchor(id, signature) {
     return orderedTurns().some(turn => {
       const key = turnStableKey(turn);
@@ -3610,7 +3677,7 @@
         { phase: 'top', force: true, captureMode: mode }
       );
 
-      const turns = await waitForTurns(10000);
+      let turns = await waitForTurns(10000);
       if (!turns.length) {
         const roleCount = document.querySelectorAll(ROLE_SELECTOR).length;
         const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
@@ -3626,6 +3693,19 @@
             strictStable: Boolean(selectedFragment.end.id)
           }
         : null;
+
+      // A fresh snapshot boundary must represent the real live bottom, not the
+      // last turn that happened to be visible when the user pressed the button.
+      // Recovery and explicit fragment-end modes already own a fixed boundary
+      // and must never replace it with a newer live end.
+      if (!markerEnd && !fixedCaptureBoundary) {
+        await reachLiveBottomForSnapshot();
+        turns = orderedTurns();
+        if (!turns.length) {
+          throw new Error('После перехода к концу переписки реплики исчезли из DOM.');
+        }
+      }
+
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
 
