@@ -393,6 +393,11 @@ try {
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
     fail('Google Docs images: page/worker/rendered-pixel hydration chain and binary-first export must remain wired');
   }
+  if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
+      !serviceWorkerSource.includes('const passCounts = counts(passMessages)') ||
+      !serviceWorkerSource.includes('onlyInUnfinishedPassCount += Math.max(0, passCount - archiveCount)')) {
+    fail('unfinished drafts: compatible chains must compact and comparison counts must preserve duplicate occurrences');
+  }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_REPLACE_LINKED_DOC'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CLEAR_LINKED_DOC'") ||
       !serviceWorkerSource.includes('async function replaceLinkedGoogleDoc') ||
@@ -404,6 +409,8 @@ try {
   }
   if (!serviceWorkerSource.includes("case 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
       !popupJs.includes("type: 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
+      !popupJs.includes("type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE'") ||
+      !popupJs.includes("continueSaved.textContent = 'Продолжить'") ||
       popupJs.includes("moreActions.className = 'archive-link-tools'") ||
       popupJs.includes("secondaryActions.className = 'archive-link-secondary'") ||
       !popupJs.includes("openArchive.textContent = 'Открыть'") ||
@@ -426,6 +433,13 @@ try {
       !serviceWorkerSource.includes('linkedDocUrl: linked?.url') ||
       !serviceWorkerSource.includes('await registerArchive(libraryArchive)')) {
     fail('saved archive library: completed captures must be registered independently of linked Google Docs and stale Doc exports must not label a newer snapshot as saved');
+  }
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_DELETE_ARCHIVE_WITH_DOC'") ||
+      !serviceWorkerSource.includes('async function moveGoogleDocToTrash') ||
+      !serviceWorkerSource.includes('async function deleteArchiveWithGoogleDoc') ||
+      !popupHtml.includes('id="deleteArchiveAndDoc"') ||
+      !popupJs.includes("type: 'ARCHIVER_DELETE_ARCHIVE_WITH_DOC'")) {
+    fail('archive deletion: explicit local-plus-Google-Doc trash action must remain separate from local-only deletion');
   }
   if (!popupJs.includes('state.archiveDestination || null') ||
       !popupJs.includes("destinationText.textContent = 'Только локально'") ||
