@@ -2030,6 +2030,11 @@
     );
   }
 
+  function hasStableResumeAnchor(id) {
+    if (!id) return false;
+    return orderedTurns().some(turn => turnStableKey(turn) === id);
+  }
+
   function hasResumeAnchor(id, signature) {
     return orderedTurns().some(turn => {
       const key = turnStableKey(turn);
@@ -2604,6 +2609,17 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
+      if (hasStableResumeAnchor(anchorId)) {
+        await progress('Этап 1/3: найден конец сохраненного архива по стабильному ID · ' + map.size + ' сообщений в новом проходе', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          anchorReached: true,
+          anchorMatchLength: 1,
+          force: true
+        });
+        return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+      }
+
       const tailMatch = findResumeTailMatch(tailSignatures);
       if (tailMatch) {
         await progress(
@@ -2621,14 +2637,16 @@
         return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
       }
 
-      if (hasResumeAnchor(anchorId, anchorSignature)) {
-        await progress('Этап 1/3: найден конец сохраненного архива · ' + map.size + ' сообщений в новом проходе', map.size, {
+      if (!(tailSignatures || []).filter(Boolean).length &&
+          hasResumeAnchor('', anchorSignature)) {
+        await progress('Этап 1/3: найден legacy-стык по одиночной сигнатуре · ' + map.size + ' сообщений в новом проходе', map.size, {
           phase: 'top',
           iteration: i + 1,
           anchorReached: true,
+          anchorMatchLength: 1,
           force: true
         });
-        return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+        return { id: '', signature: anchorSignature, matchLength: 1 };
       }
 
       await progress('Этап 1/3: ищу последний сохраненный стык · ' + map.size + ' сообщений', map.size, {
@@ -2651,6 +2669,17 @@
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
 
+        if (hasStableResumeAnchor(anchorId)) {
+          await progress('Найдена сохранённая точка продолжения по стабильному ID.', map.size, {
+            phase: 'top',
+            iteration: i + 1,
+            anchorReached: true,
+            anchorMatchLength: 1,
+            force: true
+          });
+          return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+        }
+
         const tailMatch = findResumeTailMatch(tailSignatures);
         if (tailMatch) {
           await progress('Найден стык незавершённого прохода по соседним репликам.', map.size, {
@@ -2663,14 +2692,16 @@
           return { id: '', signature: tailMatch.signature, matchLength: tailMatch.matchLength };
         }
 
-        if (hasResumeAnchor(anchorId, anchorSignature)) {
-          await progress('Найден последний сохранённый стык незавершённого прохода.', map.size, {
+        if (!(tailSignatures || []).filter(Boolean).length &&
+            hasResumeAnchor('', anchorSignature)) {
+          await progress('Найдена legacy-точка продолжения по одиночной сигнатуре.', map.size, {
             phase: 'top',
             iteration: i + 1,
             anchorReached: true,
+            anchorMatchLength: 1,
             force: true
           });
-          return { id: anchorId, signature: anchorSignature, matchLength: 1 };
+          return { id: '', signature: anchorSignature, matchLength: 1 };
         }
 
         await physicalScroll('down', 3);
