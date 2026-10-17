@@ -202,7 +202,10 @@
             <div class="archive-label">Локальный архив</div>
             <strong id="archiveTitle"></strong>
           </div>
-          <button id="deleteArchive" class="text-danger" type="button">Удалить</button>
+          <div class="archive-delete-actions">
+            <button id="deleteArchiveAndDoc" class="text-danger hidden" type="button">Удалить + Google Doc</button>
+            <button id="deleteArchive" class="text-danger" type="button">Удалить локально</button>
+          </div>
         </div>
         <div class="archive-state-line">
           <span id="archiveStateLabel">Сохранён локально</span>
