@@ -1085,6 +1085,9 @@ function render(data) {
   $('currentDocUrl').value = linkedUrl || savedDocUrl || '';
   $('clearCurrentDocLink').classList.toggle('hidden', !linkedUrl);
   $('deleteArchive').disabled = Boolean(running || !archive);
+  const canDeleteWithDoc = Boolean(archive && (savedDocUrl || linkedUrl));
+  $('deleteArchiveAndDoc').classList.toggle('hidden', !canDeleteWithDoc);
+  $('deleteArchiveAndDoc').disabled = Boolean(running || !canDeleteWithDoc);
   if (running) {
     setStatus(job.message || 'Сбор идет в фоне…');
   } else if (job?.status === 'error' && job?.captureMode === 'images-draft') {
@@ -1798,7 +1801,7 @@ $('copyArchive').onclick = async () => {
 $('deleteArchive').onclick = async () => {
   const archive = state?.archive;
   if (!archive) return;
-  if (!confirm('Удалить этот локальный архив? Связанный документ Google Docs удалён не будет.')) return;
+  if (!confirm('Удалить только локальный архив? Связанный документ Google Docs останется без изменений.')) return;
 
   $('deleteArchive').disabled = true;
   try {
@@ -1812,6 +1815,37 @@ $('deleteArchive').onclick = async () => {
   } catch (error) {
     setStatus(error.message || String(error), true);
   } finally {
+    $('deleteArchive').disabled = false;
+  }
+};
+
+$('deleteArchiveAndDoc').onclick = async () => {
+  const archive = state?.archive;
+  const docUrl = state?.archiveDestination?.kind === 'google-doc'
+    ? (state.archiveDestination.url || '')
+    : (state?.linkedDoc?.url || '');
+  if (!archive?.id || !docUrl) return;
+  if (!confirm(
+    'Удалить локальный архив и переместить связанный Google Doc в корзину? ' +
+    'Это затронет весь документ Google Docs, а не только этот снимок архива.'
+  )) return;
+
+  $('deleteArchiveAndDoc').disabled = true;
+  $('deleteArchive').disabled = true;
+  setStatus('Перемещаю Google Doc в корзину и удаляю локальный архив…', false, true);
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_DELETE_ARCHIVE_WITH_DOC',
+      archiveId: archive.id
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось удалить архив вместе с Google Doc.');
+    await getState();
+    setStatus('Локальный архив удалён. Google Doc перемещён в корзину.');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+    await getState().catch(() => {});
+  } finally {
+    $('deleteArchiveAndDoc').disabled = false;
     $('deleteArchive').disabled = false;
   }
 };
