@@ -4390,34 +4390,52 @@
           const existing = stored['draft:' + existingDraftId];
           existingRecoveryDraft = existing || null;
           if (existing?.messages?.length) {
-            const seenIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-            const seenSignatures = new Set(
-              existing.messages
-                .filter(item => cleanMessageText(item.text || '', item.role || ''))
-                .map(messageTextSignature)
-            );
-            const delta = draftMessages.filter(item => {
-              if (item.id && seenIds.has(item.id)) return false;
-              const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
-              return !hasText || !seenSignatures.has(messageTextSignature(item));
-            });
-            // A retry may encounter the same text before lazy images load.
-            // Preserve the richer saved version and union newly found images.
-            const refreshed = existing.messages.map(previous => {
-              const newer = draftMessages.find(item =>
-                (previous.id && item.id === previous.id) ||
-                sameNavigationRef(navigationRef(previous), navigationRef(item))
-              );
-              if (!newer) return previous;
-              const merged = mergeRicherCapture(newer, previous);
-              const extra = mergeImageRecords(previous.images || [], newer.images || []);
-              if (extra.added.length) {
-                merged.images = extra.images;
-                merged.html = appendRecoveredImageMarkup(merged.html, extra.images, extra.added);
+            if (mode === 'retry-walk') {
+              // retry-walk starts again from the real top. Never append that
+              // fresh prefix after the old prefix. Only merge two prefixes when
+              // their complete overlap is proven in the same order.
+              const overlap = Math.min(existing.messages.length, draftMessages.length);
+              const compatible = overlap > 0 && Array.from({ length: overlap }, (_, i) => i)
+                .every(i => sameNavigationRef(
+                  navigationRef(existing.messages[i]),
+                  navigationRef(draftMessages[i])
+                ));
+
+              if (compatible) {
+                const spine = draftMessages.length > existing.messages.length
+                  ? draftMessages
+                  : existing.messages;
+                draftMessages = spine.map((message, index) => {
+                  const oldMessage = existing.messages[index];
+                  const newMessage = draftMessages[index];
+                  if (!oldMessage || !newMessage ||
+                      !sameNavigationRef(navigationRef(oldMessage), navigationRef(newMessage))) {
+                    return message;
+                  }
+                  return mergeRicherCapture(newMessage, oldMessage);
+                });
+              } else {
+                // Divergent retry evidence is not safe to synthesize. Preserve
+                // the last canonical saved prefix and let the next retry start
+                // from that known state.
+                draftMessages = existing.messages;
               }
-              return merged;
-            });
-            draftMessages = refreshed.concat(delta);
+            } else {
+              // resume-draft starts after a proven anchor. Repeated text is valid
+              // new content; only stable IDs may prove an overlap with the old
+              // saved prefix.
+              const seenIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+              const delta = draftMessages.filter(item =>
+                !(item.id && seenIds.has(item.id))
+              );
+              const refreshed = existing.messages.map(previous => {
+                const newer = draftMessages.find(item =>
+                  previous.id && item.id === previous.id
+                );
+                return newer ? mergeRicherCapture(newer, previous) : previous;
+              });
+              draftMessages = refreshed.concat(delta);
+            }
           }
         }
 
