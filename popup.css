@@ -1332,6 +1332,13 @@ body.tour-open .header-popover {
   gap:8px;
 }
 .current-archive-head > div { min-width:0; }
+.archive-delete-actions {
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:8px;
+  flex-wrap:wrap;
+}
 .current-archive-head strong {
   display:block;
   overflow:hidden;
