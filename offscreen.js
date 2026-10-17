@@ -44,6 +44,22 @@ function writeWithExecCommand(html, text) {
 
 
 
+function withTimeout(promise, timeoutMs, label = 'Операция') {
+  const ms = Math.max(1000, Number(timeoutMs) || 8000);
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(label + ' не завершилась за ' + Math.round(ms / 1000) + ' с.')),
+        ms
+      );
+    })
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function writeImageWithExecCommand(dataUrl, alt = '') {
   const source = String(dataUrl || '');
   if (!/^data:image\//i.test(source)) {
@@ -66,12 +82,20 @@ async function writeImageWithExecCommand(dataUrl, alt = '') {
 
   try {
     if (img.decode) {
-      await img.decode();
+      await withTimeout(
+        img.decode(),
+        8000,
+        'Декодирование изображения для Google Docs'
+      );
     } else if (!img.complete) {
-      await new Promise((resolve, reject) => {
-        img.onload = resolve;
-        img.onerror = () => reject(new Error('Изображение не декодировалось в offscreen clipboard.'));
-      });
+      await withTimeout(
+        new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => reject(new Error('Изображение не декодировалось в offscreen clipboard.'));
+        }),
+        8000,
+        'Загрузка изображения для Google Docs'
+      );
     }
 
     const selection = getSelection();
