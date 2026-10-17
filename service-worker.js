@@ -3391,7 +3391,8 @@ function speakerLabel(role, settings) {
 }
 function messageHtmlForExport(message, {
   stripImages = false,
-  preferOriginalImageSrc = false
+  preferOriginalImageSrc = false,
+  preserveUnreadyImages = false
 } = {}) {
   let html = String(message?.html || `<p>${escapeHtml(message?.text || '')}</p>`);
 
@@ -3404,9 +3405,14 @@ function messageHtmlForExport(message, {
     const index = indexMatch ? Number(indexMatch[1]) : -1;
     const image = index >= 0 ? message?.images?.[index] : null;
 
-    if (stripImages) return '';
+    if (stripImages) {
+      const ready = image?.binaryStatus === 'ready' && image?.dataUrl;
+      if (!preserveUnreadyImages || ready) return '';
+    }
 
-    const src = preferOriginalImageSrc
+    const src = (preserveUnreadyImages && !(image?.binaryStatus === 'ready' && image?.dataUrl))
+      ? (image?.src || image?.dataUrl || '')
+      : preferOriginalImageSrc
       ? (image?.src || image?.dataUrl || '')
       : (image?.dataUrl || image?.src || '');
     if (!src) return '';
@@ -3458,7 +3464,8 @@ function buildRichHtml(conversation, settings, options = {}) {
     }
     chunks.push(`<div>${messageHtmlForExport(msg, {
       stripImages: Boolean(options.stripImages),
-      preferOriginalImageSrc: Boolean(options.preferOriginalImageSrc)
+      preferOriginalImageSrc: Boolean(options.preferOriginalImageSrc),
+      preserveUnreadyImages: Boolean(options.preserveUnreadyImages)
     })}</div>`);
     chunks.push('</div>');
     chunks.push('<p><br></p>');
@@ -4501,14 +4508,19 @@ async function pasteArchiveIntoGoogleDoc(
   const pasteChunk = async (
     buffer,
     withHeader,
-    { stripImages = true, preferOriginalImageSrc = false } = {}
+    {
+      stripImages = true,
+      preferOriginalImageSrc = false,
+      preserveUnreadyImages = false
+    } = {}
   ) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
       stripImages,
-      preferOriginalImageSrc
+      preferOriginalImageSrc,
+      preserveUnreadyImages
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -4587,7 +4599,15 @@ async function pasteArchiveIntoGoogleDoc(
           headerPending = false;
         }
 
-        await pasteChunk([message], headerPending, { stripImages: true });
+        const unresolvedImages = images.filter(image =>
+          !(image?.binaryStatus === 'ready' && image?.dataUrl)
+        );
+        await pasteChunk([message], headerPending, {
+          stripImages: true,
+          preferOriginalImageSrc: true,
+          preserveUnreadyImages: unresolvedImages.length > 0
+        });
+        if (unresolvedImages.length) imageInlinePasteCount += unresolvedImages.length;
         headerPending = false;
         await pasteBinaryImages(message);
       }
