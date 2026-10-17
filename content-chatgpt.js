@@ -1453,22 +1453,11 @@
           order.push(message.id);
           map.set(message.id, message);
         } else {
-          // Virtualization can recreate the same turn after its reasoning block or
-          // images disappear from the current DOM. Never overwrite richer captured
-          // data with a poorer later snapshot.
-          if (!message.reasoningText && existing.reasoningText) {
-            message.reasoningText = existing.reasoningText;
-            message.reasoningHtml = existing.reasoningHtml;
-            message.reasoningLabel = existing.reasoningLabel;
-            message.reasoningStatus = existing.reasoningStatus;
-            message.reasoningCount = existing.reasoningCount;
-          }
-          if ((existing.images?.length || 0) > (message.images?.length || 0)) {
-            message.images = existing.images;
-            message.html = existing.html;
-          }
-
-          map.set(message.id, message);
+          // Virtualization can recreate the same turn after a prepared image has
+          // disappeared or been recreated as a fresh pending <img>. Preserve the
+          // richer snapshot, including ready image binaries even when image counts
+          // are equal.
+          map.set(message.id, mergeRicherCapture(message, existing));
         }
       }
 
