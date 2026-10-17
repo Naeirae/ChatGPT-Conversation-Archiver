@@ -176,8 +176,22 @@ try {
       !contentSource.includes('captureBoundaryKey') ||
       !contentSource.includes("collect(map, order, settings, boundary)") ||
       !contentSource.includes('locateBoundaryForUpwardScan') ||
-      !contentSource.includes('recordNavigationWindow(navigationWindows, settings, checkpointBoundary)')) {
-    fail('content-chatgpt.js: missing fixed bottom snapshot boundary or bounded rich traversal');
+      !contentSource.includes('recordNavigationWindow(navigationWindows, settings, checkpointBoundary)') ||
+      !contentSource.includes('reachLiveBottomForSnapshot') ||
+      !contentSource.includes("['compare', 'images'].includes(mode)")) {
+    fail('content-chatgpt.js: missing proven live-bottom snapshot boundary or bounded rich traversal');
+  }
+  if (!contentSource.includes('locateCapturedResumeAnchor') ||
+      !contentSource.includes('hasStableResumeAnchor') ||
+      !contentSource.includes("method: 'tail'") ||
+      !contentSource.includes('Repeated text is valid') &&
+        !contentSource.includes('Repeated text is valid new content') ||
+      !contentSource.includes('retry-walk starts again from the real top')) {
+    fail('continuation: resume anchor must be re-verified and repeated text must not be deduplicated');
+  }
+  if (!serviceWorkerSource.includes("['continue', 'compare'].includes(mode)") ||
+      !serviceWorkerSource.includes('buildResumeTailSignatures(existingArchive.messages, 4)')) {
+    fail('continuation: worker must supply a multi-turn saved tail when available');
   }
   if (!contentSource.includes("'resume-draft'") ||
       !contentSource.includes('allowDownwardFallback') ||
