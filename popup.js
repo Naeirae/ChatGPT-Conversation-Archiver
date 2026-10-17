@@ -551,6 +551,32 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(openArchive);
 
+    if (!item.isFragment && item.sourceUrl) {
+      const continueSaved = document.createElement('button');
+      continueSaved.className = 'archive-link-open';
+      continueSaved.type = 'button';
+      continueSaved.textContent = 'Продолжить';
+      continueSaved.disabled = busy;
+      continueSaved.onclick = async () => {
+        continueSaved.disabled = true;
+        setStatus('Открываю исходный чат и продолжаю с последнего сохранённого места…', false, true);
+        try {
+          const result = await chrome.runtime.sendMessage({
+            type: 'ARCHIVER_CONTINUE_SAVED_ARCHIVE',
+            archiveId: item.id,
+            captureTarget: $('captureTarget').value
+          });
+          if (!result?.ok) throw new Error(result?.error || 'Не удалось продолжить сохранённый чат.');
+          render({ ...state, job: result.job });
+          startPolling();
+        } catch (error) {
+          setStatus(error.message || String(error), true);
+          continueSaved.disabled = false;
+        }
+      };
+      actions.appendChild(continueSaved);
+    }
+
     const docUrl = item.docUrl || item.destination?.url || item.linkedDocUrl || '';
 
     const saveToDoc = document.createElement('button');
