@@ -3836,6 +3836,136 @@ async function unlinkGoogleDoc({ archiveId = '', sourceUrl = '' } = {}) {
   };
 }
 
+async function googleDocsNamedControlRect(tabId, patterns = []) {
+  const result = await cdp(tabId, 'Runtime.evaluate', {
+    expression: `(() => {
+      const patterns = ${JSON.stringify(patterns)}.map(value => String(value || '').toLowerCase());
+      const visible = el => {
+        if (!el) return false;
+        const style = getComputedStyle(el);
+        if (style.display === 'none' || style.visibility === 'hidden') return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width >= 4 && rect.height >= 4 && rect.bottom > 0 && rect.right > 0;
+      };
+      const label = el => [
+        el.getAttribute?.('aria-label') || '',
+        el.getAttribute?.('title') || '',
+        el.getAttribute?.('data-tooltip') || '',
+        el.textContent || ''
+      ].join(' ').replace(/\\s+/g, ' ').trim().toLowerCase();
+      const nodes = [...document.querySelectorAll(
+        'button,[role="button"],[role="menuitem"],[aria-label],[title],[data-tooltip]'
+      )].filter(visible);
+      const match = nodes.find(el => {
+        const value = label(el);
+        return value && patterns.some(pattern => pattern && value.includes(pattern));
+      }) || null;
+      if (!match) return null;
+      const rect = match.getBoundingClientRect();
+      return {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+        label: label(match)
+      };
+    })()`,
+    returnByValue: true
+  });
+  return result?.result?.value || null;
+}
+
+async function moveGoogleDocToTrash(docUrl, sourceUrl = '') {
+  const normalized = normalizeGoogleDocUrl(docUrl);
+  if (!normalized) throw new Error('Для удаления нужна корректная ссылка Google Docs.');
+
+  let tab = null;
+  let attached = false;
+  try {
+    tab = await openExistingGoogleDocTab(normalized, {
+      sourceUrl,
+      active: true,
+      clearMissingLink: false
+    });
+    await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+    attached = true;
+    await sleep(500);
+
+    let fileMenu = await googleDocsNamedControlRect(tab.id, ['file', 'файл']);
+    if (!fileMenu) {
+      const direct = await cdp(tab.id, 'Runtime.evaluate', {
+        expression: `(() => {
+          const el = document.querySelector('#docs-file-menu');
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          return r.width && r.height ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : null;
+        })()`,
+        returnByValue: true
+      });
+      fileMenu = direct?.result?.value || null;
+    }
+    if (!fileMenu) throw new Error('Не удалось найти меню «Файл» в Google Docs.');
+    await physicalClick(tab.id, fileMenu);
+    await sleep(350);
+
+    const trash = await googleDocsNamedControlRect(tab.id, [
+      'move to trash',
+      'move to bin',
+      'переместить в корзину',
+      'в корзину'
+    ]);
+    if (!trash) {
+      throw new Error('В меню Google Docs не найдено действие перемещения документа в корзину.');
+    }
+    await physicalClick(tab.id, trash);
+    await sleep(500);
+
+    const confirmTrash = await googleDocsNamedControlRect(tab.id, [
+      'move to trash',
+      'move to bin',
+      'переместить в корзину'
+    ]);
+    if (confirmTrash) {
+      await physicalClick(tab.id, confirmTrash);
+      await sleep(800);
+    }
+
+    return { ok: true, docUrl: normalized, movedToTrash: true };
+  } finally {
+    if (attached && tab?.id != null) {
+      await chrome.debugger.detach({ tabId: tab.id }).catch(() => {});
+    }
+    if (tab?.id != null) await chrome.tabs.remove(tab.id).catch(() => {});
+  }
+}
+
+async function deleteArchiveWithGoogleDoc(archiveId = '') {
+  const archive = await getArchive(archiveId);
+  if (!archive?.id) return { ok: true, removed: false, docRemoved: false };
+
+  const destination = await getArchiveDestination(archive.id);
+  const linked = archive.sourceUrl ? await getLinkedDoc(archive.sourceUrl) : null;
+  const destinationUrl = destination?.kind === 'google-doc'
+    ? normalizeGoogleDocUrl(destination.url || '')
+    : '';
+  const linkedUrl = normalizeGoogleDocUrl(linked?.url || '');
+  const docUrl = destinationUrl || linkedUrl;
+
+  if (!docUrl) {
+    throw new Error('У этого архива нет связанного документа Google Docs для совместного удаления.');
+  }
+
+  await moveGoogleDocToTrash(docUrl, archive.sourceUrl || '');
+  if (archive.sourceUrl) {
+    await clearLinkedDocumentState(archive.sourceUrl, docUrl).catch(() => {});
+  }
+  const local = await deleteLocalArchive(archive.id);
+  return {
+    ...local,
+    ok: true,
+    docRemoved: true,
+    docUrl
+  };
+}
+
 async function waitForTabComplete(tabId, timeout = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -5747,6 +5877,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
       case 'ARCHIVER_DELETE_ARCHIVE':
         return await deleteLocalArchive(message.archiveId || '');
+      case 'ARCHIVER_DELETE_ARCHIVE_WITH_DOC':
+        return await deleteArchiveWithGoogleDoc(message.archiveId || '');
       case 'ARCHIVER_SET_ARCHIVE_DESTINATION':
         return await setArchiveSavedDestination(
           message.archiveId || '',
