@@ -370,6 +370,9 @@ try {
       !contentSource.includes("(mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length")) {
     fail('unified reconcile: one pass must reconcile text and recover/hydrate images');
   }
+  if (!contentSource.includes('map.set(message.id, mergeRicherCapture(message, existing))')) {
+    fail('image capture: virtualized recapture must preserve richer prepared image binaries');
+  }
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
@@ -401,8 +404,10 @@ try {
       !popupJs.includes("type: 'ARCHIVER_SELECT_SAVED_ARCHIVE'") ||
       popupJs.includes("moreActions.className = 'archive-link-tools'") ||
       popupJs.includes("secondaryActions.className = 'archive-link-secondary'") ||
-      !popupJs.includes("openArchive.textContent = 'Открыть'")) {
-    fail('saved-chat UX: library rows must stay simple and select one archive for the main action card');
+      !popupJs.includes("openArchive.textContent = 'Открыть'") ||
+      !popupJs.includes("saveToDoc.textContent = docUrl ? 'Обновить Google Doc' : 'В Google Doc'") ||
+      !popupJs.includes("docUrl ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_NEW_DOC'")) {
+    fail('saved-chat UX: library rows must stay simple, selectable, and keep a direct Google Docs action');
   }
   if (serviceWorkerSource.includes('Пользователь / ${settings.userName}') ||
       serviceWorkerSource.includes('ChatGPT / ${settings.assistantName}') ||
