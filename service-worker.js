@@ -135,11 +135,17 @@ function unfinishedBoundaryKey(item) {
 
 function unfinishedRangeKey(item) {
   const mode = String(item?.captureMode || '');
-  if (!['fragment'].includes(mode)) return 'full-range';
   const range = item?.captureRange || item?.manualFullRange || item?.fragmentMarkers || {};
   const start = range?.start || {};
+  const end = range?.end || {};
   const startKey = String(start.id || start.signature || '');
-  return mode + ':start:' + (startKey || 'unknown');
+  const endKey = String(end.id || end.signature || '');
+  if (!startKey && !endKey) return 'full-range';
+  return [
+    mode || 'range',
+    'start:' + (startKey || 'open'),
+    'end:' + (endKey || 'open')
+  ].join(':');
 }
 
 function unfinishedGroupKey(item) {
@@ -353,6 +359,37 @@ async function reconcileUnfinishedPrefix(draft) {
   }
 
   return updated;
+}
+
+async function compactCompatibleDrafts(drafts = []) {
+  const buckets = new Map();
+  for (const draft of drafts || []) {
+    if (!draft?.id || !draft.messages?.length ||
+        !['walk', 'finalizing'].includes(draft.capturePhase || '')) continue;
+    const boundary = unfinishedBoundaryKey(draft);
+    if (boundary === 'legacy') continue;
+    const key = unfinishedGroupKey(draft);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(draft);
+  }
+
+  let changed = false;
+  for (const members of buckets.values()) {
+    if (members.length < 2) continue;
+    const canonical = [...members].sort((a, b) =>
+      Number(b.messages?.length || 0) - Number(a.messages?.length || 0) ||
+      String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+    )[0];
+    const before = members.length;
+    await reconcileUnfinishedPrefix(canonical);
+    const remaining = (await listDrafts()).filter(item =>
+      item?.id &&
+      unfinishedGroupKey(item) === unfinishedGroupKey(canonical) &&
+      ['walk', 'finalizing'].includes(item.capturePhase || '')
+    );
+    if (remaining.length < before) changed = true;
+  }
+  return changed ? await listDrafts() : drafts;
 }
 
 async function buildUnfinishedCaptureGroups(drafts = []) {
@@ -744,10 +781,22 @@ async function captureSavedArchive(archiveId = '', mode = 'continue', captureTar
     throw new Error('У архива нет рабочей ссылки на исходный чат.');
   }
 
-  const sourceTab = await chrome.tabs.create({ url: archive.sourceUrl, active: true });
-  if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
+  const openTabs = await chrome.tabs.query({});
+  let sourceTab = openTabs.find(tab =>
+    tab?.id && conversationKey(tab.url || '') === conversationKey(archive.sourceUrl || '')
+  ) || null;
 
-  await waitForChatTabComplete(sourceTab.id);
+  if (sourceTab?.id) {
+    await chrome.tabs.update(sourceTab.id, { active: true });
+    if (sourceTab.windowId != null) {
+      await chrome.windows.update(sourceTab.windowId, { focused: true }).catch(() => {});
+    }
+  } else {
+    sourceTab = await chrome.tabs.create({ url: archive.sourceUrl, active: true });
+    if (!sourceTab?.id) throw new Error('Не удалось открыть исходный чат.');
+    await waitForChatTabComplete(sourceTab.id);
+  }
+
   await waitForChatDomReady(sourceTab.id, 45000);
 
   const repairOnly = mode === 'reconcile' || mode === 'images';
@@ -2954,8 +3003,6 @@ async function compareUnfinishedPass(passId = '') {
 
   const passMessages = unfinishedPass.messages || [];
   const archiveMessages = archive.messages || [];
-  const archiveSet = new Set(archiveMessages.map(identity));
-  const passSet = new Set(passMessages.map(identity));
 
   let commonPrefixCount = 0;
   while (
@@ -2966,8 +3013,28 @@ async function compareUnfinishedPass(passId = '') {
     commonPrefixCount++;
   }
 
+  const counts = messages => {
+    const result = new Map();
+    for (const message of messages) {
+      const key = identity(message);
+      if (!key) continue;
+      result.set(key, (result.get(key) || 0) + 1);
+    }
+    return result;
+  };
+  const passCounts = counts(passMessages);
+  const archiveCounts = counts(archiveMessages);
+  const allKeys = new Set([...passCounts.keys(), ...archiveCounts.keys()]);
   let sharedCount = 0;
-  for (const key of passSet) if (archiveSet.has(key)) sharedCount++;
+  let onlyInUnfinishedPassCount = 0;
+  let onlyInArchiveCount = 0;
+  for (const key of allKeys) {
+    const passCount = passCounts.get(key) || 0;
+    const archiveCount = archiveCounts.get(key) || 0;
+    sharedCount += Math.min(passCount, archiveCount);
+    onlyInUnfinishedPassCount += Math.max(0, passCount - archiveCount);
+    onlyInArchiveCount += Math.max(0, archiveCount - passCount);
+  }
 
   return {
     ok: true,
@@ -2975,8 +3042,8 @@ async function compareUnfinishedPass(passId = '') {
     archive: summarize(archive),
     commonPrefixCount,
     sharedCount,
-    onlyInUnfinishedPassCount: [...passSet].filter(key => !archiveSet.has(key)).length,
-    onlyInArchiveCount: [...archiveSet].filter(key => !passSet.has(key)).length
+    onlyInUnfinishedPassCount,
+    onlyInArchiveCount
   };
 }
 
@@ -5554,7 +5621,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
-        const drafts = await listDrafts();
+        const drafts = await compactCompatibleDrafts(await listDrafts());
         const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
 
         let activeUnfinished = unfinishedPasses.find(item =>
