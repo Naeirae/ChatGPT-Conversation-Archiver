@@ -243,6 +243,16 @@ try {
       !contentSource.includes("message.type === 'ARCHIVER_PING'")) {
     fail('capture runtime: missing content-script version handshake');
   }
+  if (!serviceWorkerSource.includes('function withTimeout(') ||
+      !serviceWorkerSource.includes("'Запись изображения в буфер обмена'") ||
+      !serviceWorkerSource.includes("'Команда Google Docs ('")) {
+    fail('Google Docs export: debugger/clipboard operations must be bounded by timeouts');
+  }
+  const offscreenSource = await readFile('offscreen.js', 'utf8');
+  if (!offscreenSource.includes('function withTimeout(') ||
+      !offscreenSource.includes("'Декодирование изображения для Google Docs'")) {
+    fail('offscreen image export: image decode must have a hard timeout');
+  }
   console.log('OK: service-worker runtime helper declarations and reasoning adapter');
 } catch (error) {
   fail(`service-worker.js runtime helper guard failed: ${error.message}`);
