@@ -2017,6 +2017,61 @@
     return null;
   }
 
+  function locateCapturedResumeAnchor(messages, {
+    anchorId = '',
+    anchorSignature = '',
+    tailSignatures = []
+  } = {}) {
+    const captured = messages || [];
+
+    if (anchorId) {
+      const matches = captured
+        .map((item, index) => item?.id === anchorId ? index : -1)
+        .filter(index => index >= 0);
+      if (matches.length === 1) return { index: matches[0], method: 'stable-id', matchLength: 1 };
+      if (matches.length > 1) return { index: -1, ambiguous: true, method: 'stable-id' };
+    }
+
+    const baseline = (tailSignatures || []).filter(Boolean);
+    if (baseline.length >= 2) {
+      const signatures = captured.map(item =>
+        externalMatchSignature(item?.role || 'unknown', item?.text || '')
+      );
+      const maxLength = Math.min(4, baseline.length, signatures.length);
+
+      for (let length = maxLength; length >= 2; length--) {
+        const suffix = baseline.slice(-length);
+        const matches = [];
+        for (let start = 0; start <= signatures.length - length; start++) {
+          let same = true;
+          for (let offset = 0; offset < length; offset++) {
+            if (!signatures[start + offset] || signatures[start + offset] !== suffix[offset]) {
+              same = false;
+              break;
+            }
+          }
+          if (same) matches.push(start + length - 1);
+        }
+        if (matches.length === 1) {
+          return { index: matches[0], method: 'tail', matchLength: length };
+        }
+        if (matches.length > 1) {
+          continue;
+        }
+      }
+    }
+
+    if (anchorSignature) {
+      const matches = captured
+        .map((item, index) => messageTextSignature(item) === anchorSignature ? index : -1)
+        .filter(index => index >= 0);
+      if (matches.length === 1) return { index: matches[0], method: 'signature', matchLength: 1 };
+      if (matches.length > 1) return { index: -1, ambiguous: true, method: 'signature' };
+    }
+
+    return { index: -1, ambiguous: false, method: '' };
+  }
+
 
   function currentResumeWindowSignatures(limit = 6) {
     const visible = visibleMeaningfulSignatures()
@@ -3787,8 +3842,15 @@
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
+      // Text-changing operations must stop at the snapshot boundary that was
+      // fixed when the run started. Reaching the live physical bottom is not
+      // equivalent: new turns may have appeared while a long capture was running.
+      // Read-only comparison and image-only recovery may safely accept the live
+      // bottom because they do not append unbounded text to the canonical archive.
       const acceptedPhysicalEnd = Boolean(
-        mode !== 'full' && !bounded.found && walkResult?.physicalEndReached
+        ['compare', 'images'].includes(mode) &&
+        !bounded.found &&
+        walkResult?.physicalEndReached
       );
       if (!bounded.found && !acceptedPhysicalEnd) {
         throw new Error('Метка конца снимка не найдена в итоговом проходе. Архив не сохранён, чтобы не смешать сообщения, появившиеся после запуска.');
@@ -3885,19 +3947,23 @@
       }
 
       if (mode !== 'full' && mode !== 'images' && mode !== 'retry-walk' && mode !== 'fragment') {
-        const anchorIndex = capturedMessages.findIndex(item =>
-          (matchedAnchorId && item.id === matchedAnchorId) ||
-          (matchedAnchorSignature && messageTextSignature(item) === matchedAnchorSignature)
-        );
+        const locatedAnchor = locateCapturedResumeAnchor(capturedMessages, {
+          anchorId: matchedAnchorId,
+          anchorSignature: matchedAnchorSignature,
+          tailSignatures: resumeTailSignatures
+        });
 
-        if (anchorIndex < 0) {
+        if (locatedAnchor.index < 0) {
           throw new Error(
-            'Точка продолжения была найдена при навигации, но не попала в итоговый хронологический проход. ' +
-            'Продолжение остановлено без слияния, чтобы не добавить старые сообщения повторно.'
+            locatedAnchor.ambiguous
+              ? 'Точка продолжения встречается в итоговом проходе неоднозначно. ' +
+                'Продолжение остановлено без слияния, чтобы не выбрать не тот повторяющийся участок.'
+              : 'Точка продолжения была найдена при навигации, но не подтверждена в итоговом хронологическом проходе. ' +
+                'Продолжение остановлено без слияния, чтобы не добавить старые сообщения повторно.'
           );
         }
 
-        capturedMessages = capturedMessages.slice(anchorIndex + 1);
+        capturedMessages = capturedMessages.slice(locatedAnchor.index + 1);
       }
 
       if (mode === 'fragment') {
@@ -3948,19 +4014,14 @@
           });
           addedCount = Math.max(0, messages.length - previousCount);
         } else {
+          // The chronological pass has already been sliced strictly after the
+          // proven resume anchor. Text equality is not evidence of duplication:
+          // users and ChatGPT can legitimately repeat the same message later.
+          // Only a stable ID can prove that a captured turn is already present.
           const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-          const existingSignatures = new Set(
-            existing.messages
-              .filter(item => cleanMessageText(item.text || '', item.role || ''))
-              .map(messageTextSignature)
+          const delta = capturedMessages.filter(item =>
+            !(item.id && existingIds.has(item.id))
           );
-
-          const delta = capturedMessages.filter(item => {
-            if (item.id && existingIds.has(item.id)) return false;
-            const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
-            if (hasText && existingSignatures.has(messageTextSignature(item))) return false;
-            return true;
-          });
 
           addedCount = delta.length;
           messages = existing.messages.concat(delta);
@@ -4079,19 +4140,14 @@
         if (!existing?.messages) throw new Error('Локальный архив для продолжения недоступен.');
 
         previousCount = existing.messages.length;
+        // capturedMessages is already the proven chronological suffix after
+        // the saved anchor. Do not deduplicate by text signature: a later turn
+        // may intentionally repeat an earlier one. Stable IDs are the only
+        // safe cross-boundary duplicate filter here.
         const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-        const existingSignatures = new Set(
-          existing.messages
-            .filter(item => cleanMessageText(item.text || '', item.role || ''))
-            .map(messageTextSignature)
+        const delta = capturedMessages.filter(item =>
+          !(item.id && existingIds.has(item.id))
         );
-
-        const delta = capturedMessages.filter(item => {
-          if (item.id && existingIds.has(item.id)) return false;
-          const hasText = Boolean(cleanMessageText(item.text || '', item.role || ''));
-          if (hasText && existingSignatures.has(messageTextSignature(item))) return false;
-          return true;
-        });
 
         addedCount = delta.length;
         messages = existing.messages.concat(delta);
