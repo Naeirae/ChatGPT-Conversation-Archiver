@@ -387,6 +387,8 @@ try {
       !contentSource.includes("type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
       !contentSource.includes('async function captureRenderedImageBlob') ||
       !contentSource.includes("hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft'") ||
+      !serviceWorkerSource.includes('preserveUnreadyImages') ||
+      !serviceWorkerSource.includes('imageInlinePasteCount += unresolvedImages.length') ||
       !manifestSource.includes('https://*.oaiusercontent.com/*') ||
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
     fail('Google Docs images: page/worker/rendered-pixel hydration chain and binary-first export must remain wired');
