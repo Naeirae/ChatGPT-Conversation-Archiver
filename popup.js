@@ -552,6 +552,45 @@ function renderSavedArchives(items = []) {
     actions.appendChild(openArchive);
 
     const docUrl = item.docUrl || item.destination?.url || item.linkedDocUrl || '';
+
+    const saveToDoc = document.createElement('button');
+    saveToDoc.className = 'archive-link-open';
+    saveToDoc.type = 'button';
+    saveToDoc.textContent = docUrl ? 'Обновить Google Doc' : 'В Google Doc';
+    saveToDoc.disabled = busy;
+    saveToDoc.onclick = async () => {
+      saveToDoc.disabled = true;
+      setStatus(
+        docUrl
+          ? 'Открываю Google Doc и проверяю сохранённый чат…'
+          : 'Создаю Google Doc для сохранённого чата…',
+        false,
+        true
+      );
+      try {
+        const result = await exportToDoc(
+          docUrl ? 'ARCHIVER_EXPORT_LINKED_DOC' : 'ARCHIVER_EXPORT_NEW_DOC',
+          { archiveId: item.id }
+        );
+        const imageAdded = Number(result.imageInsertedCount || 0) + Number(result.imageInlinePasteCount || 0);
+        const imageFailed = Number(result.imageFailedCount || 0);
+        setStatus(
+          (docUrl ? 'Google Doc обновлён.' : 'Google Doc создан.') +
+          ' Сообщений: ' + Number(result.addedCount || 0) + '.' +
+          (imageAdded || imageFailed
+            ? ' Картинки: добавлено ' + imageAdded +
+              (imageFailed ? ', не удалось ' + imageFailed : '') + '.'
+            : '')
+        );
+        await getState();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        saveToDoc.disabled = false;
+      }
+    };
+    actions.appendChild(saveToDoc);
+
     if (docUrl) {
       const docLink = document.createElement('a');
       docLink.className = 'archive-link-open';
