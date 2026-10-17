@@ -80,6 +80,22 @@ const summarize = summarizeArchive;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function withTimeout(promise, timeoutMs, label = 'Операция') {
+  const ms = Math.max(1000, Number(timeoutMs) || 15000);
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(label + ' не ответила за ' + Math.round(ms / 1000) + ' с.')),
+        ms
+      );
+    })
+  ]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function setDraftRecoveryTab(draftId, {
   tabId = null,
   sourceUrl = '',
@@ -3596,14 +3612,22 @@ async function ensureOffscreen() {
 }
 
 async function writeClipboard(html, text) {
-  await ensureOffscreen();
-  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OFFSCREEN_WRITE', target: 'offscreen', html, text });
+  await withTimeout(ensureOffscreen(), 10000, 'Подготовка буфера обмена');
+  const result = await withTimeout(
+    chrome.runtime.sendMessage({ type: 'ARCHIVER_OFFSCREEN_WRITE', target: 'offscreen', html, text }),
+    12000,
+    'Запись в буфер обмена'
+  );
   if (!result?.ok) throw new Error(result?.error || 'Не удалось записать переписку в буфер обмена.');
 }
 
 async function readClipboardText() {
-  await ensureOffscreen();
-  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OFFSCREEN_READ', target: 'offscreen' });
+  await withTimeout(ensureOffscreen(), 10000, 'Подготовка буфера обмена');
+  const result = await withTimeout(
+    chrome.runtime.sendMessage({ type: 'ARCHIVER_OFFSCREEN_READ', target: 'offscreen' }),
+    12000,
+    'Чтение буфера обмена'
+  );
   if (!result?.ok) throw new Error(result?.error || 'Не удалось прочитать текст из буфера обмена.');
   return String(result.text || '');
 }
@@ -3987,7 +4011,11 @@ async function waitForTabComplete(tabId, timeout = 30000) {
 }
 
 async function cdp(tabId, method, params = {}) {
-  return chrome.debugger.sendCommand({ tabId }, method, params);
+  return withTimeout(
+    chrome.debugger.sendCommand({ tabId }, method, params),
+    15000,
+    'Команда Google Docs (' + method + ')'
+  );
 }
 
 async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
@@ -4584,13 +4612,17 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
 
   let offscreenError = '';
   try {
-    await ensureOffscreen();
-    const offscreen = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE',
-      target: 'offscreen',
-      dataUrl,
-      alt: String(image?.alt || '')
-    });
+    await withTimeout(ensureOffscreen(), 10000, 'Подготовка буфера изображения');
+    const offscreen = await withTimeout(
+      chrome.runtime.sendMessage({
+        type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE',
+        target: 'offscreen',
+        dataUrl,
+        alt: String(image?.alt || '')
+      }),
+      15000,
+      'Запись изображения в буфер обмена'
+    );
     if (offscreen?.ok) {
       return {
         ok: true,
