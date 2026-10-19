@@ -400,7 +400,6 @@ try {
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
-      !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
@@ -408,24 +407,22 @@ try {
       !contentSource.includes("type: 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !contentSource.includes("type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
       !contentSource.includes('async function captureRenderedImageBlob') ||
-      !manifestSource.includes('https://*.oaiusercontent.com/*') ||
-      !serviceWorkerSource.includes('one rich HTML clipboard') ||
-      !serviceWorkerSource.includes('await pasteChunk(messages || [], includeHeader, {') ||
-      !serviceWorkerSource.includes('preferOriginalImageSrc: true') ||
-      !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
-    fail('Google Docs images: keep worker/rendered hydration fallbacks but restore exact 0.4.20 legacy batch rich-HTML export as the primary path');
+      !manifestSource.includes('https://*.oaiusercontent.com/*')) {
+    fail('Google Docs images: hydration and rendered-image recovery chain must remain wired');
   }
 
-  const imageClipboardStart = serviceWorkerSource.indexOf('async function copyImageClipboardInGoogleDocs');
-  const imageClipboardEnd = serviceWorkerSource.indexOf('async function pasteArchiveIntoGoogleDoc', imageClipboardStart);
-  const imageClipboardBlock = imageClipboardStart >= 0 && imageClipboardEnd > imageClipboardStart
-    ? serviceWorkerSource.slice(imageClipboardStart, imageClipboardEnd)
+  const docsPasteStart = serviceWorkerSource.indexOf('async function pasteArchiveIntoGoogleDoc');
+  const docsPasteEnd = serviceWorkerSource.indexOf('function normalizeDocSearchText', docsPasteStart);
+  const docsPasteBlock = docsPasteStart >= 0 && docsPasteEnd > docsPasteStart
+    ? serviceWorkerSource.slice(docsPasteStart, docsPasteEnd)
     : '';
-  if (!imageClipboardBlock ||
-      !imageClipboardBlock.includes("new ClipboardItem({ 'image/png': pngBlob })") ||
-      !imageClipboardBlock.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
-      !imageClipboardBlock.includes("method: 'offscreen-rich-html-image'")) {
-    fail('Google Docs images: binary/offscreen clipboard paths must remain available only as fallbacks behind the restored legacy batch export');
+  if (!docsPasteBlock ||
+      !docsPasteBlock.includes('const binaryReadyCount =') ||
+      !docsPasteBlock.includes('if (imageBearingCount > 0 && binaryReadyCount > 0)') ||
+      !docsPasteBlock.includes('preserveUnreadyImages') ||
+      !docsPasteBlock.includes('await pasteBinaryImages(message)') ||
+      !docsPasteBlock.includes('Last-resort compatibility path')) {
+    fail('Google Docs export: preserve the known-good 0.4.27 save path');
   }
 
   const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
