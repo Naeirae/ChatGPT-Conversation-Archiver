@@ -3402,15 +3402,24 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      // This is intentionally the old conservative stop rule. If ChatGPT is
-      // slow at the top, the user can press "I'm at the beginning".
+      // Identical virtualized windows are only proof of the top when the
+      // conversation scroller itself is physically at its start. Otherwise the
+      // upward wheel stalled and we must force the exact container farther up.
       if (stable >= 4) {
-        await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          force: true
-        });
-        return;
+        if (physicalScrollStartVisible()) {
+          await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
+            phase: 'top',
+            iteration: i + 1,
+            force: true
+          });
+          return;
+        }
+
+        localConversationScroll('up', 1);
+        await waitForTurnSettle(2200, 380);
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
       }
     }
 
