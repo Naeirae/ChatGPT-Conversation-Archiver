@@ -435,6 +435,14 @@ try {
       pngClipboardIndex > richHtmlClipboardIndex) {
     fail('Google Docs images: real PNG ClipboardItem must remain the primary path before offscreen/rich-HTML fallbacks');
   }
+  if (!serviceWorkerSource.includes('async function scriptedScrollChatTab') ||
+      !serviceWorkerSource.includes("method: 'scripted-scroll-fallback'") ||
+      !serviceWorkerSource.includes("method: 'debugger-wheel'") ||
+      !serviceWorkerSource.includes("'Резервная прокрутка ChatGPT'") ||
+      !serviceWorkerSource.includes("'Команда Chrome (' + method + ')'") ||
+      serviceWorkerSource.includes("'Команда Google Docs (' + method + ')'")) {
+    fail('ChatGPT scrolling: debugger mouse timeout must fall back to in-page scrolling without aborting capture');
+  }
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
       !serviceWorkerSource.includes('const passCounts = counts(passMessages)') ||
       !serviceWorkerSource.includes('onlyInUnfinishedPassCount += Math.max(0, passCount - archiveCount)')) {
