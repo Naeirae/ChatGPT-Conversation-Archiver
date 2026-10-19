@@ -1945,40 +1945,12 @@
     return previous;
   }
 
-  function localConversationScroll(direction, bursts = 7) {
-    const normalizedDirection = direction === 'down' ? 'down' : 'up';
-    const turns = orderedTurns();
-    const anchor = normalizedDirection === 'up'
-      ? (turns[0] || null)
-      : (turns[turns.length - 1] || null);
-    const scroller = findScrollContainer(anchor);
-    if (!scroller) return { ok: false, moved: false, reason: 'scroll container not found' };
-
-    const amount = (normalizedDirection === 'up' ? -1 : 1) *
-      860 * Math.max(1, Math.min(24, Number(bursts) || 7));
-    const before = Number(scroller.scrollTop || 0);
-    scroller.scrollBy({ top: amount, left: 0, behavior: 'auto' });
-    const after = Number(scroller.scrollTop || 0);
-    return {
-      ok: true,
-      moved: Math.abs(after - before) >= 2,
-      before,
-      after,
-      method: 'content-script-scroll'
-    };
-  }
-
   async function physicalScroll(
     direction,
     bursts = 7,
     { settleTimeout = 8000, quietWindow = 1400 } = {}
   ) {
     const normalizedDirection = direction === 'down' ? 'down' : 'up';
-    const beforeSignature = visibleTurnSignature();
-    const atRequestedEdgeBefore = normalizedDirection === 'up'
-      ? physicalScrollStartVisible()
-      : physicalScrollEndVisible();
-
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
       jobId: state.jobId,
@@ -1987,102 +1959,8 @@
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
     state.lastScrollDirection = normalizedDirection;
-
-    let settled = await waitForTurnSettle(settleTimeout, quietWindow);
-    const atRequestedEdgeAfter = normalizedDirection === 'up'
-      ? physicalScrollStartVisible()
-      : physicalScrollEndVisible();
-
-    // The service worker can only infer which element Chrome actually scrolled.
-    // The content script knows the exact conversation container. If the visible
-    // turn window did not change and we are not already at the requested edge,
-    // force the scroll on that exact container here instead of counting a
-    // no-op as a successful navigation step.
-    if (!atRequestedEdgeBefore &&
-        !atRequestedEdgeAfter &&
-        beforeSignature &&
-        settled === beforeSignature) {
-      const local = localConversationScroll(normalizedDirection, bursts);
-      if (local?.ok) {
-        await sleep(120);
-        settled = await waitForTurnSettle(settleTimeout, quietWindow);
-        return { ...result, contentFallback: local, settledSignature: settled };
-      }
-    }
-
-    return { ...result, settledSignature: settled };
-  }
-
-  async function reachLiveBottomForSnapshot() {
-    let stableAtBottom = 0;
-    let previous = '';
-
-    for (let i = 0; i < 240; i++) {
-      await waitIfPaused();
-      await expandVisible();
-
-      const before = visibleTurnSignature();
-      const atBottomBefore = physicalScrollEndVisible();
-      if (atBottomBefore && before && before === previous) {
-        stableAtBottom++;
-      } else if (!atBottomBefore) {
-        stableAtBottom = 0;
-      }
-
-      if (stableAtBottom >= 2) {
-        await progress('Нижняя граница живого снимка подтверждена.', 0, {
-          phase: 'top',
-          snapshotBottomConfirmed: true,
-          force: true
-        });
-        return;
-      }
-
-      await progress('Фиксирую реальный конец текущего снимка…', 0, {
-        phase: 'top',
-        snapshotBottomProbe: i + 1
-      });
-
-      await physicalScroll('down', atBottomBefore ? 2 : 10, {
-        settleTimeout: 2600,
-        quietWindow: 420
-      });
-      await expandVisible();
-
-      const after = visibleTurnSignature();
-      const atBottomAfter = physicalScrollEndVisible();
-      if (atBottomAfter && after && after === before) {
-        stableAtBottom++;
-      } else if (!atBottomAfter || after !== before) {
-        stableAtBottom = 0;
-      }
-      previous = after || before;
-
-      if (stableAtBottom >= 2) {
-        await sleep(500);
-        await expandVisible();
-        const confirmed = visibleTurnSignature();
-        if (physicalScrollEndVisible() && confirmed && confirmed === previous) {
-          await progress('Нижняя граница живого снимка подтверждена.', 0, {
-            phase: 'top',
-            snapshotBottomConfirmed: true,
-            force: true
-          });
-          return;
-        }
-        stableAtBottom = 0;
-        previous = confirmed;
-      }
-    }
-
-    throw new Error(
-      'Не удалось надёжно подтвердить конец текущего чата перед фиксацией снимка.'
-    );
-  }
-
-  function hasStableResumeAnchor(id) {
-    if (!id) return false;
-    return orderedTurns().some(turn => turnStableKey(turn) === id);
+    await waitForTurnSettle(settleTimeout, quietWindow);
+    return result;
   }
 
   function hasResumeAnchor(id, signature) {
@@ -3402,24 +3280,15 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      // Identical virtualized windows are only proof of the top when the
-      // conversation scroller itself is physically at its start. Otherwise the
-      // upward wheel stalled and we must force the exact container farther up.
+      // This is intentionally the old conservative stop rule. If ChatGPT is
+      // slow at the top, the user can press "I'm at the beginning".
       if (stable >= 4) {
-        if (physicalScrollStartVisible()) {
-          await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
-            phase: 'top',
-            iteration: i + 1,
-            force: true
-          });
-          return;
-        }
-
-        localConversationScroll('up', 1);
-        await waitForTurnSettle(2200, 380);
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          force: true
+        });
+        return;
       }
     }
 
@@ -3431,7 +3300,7 @@
     let previousSignature = '';
     let previousSize = -1;
 
-    for (let i = 0; i < 1600; i++) {
+    for (let i = 0; i < 520; i++) {
       await waitIfPaused();
 
       await expandVisible();
@@ -3468,7 +3337,6 @@
       }
 
       const signature = visibleTurnSignature();
-      const beforeRefs = visibleNavigationRefsLightweight();
       const imageStats = capturedImageStats([...map.values()]);
       await progress(
         'Этап 2/3: сверяю сверху вниз · ' + map.size +
@@ -3486,68 +3354,9 @@
         }
       );
 
-      // Full capture must not accelerate through virtualized windows. One small
-      // step at a time preserves overlap between adjacent viewports and lets us
-      // prove that no messages were skipped on the way back down.
-      await physicalScroll('down', 1, {
-        settleTimeout: 2400,
-        quietWindow: 420
-      });
-
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      const afterTouchedIds = collect(map, order, settings, boundary);
-      await hydrateSequentialImages(
-        afterTouchedIds.map(id => map.get(id)).filter(Boolean),
-        attemptedImageSources
-      );
-
-      if (boundaryIsVisible(boundary)) {
-        const imageStatsAfter = capturedImageStats([...map.values()]);
-        const countMatch = Number(firstPassCount || 0) === map.size;
-        await progress(
-          'Этап 2/3: второй проход завершён · первый ' + Number(firstPassCount || 0) +
-            ' · второй ' + map.size + ' · количество ' + (countMatch ? 'совпало' : 'не совпало'),
-          map.size,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            boundaryReached: true,
-            chronologicalCount: map.size,
-            firstPassCount: Number(firstPassCount || 0),
-            secondPassCount: map.size,
-            passCountMatch: countMatch,
-            comparisonComplete: true,
-            imageCount: imageStatsAfter.total,
-            imageBinaryReady: imageStatsAfter.ready,
-            imageBinaryFailed: imageStatsAfter.failed,
-            force: true
-          }
-        );
-        return { boundaryReached: true, physicalEndReached: false };
-      }
-
-      const afterRefs = visibleNavigationRefsLightweight();
-      if (beforeRefs.length && afterRefs.length &&
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
-        const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
-        );
-        if (!recovered) {
-          throw new Error(
-            'Второй проход полного сбора перескочил участок без перекрытия. ' +
-            'Сбор остановлен, чтобы не сохранить неполный архив.'
-          );
-        }
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
-        continue;
-      }
+      // Stable pre-recovery path: one physical scroll request, then wait for the
+      // virtualized window to settle. No checkpoint/storage/network/recovery work here.
+      await physicalScroll('down');
 
       const nextSignature = visibleTurnSignature();
       if (nextSignature && nextSignature === signature &&
@@ -3560,14 +3369,7 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 4) {
-        if (physicalScrollEndVisible()) break;
-        localConversationScroll('down', 1);
-        await waitForTurnSettle(2200, 380);
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
-      }
+      if (stable >= 4) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
@@ -3834,7 +3636,7 @@
         { phase: 'top', force: true, captureMode: mode }
       );
 
-      let turns = await waitForTurns(10000);
+      const turns = await waitForTurns(10000);
       if (!turns.length) {
         const roleCount = document.querySelectorAll(ROLE_SELECTOR).length;
         const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
@@ -3850,19 +3652,6 @@
             strictStable: Boolean(selectedFragment.end.id)
           }
         : null;
-
-      // A fresh snapshot boundary must represent the real live bottom, not the
-      // last turn that happened to be visible when the user pressed the button.
-      // Recovery and explicit fragment-end modes already own a fixed boundary
-      // and must never replace it with a newer live end.
-      if (!markerEnd && !fixedCaptureBoundary) {
-        await reachLiveBottomForSnapshot();
-        turns = orderedTurns();
-        if (!turns.length) {
-          throw new Error('После перехода к концу переписки реплики исчезли из DOM.');
-        }
-      }
-
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
 
