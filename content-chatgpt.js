@@ -3308,36 +3308,6 @@
     return false;
   }
 
-  async function recoverUpwardContinuity(beforeRefs, map, order, settings, boundary, navigationWindows = null) {
-    for (let attempt = 0; attempt < 14; attempt++) {
-      const currentRefs = visibleNavigationRefsLightweight();
-      if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
-
-      await progress(
-        'Этап 1/3: слишком большой скачок вверх; возвращаюсь к последнему перекрывающемуся участку…',
-        map.size,
-        {
-          phase: 'top',
-          upwardContinuityRecovery: true,
-          continuityAttempt: attempt + 1,
-          force: attempt === 0
-        }
-      );
-
-      await physicalScroll(
-        'down',
-        1,
-        { settleTimeout: 2400, quietWindow: 400 }
-      );
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
-      recordNavigationWindow(navigationWindows, settings, boundary);
-    }
-
-    return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
-  }
-
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
     for (let attempt = 0; attempt < 14; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
@@ -3372,7 +3342,7 @@
     let previousSignature = '';
     let previousSize = -1;
 
-    for (let i = 0; i < 1600; i++) {
+    for (let i = 0; i < 260; i++) {
       await waitIfPaused();
 
       if (state.manualTopConfirmed) {
@@ -3391,18 +3361,15 @@
       recordNavigationWindow(navigationWindows, settings, boundary);
 
       const signature = visibleTurnSignature();
-      const beforeRefs = visibleNavigationRefsLightweight();
       await progress('Этап 1/3: первый проход вверх · собрано ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
 
-      // Do not accelerate the capture pass through ChatGPT's virtualized list.
-      // A seven-wheel burst can replace several DOM windows before collect()
-      // sees them, which is exactly how a 100+ message chat regressed to ~36.
-      await physicalScroll('up', 1, {
-        settleTimeout: 2400,
-        quietWindow: 420
+      // Historical working cadence from 0.3.14.
+      await physicalScroll('up', 7, {
+        settleTimeout: 1600,
+        quietWindow: 360
       });
 
       if (state.manualTopConfirmed) {
@@ -3420,29 +3387,6 @@
       collect(map, order, settings, boundary);
       recordNavigationWindow(navigationWindows, settings, boundary);
 
-      const afterRefs = visibleNavigationRefsLightweight();
-      if (beforeRefs.length && afterRefs.length &&
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
-        const recovered = await recoverUpwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary,
-          navigationWindows
-        );
-        if (!recovered) {
-          throw new Error(
-            'Первый проход полного сбора перескочил участок без перекрытия. ' +
-            'Сбор остановлен, чтобы не принять неполный проход за полный.'
-          );
-        }
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
-        continue;
-      }
-
       const nextSignature = visibleTurnSignature();
       if (
         nextSignature &&
@@ -3458,6 +3402,9 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
+      // Identical virtualized windows are only proof of the top when the
+      // conversation scroller itself is physically at its start. Otherwise the
+      // upward wheel stalled and we must force the exact container farther up.
       if (stable >= 4) {
         if (physicalScrollStartVisible()) {
           await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
