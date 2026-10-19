@@ -1925,17 +1925,6 @@
     return keys.slice(0, 3).concat(keys.slice(-3)).join('|') + '::' + keys.length;
   }
 
-  async function waitForDomQuiet(scroller, timeout) {
-    const started = Date.now();
-    let last = scroller.scrollHeight + ':' + document.querySelectorAll(TURN_SELECTOR).length;
-    while (Date.now() - started < timeout) {
-      await sleep(180);
-      const next = scroller.scrollHeight + ':' + document.querySelectorAll(TURN_SELECTOR).length;
-      if (next === last) return;
-      last = next;
-    }
-  }
-
   async function waitForTurnSettle(timeout = 8000, quietWindow = 1400) {
     const started = Date.now();
     let previous = visibleTurnSignature();
@@ -3228,11 +3217,10 @@
 
   async function reachTopFullLegacy(map, order, settings, navigationWindows = null, boundary = null) {
     let stable = 0;
-    let previousHeight = -1;
-    let previousCount = -1;
-    let previousTop = -1;
+    let previousSignature = '';
+    let previousSize = -1;
 
-    for (let i = 0; i < 320; i++) {
+    for (let i = 0; i < 260; i++) {
       await waitIfPaused();
 
       if (state.manualTopConfirmed) {
@@ -3245,73 +3233,74 @@
         return;
       }
 
-      const turns = orderedTurns();
-      const firstTurn = turns[0] || null;
-      const scroller = findScrollContainer(firstTurn);
-      if (!scroller) throw new Error('Не найден контейнер прокрутки переписки.');
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+      recordNavigationWindow(navigationWindows, settings, boundary);
 
-      // Exact mechanism from before commit 175867fa ("Drive capture with physical
-      // wheel scrolling"): drive the real conversation scroller directly from
-      // the content script, not through Chrome debugger mouse-wheel events.
-      scroller.scrollTo({ top: 0, behavior: 'auto' });
-      await sleep(280);
+      const signature = visibleTurnSignature();
+      await progress('Этап 1/3: первый проход вверх · собрано ' + map.size + ' сообщений', map.size, {
+        phase: 'top',
+        iteration: i + 1
+      });
+
+      // Historical working cadence from 0.3.14.
+      await physicalScroll('up', 7, {
+        settleTimeout: 1600,
+        quietWindow: 360
+      });
+
+      if (state.manualTopConfirmed) {
+        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
+          phase: 'top',
+          iteration: i + 1,
+          manualTopConfirmed: true,
+          force: true
+        });
+        return;
+      }
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
       recordNavigationWindow(navigationWindows, settings, boundary);
 
-      const top = Math.round(scroller.scrollTop);
-      const height = scroller.scrollHeight;
-      const count = document.querySelectorAll(TURN_SELECTOR).length;
-
-      await progress('Этап 1/3: иду к началу · собрано ' + map.size + ' сообщений', map.size, {
-        phase: 'top',
-        iteration: i + 1,
-        scrollTop: top,
-        scrollHeight: height
-      });
-
-      if (top <= 2 &&
-          height === previousHeight &&
-          count === previousCount &&
-          previousTop <= 2) {
+      const nextSignature = visibleTurnSignature();
+      if (
+        nextSignature &&
+        nextSignature === signature &&
+        signature === previousSignature &&
+        map.size === previousSize
+      ) {
         stable++;
       } else {
         stable = 0;
       }
 
-      previousHeight = height;
-      previousCount = count;
-      previousTop = top;
+      previousSignature = nextSignature;
+      previousSize = map.size;
 
-      if (stable >= 5) {
-        await progress('Этап 1/3: начало достигнуто · собрано ' + map.size + ' сообщений', map.size, {
+      // This is intentionally the old conservative stop rule. If ChatGPT is
+      // slow at the top, the user can press "I'm at the beginning".
+      if (stable >= 4) {
+        await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
           force: true
         });
         return;
       }
-
-      // Historical loading nudge: move slightly away from zero, then return to
-      // zero and wait for ChatGPT to append the older virtualized chunk.
-      scroller.scrollBy(0, 140);
-      await sleep(130);
-      scroller.scrollTo({ top: 0, behavior: 'auto' });
-      await waitForDomQuiet(scroller, 1100);
     }
 
-    throw new Error('Не удалось надежно дойти до начала переписки: страница продолжает догружаться.');
+    throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
   }
 
   async function walkDownFullLegacy(map, order, settings, boundary, { firstPassCount = 0, attemptedImageSources = new Set() } = {}) {
     let stable = 0;
-    let previousHeight = -1;
-    let previousCount = -1;
-    let previousTop = -1;
+    let previousSignature = '';
+    let previousSize = -1;
 
-    for (let i = 0; i < 1800 && stable < 5; i++) {
+    for (let i = 0; i < 520; i++) {
       await waitIfPaused();
 
       await expandVisible();
@@ -3347,19 +3336,10 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const turns = orderedTurns();
-      const lastTurn = turns[turns.length - 1] || null;
-      const scroller = findScrollContainer(lastTurn);
-      if (!scroller) throw new Error('Не найден контейнер прокрутки переписки.');
-
-      const viewport = scroller.clientHeight || innerHeight;
-      const max = Math.max(0, scroller.scrollHeight - viewport);
-      const current = Math.max(0, Math.round(scroller.scrollTop));
-      const next = Math.min(max, current + Math.max(420, Math.floor(viewport * 0.68)));
-
+      const signature = visibleTurnSignature();
       const imageStats = capturedImageStats([...map.values()]);
       await progress(
-        'Этап 2/3: прохожу вниз · ' + map.size +
+        'Этап 2/3: сверяю сверху вниз · ' + map.size +
           (firstPassCount ? ' из ' + firstPassCount + ' сообщений первого прохода' : ' сообщений'),
         map.size,
         {
@@ -3374,60 +3354,26 @@
         }
       );
 
-      if (next >= max - 4) {
-        await sleep(520);
-        await expandVisible();
-        if (settings.includeReasoning) await expandReasoningVisible();
-        const edgeTouchedIds = collect(map, order, settings, boundary);
-        await hydrateSequentialImages(
-          edgeTouchedIds.map(id => map.get(id)).filter(Boolean),
-          attemptedImageSources
-        );
+      // Stable pre-recovery path: one physical scroll request, then wait for the
+      // virtualized window to settle. No checkpoint/storage/network/recovery work here.
+      await physicalScroll('down');
 
-        if (boundaryIsVisible(boundary)) {
-          const finalStats = capturedImageStats([...map.values()]);
-          const countMatch = Number(firstPassCount || 0) === map.size;
-          await progress(
-            'Этап 2/3: второй проход завершён · первый ' + Number(firstPassCount || 0) +
-              ' · второй ' + map.size + ' · количество ' + (countMatch ? 'совпало' : 'не совпало'),
-            map.size,
-            {
-              phase: 'walk',
-              iteration: i + 1,
-              boundaryReached: true,
-              chronologicalCount: map.size,
-              firstPassCount: Number(firstPassCount || 0),
-              secondPassCount: map.size,
-              passCountMatch: countMatch,
-              comparisonComplete: true,
-              imageCount: finalStats.total,
-              imageBinaryReady: finalStats.ready,
-              imageBinaryFailed: finalStats.failed,
-              force: true
-            }
-          );
-          return { boundaryReached: true, physicalEndReached: false };
-        }
-
-        const height = scroller.scrollHeight;
-        const count = document.querySelectorAll(TURN_SELECTOR).length;
-        const top = Math.round(scroller.scrollTop);
-        if (height === previousHeight && count === previousCount && top === previousTop) stable++;
-        else stable = 0;
-        previousHeight = height;
-        previousCount = count;
-        previousTop = top;
-        scroller.scrollTo({ top: height, behavior: 'auto' });
+      const nextSignature = visibleTurnSignature();
+      if (nextSignature && nextSignature === signature &&
+          signature === previousSignature && map.size === previousSize) {
+        stable++;
       } else {
         stable = 0;
-        scroller.scrollTo({ top: next, behavior: 'auto' });
-        await sleep(240);
-        await waitForDomQuiet(scroller, 1000);
       }
+
+      previousSignature = nextSignature;
+      previousSize = map.size;
+
+      if (stable >= 4) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
-      throw new Error('Не удалось дойти до конца снимка переписки.');
+      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
     }
     return { boundaryReached: true, physicalEndReached: false };
   }
