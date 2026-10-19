@@ -4018,6 +4018,78 @@ async function cdp(tabId, method, params = {}, timeoutMs = 15000) {
   );
 }
 
+async function chatScrollMetrics(tabId, direction = 'down') {
+  const sign = direction === 'up' ? -1 : 1;
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: scrollSign => {
+      const roleSelector = [
+        '[data-chatgpt-search-unit-key$=":user"]',
+        '[data-chatgpt-search-unit-key$=":assistant"]',
+        '[data-testid^="conversation-turn-"]',
+        'article[data-turn]',
+        'section[data-turn]'
+      ].join(',');
+
+      const visibleTurns = [...document.querySelectorAll(roleSelector)].filter(el => {
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 &&
+          style.display !== 'none' && style.visibility !== 'hidden';
+      });
+      const anchor = scrollSign < 0
+        ? (visibleTurns[0] || document.querySelector('main'))
+        : (visibleTurns[visibleTurns.length - 1] || document.querySelector('main'));
+
+      const scrollable = el => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        return /(auto|scroll|overlay)/.test(style.overflowY) &&
+          el.scrollHeight > el.clientHeight + 80;
+      };
+
+      let scroller = anchor?.parentElement || null;
+      while (scroller && scroller !== document.body && scroller !== document.documentElement) {
+        if (scrollable(scroller)) break;
+        scroller = scroller.parentElement;
+      }
+
+      if (!scroller || !scrollable(scroller)) {
+        const candidates = [
+          document.scrollingElement,
+          document.documentElement,
+          ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
+        ].filter((el, index, all) => el && all.indexOf(el) === index && scrollable(el));
+
+        const containing = anchor
+          ? candidates.filter(el => el instanceof Element && el.contains(anchor))
+          : [];
+        scroller = (containing.length
+          ? containing.sort((a, b) =>
+              (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
+            )[0]
+          : candidates.sort((a, b) =>
+              (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+            )[0]) || document.scrollingElement || document.documentElement;
+      }
+
+      const top = Number(scroller?.scrollTop || window.scrollY || 0);
+      const clientHeight = Number(scroller?.clientHeight || innerHeight || 0);
+      const scrollHeight = Number(scroller?.scrollHeight || document.documentElement.scrollHeight || 0);
+      const threshold = Math.max(24, Math.round(clientHeight * 0.04));
+      return {
+        top,
+        clientHeight,
+        scrollHeight,
+        atStart: top <= threshold,
+        atEnd: top + clientHeight >= scrollHeight - threshold
+      };
+    },
+    args: [sign]
+  });
+  return results?.[0]?.result || null;
+}
+
 async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
   const sign = direction === 'up' ? -1 : 1;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
@@ -4102,6 +4174,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
   let debuggerError = '';
+  const beforeMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
 
   try {
     const targets = await chrome.debugger.getTargets();
@@ -4140,8 +4213,6 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
       }, 4000);
       await sleep(70);
     }
-
-    return { ok: true, direction, bursts: count, method: 'debugger-wheel' };
   } catch (error) {
     debuggerError = error?.message || String(error);
   } finally {
@@ -4155,10 +4226,32 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     }
   }
 
-  // A debugger wheel command may occasionally stall on a background ChatGPT
-  // tab. That is a transport failure, not a reason to discard the capture.
-  // Fall back to scrolling the same live conversation scroller in-page and let
-  // the content script's settle/boundary checks prove whether navigation moved.
+  await sleep(120);
+  const afterMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
+  const moved = Boolean(
+    beforeMetrics && afterMetrics &&
+    Math.abs(Number(afterMetrics.top || 0) - Number(beforeMetrics.top || 0)) >= 2
+  );
+  const alreadyAtRequestedEdge = direction === 'up'
+    ? Boolean(beforeMetrics?.atStart)
+    : Boolean(beforeMetrics?.atEnd);
+
+  if (!debuggerError && (moved || alreadyAtRequestedEdge)) {
+    return {
+      ok: true,
+      direction,
+      bursts: count,
+      method: moved ? 'debugger-wheel' : 'debugger-wheel-edge',
+      before: beforeMetrics?.top ?? null,
+      after: afterMetrics?.top ?? null
+    };
+  }
+
+  // Chrome can acknowledge Input.dispatchMouseEvent while the background tab
+  // does not actually move. Verify scrollTop, not merely command success. If
+  // the wheel was a no-op away from the requested edge, scroll the exact live
+  // ChatGPT container in-page and let the content script validate continuity.
+  const fallbackReason = debuggerError || 'debugger wheel returned success without moving the chat scroller';
   const fallback = await withTimeout(
     scriptedScrollChatTab(tabId, direction, count),
     5000,
@@ -4169,7 +4262,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     ok: true,
     direction,
     bursts: count,
-    fallbackFrom: debuggerError
+    fallbackFrom: fallbackReason
   };
 }
 
