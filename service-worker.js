@@ -4010,18 +4010,98 @@ async function waitForTabComplete(tabId, timeout = 30000) {
   throw new Error('Google Docs не загрузился за 30 секунд.');
 }
 
-async function cdp(tabId, method, params = {}) {
+async function cdp(tabId, method, params = {}, timeoutMs = 15000) {
   return withTimeout(
     chrome.debugger.sendCommand({ tabId }, method, params),
-    15000,
-    'Команда Google Docs (' + method + ')'
+    timeoutMs,
+    'Команда Chrome (' + method + ')'
   );
+}
+
+async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
+  const sign = direction === 'up' ? -1 : 1;
+  const count = Math.max(1, Math.min(24, Number(bursts) || 7));
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (scrollSign, burstCount) => {
+      const roleSelector = [
+        '[data-chatgpt-search-unit-key$=":user"]',
+        '[data-chatgpt-search-unit-key$=":assistant"]',
+        '[data-testid^="conversation-turn-"]',
+        'article[data-turn]',
+        'section[data-turn]'
+      ].join(',');
+
+      const visibleTurns = [...document.querySelectorAll(roleSelector)].filter(el => {
+        const r = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return r.width > 0 && r.height > 0 &&
+          style.display !== 'none' && style.visibility !== 'hidden';
+      });
+      const anchor = scrollSign < 0
+        ? (visibleTurns[0] || document.querySelector('main'))
+        : (visibleTurns[visibleTurns.length - 1] || document.querySelector('main'));
+
+      const scrollable = el => {
+        if (!(el instanceof Element)) return false;
+        const style = getComputedStyle(el);
+        return /(auto|scroll|overlay)/.test(style.overflowY) &&
+          el.scrollHeight > el.clientHeight + 80;
+      };
+
+      let scroller = anchor?.parentElement || null;
+      while (scroller && scroller !== document.body && scroller !== document.documentElement) {
+        if (scrollable(scroller)) break;
+        scroller = scroller.parentElement;
+      }
+
+      if (!scroller || !scrollable(scroller)) {
+        const candidates = [
+          document.scrollingElement,
+          document.documentElement,
+          ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
+        ].filter((el, index, all) => el && all.indexOf(el) === index && scrollable(el));
+
+        const containing = anchor
+          ? candidates.filter(el => el instanceof Element && el.contains(anchor))
+          : [];
+        scroller = (containing.length
+          ? containing.sort((a, b) =>
+              (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
+            )[0]
+          : candidates.sort((a, b) =>
+              (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
+            )[0]) || document.scrollingElement || document.documentElement;
+      }
+
+      const amount = scrollSign * 860 * burstCount;
+      const before = Number(scroller?.scrollTop || window.scrollY || 0);
+      if (scroller === document.documentElement ||
+          scroller === document.body ||
+          scroller === document.scrollingElement) {
+        window.scrollBy({ top: amount, left: 0, behavior: 'auto' });
+      } else {
+        scroller.scrollBy({ top: amount, left: 0, behavior: 'auto' });
+      }
+      const after = Number(scroller?.scrollTop || window.scrollY || 0);
+      return {
+        ok: true,
+        method: 'scripted-scroll-fallback',
+        before,
+        after,
+        delta: after - before
+      };
+    },
+    args: [sign, count]
+  });
+  return results?.[0]?.result || { ok: true, method: 'scripted-scroll-fallback' };
 }
 
 async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
+  let debuggerError = '';
 
   try {
     const targets = await chrome.debugger.getTargets();
@@ -4036,7 +4116,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
       expression: '({width: innerWidth, height: innerHeight})',
       returnByValue: true
-    });
+    }, 5000);
     const viewport = viewportResult?.result?.value || {};
     const width = Math.max(640, Number(viewport.width) || 1280);
     const height = Math.max(480, Number(viewport.height) || 720);
@@ -4048,7 +4128,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
       x,
       y,
       button: 'none'
-    }).catch(() => {});
+    }, 2500).catch(() => {});
 
     for (let i = 0; i < count; i++) {
       await cdp(tabId, 'Input.dispatchMouseEvent', {
@@ -4057,14 +4137,40 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
         y,
         deltaX: 0,
         deltaY: sign * 860
-      });
+      }, 4000);
       await sleep(70);
     }
 
-    return { ok: true, direction, bursts: count };
+    return { ok: true, direction, bursts: count, method: 'debugger-wheel' };
+  } catch (error) {
+    debuggerError = error?.message || String(error);
   } finally {
-    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (attached) {
+      await withTimeout(
+        chrome.debugger.detach({ tabId }).catch(() => {}),
+        3000,
+        'Отключение Chrome Debugger'
+      ).catch(() => {});
+      attached = false;
+    }
   }
+
+  // A debugger wheel command may occasionally stall on a background ChatGPT
+  // tab. That is a transport failure, not a reason to discard the capture.
+  // Fall back to scrolling the same live conversation scroller in-page and let
+  // the content script's settle/boundary checks prove whether navigation moved.
+  const fallback = await withTimeout(
+    scriptedScrollChatTab(tabId, direction, count),
+    5000,
+    'Резервная прокрутка ChatGPT'
+  );
+  return {
+    ...fallback,
+    ok: true,
+    direction,
+    bursts: count,
+    fallbackFrom: debuggerError
+  };
 }
 
 async function withChatDebugger(tabId, fn) {
