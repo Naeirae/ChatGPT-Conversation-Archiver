@@ -4005,14 +4005,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
-
-  // IMPORTANT: this path intentionally bypasses the generic cdp() timeout
-  // wrapper. Commit 634da0e (0.4.27) added a 15s timeout for Google Docs CDP
-  // calls, but cdp() was also shared by ChatGPT scrolling. That turned a
-  // normally slow/background wheel command into a hard capture failure.
-  // The pre-0.4.27 scrolling path used raw debugger.sendCommand and worked.
-  const raw = (method, params = {}) =>
-    chrome.debugger.sendCommand({ tabId }, method, params);
+  let timedOut = false;
 
   try {
     const targets = await chrome.debugger.getTargets();
@@ -4024,37 +4017,55 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
 
-    const viewportResult = await raw('Runtime.evaluate', {
+    const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
       expression: '({width: innerWidth, height: innerHeight})',
       returnByValue: true
-    });
+    }, 5000);
     const viewport = viewportResult?.result?.value || {};
     const width = Math.max(640, Number(viewport.width) || 1280);
     const height = Math.max(480, Number(viewport.height) || 720);
     const x = Math.round(width * 0.68);
     const y = Math.round(height * 0.48);
 
-    await raw('Input.dispatchMouseEvent', {
+    await cdp(tabId, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x,
       y,
       button: 'none'
-    }).catch(() => {});
+    }, 3000).catch(() => {});
 
     for (let i = 0; i < count; i++) {
-      await raw('Input.dispatchMouseEvent', {
-        type: 'mouseWheel',
-        x,
-        y,
-        deltaX: 0,
-        deltaY: sign * 860
-      });
+      try {
+        await cdp(tabId, 'Input.dispatchMouseEvent', {
+          type: 'mouseWheel',
+          x,
+          y,
+          deltaX: 0,
+          deltaY: sign * 860
+        }, 3000);
+      } catch (error) {
+        // 0.4.38 removed the timeout entirely and exposed a worse regression:
+        // one debugger wheel acknowledgement could block a capture iteration
+        // for minutes. A timed-out wheel is not fatal; Chrome may already have
+        // delivered the input. Stop this burst, detach, and let the content
+        // collector inspect the actual DOM before deciding what to do next.
+        if (/Input\.dispatchMouseEvent|не ответила/i.test(String(error?.message || error))) {
+          timedOut = true;
+          break;
+        }
+        throw error;
+      }
       await sleep(90);
     }
 
-    return { ok: true, direction, bursts: count };
+    return { ok: true, direction, bursts: count, timedOut };
   } finally {
-    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+    if (attached) {
+      await Promise.race([
+        chrome.debugger.detach({ tabId }).catch(() => {}),
+        sleep(2000)
+      ]);
+    }
   }
 }
 
