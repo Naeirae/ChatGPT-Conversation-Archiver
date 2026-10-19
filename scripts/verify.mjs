@@ -455,12 +455,11 @@ try {
       !contentSource.includes("localConversationScroll('down', 1)") ||
       !contentSource.includes("if (physicalScrollStartVisible()) {") ||
       !contentSource.includes("localConversationScroll('up', 1)") ||
+      !contentSource.includes("await physicalScroll('up', 7") ||
       !contentSource.includes("await physicalScroll('down', 1") ||
-      !contentSource.includes("await physicalScroll('up', 1") ||
-      !contentSource.includes('async function recoverUpwardContinuity') ||
-      !contentSource.includes('Первый проход полного сбора перескочил участок без перекрытия') ||
+      contentSource.includes('async function recoverUpwardContinuity') ||
       !contentSource.includes('Второй проход полного сбора перескочил участок без перекрытия')) {
-    fail('full capture scrolling: both passes must stay granular and prove overlap between adjacent virtualized windows');
+    fail('full capture scrolling: keep known-good first-pass cadence and overlap-safe granular second pass');
   }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
