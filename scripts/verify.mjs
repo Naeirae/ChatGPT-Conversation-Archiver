@@ -428,14 +428,26 @@ try {
     fail('Google Docs images: binary/offscreen clipboard paths must remain available only as fallbacks behind the restored legacy batch export');
   }
 
-  if (serviceWorkerSource.includes('async function scriptedScrollChatTab') ||
-      serviceWorkerSource.includes('async function chatScrollMetrics') ||
-      contentSource.includes('function localConversationScroll') ||
-      contentSource.includes('async function reachLiveBottomForSnapshot') ||
-      !contentSource.includes("await physicalScroll('up', 7") ||
-      !contentSource.includes("await physicalScroll('down');") ||
-      !contentSource.includes('This is intentionally the old conservative stop rule')) {
-    fail('full capture: keep the restored 0.4.20 scroll/capture core without later scripted-scroll, exact-container or live-bottom layers');
+  if (!contentSource.includes('async function waitForDomQuiet(scroller, timeout)') ||
+      !contentSource.includes("scroller.scrollTo({ top: 0, behavior: 'auto' })") ||
+      !contentSource.includes('scroller.scrollBy(0, 140)') ||
+      !contentSource.includes('Math.floor(viewport * 0.68)') ||
+      !contentSource.includes('await waitForDomQuiet(scroller, 1100)') ||
+      !contentSource.includes('await waitForDomQuiet(scroller, 1000)')) {
+    fail('full capture: preserve the pre-175867fa direct-scroller traversal and DOM-quiet loading behavior');
+  }
+
+  const fullTopStart = contentSource.indexOf('async function reachTopFullLegacy');
+  const fullTopEnd = contentSource.indexOf('async function walkDownFullLegacy', fullTopStart);
+  const fullDownEnd = contentSource.indexOf('async function walkDown(', fullTopEnd);
+  const fullCore = fullTopStart >= 0 && fullDownEnd > fullTopStart
+    ? contentSource.slice(fullTopStart, fullDownEnd)
+    : '';
+  if (!fullCore ||
+      fullCore.includes("ARCHIVER_PHYSICAL_SCROLL") ||
+      fullCore.includes("physicalScroll('up'") ||
+      fullCore.includes("physicalScroll('down'")) {
+    fail('full capture: ordinary full traversal must not regress back to debugger-driven physical wheel scrolling');
   }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
