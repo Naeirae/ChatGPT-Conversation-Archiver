@@ -428,26 +428,23 @@ try {
     fail('Google Docs images: binary/offscreen clipboard paths must remain available only as fallbacks behind the restored legacy batch export');
   }
 
-  if (!contentSource.includes('async function waitForDomQuiet(scroller, timeout)') ||
-      !contentSource.includes("scroller.scrollTo({ top: 0, behavior: 'auto' })") ||
-      !contentSource.includes('scroller.scrollBy(0, 140)') ||
-      !contentSource.includes('Math.floor(viewport * 0.68)') ||
-      !contentSource.includes('await waitForDomQuiet(scroller, 1100)') ||
-      !contentSource.includes('await waitForDomQuiet(scroller, 1000)')) {
-    fail('full capture: preserve the pre-175867fa direct-scroller traversal and DOM-quiet loading behavior');
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
+  const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
+  const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
+    ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
+    : '';
+  if (!physicalScrollBlock ||
+      !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
+      physicalScrollBlock.includes('await cdp(') ||
+      physicalScrollBlock.includes('withTimeout(') ||
+      !contentSource.includes("await physicalScroll('up', 7") ||
+      !contentSource.includes("await physicalScroll('down');")) {
+    fail('full capture: debugger wheel must bypass the Google-Docs CDP timeout wrapper while preserving the restored debugger-driven capture cadence');
   }
 
-  const fullTopStart = contentSource.indexOf('async function reachTopFullLegacy');
-  const fullTopEnd = contentSource.indexOf('async function walkDownFullLegacy', fullTopStart);
-  const fullDownEnd = contentSource.indexOf('async function walkDown(', fullTopEnd);
-  const fullCore = fullTopStart >= 0 && fullDownEnd > fullTopStart
-    ? contentSource.slice(fullTopStart, fullDownEnd)
-    : '';
-  if (!fullCore ||
-      fullCore.includes("ARCHIVER_PHYSICAL_SCROLL") ||
-      fullCore.includes("physicalScroll('up'") ||
-      fullCore.includes("physicalScroll('down'")) {
-    fail('full capture: ordinary full traversal must not regress back to debugger-driven physical wheel scrolling');
+  if (!serviceWorkerSource.includes("async function cdp(tabId, method, params = {}, timeoutMs = 15000)") ||
+      !serviceWorkerSource.includes("withTimeout(")) {
+    fail('Google Docs: bounded CDP/clipboard operations must remain available outside ChatGPT wheel scrolling');
   }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
