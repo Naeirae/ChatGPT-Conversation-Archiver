@@ -444,17 +444,17 @@ try {
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
   if (!physicalScrollBlock ||
-      !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
-      physicalScrollBlock.includes('await cdp(') ||
-      physicalScrollBlock.includes('withTimeout(') ||
-      !contentSource.includes("await physicalScroll('up', 7") ||
-      !contentSource.includes("await physicalScroll('down');")) {
-    fail('full capture: debugger wheel must bypass the Google-Docs CDP timeout wrapper while preserving the restored debugger-driven capture cadence');
+      !physicalScrollBlock.includes("await cdp(tabId, 'Input.dispatchMouseEvent'") ||
+      !physicalScrollBlock.includes("}, 3000)") ||
+      !physicalScrollBlock.includes("timedOut = true") ||
+      !physicalScrollBlock.includes("break;") ||
+      !physicalScrollBlock.includes("return { ok: true, direction, bursts: count, timedOut }")) {
+    fail('full capture: debugger wheel must stay bounded without turning a stalled acknowledgement into a fatal capture error');
   }
 
   if (!serviceWorkerSource.includes("async function cdp(tabId, method, params = {}, timeoutMs = 15000)") ||
       !serviceWorkerSource.includes("withTimeout(")) {
-    fail('Google Docs: bounded CDP/clipboard operations must remain available outside ChatGPT wheel scrolling');
+    fail('Google Docs: bounded CDP/clipboard operations must remain available');
   }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
