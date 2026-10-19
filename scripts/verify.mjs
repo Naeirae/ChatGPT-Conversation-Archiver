@@ -454,8 +454,11 @@ try {
       !contentSource.includes("if (physicalScrollEndVisible()) break;") ||
       !contentSource.includes("localConversationScroll('down', 1)") ||
       !contentSource.includes("if (physicalScrollStartVisible()) {") ||
-      !contentSource.includes("localConversationScroll('up', 1)")) {
-    fail('full capture scrolling: stalled first/second-pass windows must scroll the exact conversation container and only stop at the matching physical edge');
+      !contentSource.includes("localConversationScroll('up', 1)") ||
+      !contentSource.includes("await physicalScroll('down', 1") ||
+      !contentSource.includes('!navigationWindowsOverlap(beforeRefs, afterRefs)') ||
+      !contentSource.includes('Второй проход полного сбора перескочил участок без перекрытия')) {
+    fail('full capture scrolling: first/second pass must stop only at physical edges and second pass must stay granular with overlap proof');
   }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
