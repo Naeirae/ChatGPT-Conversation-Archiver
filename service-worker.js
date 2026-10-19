@@ -2680,7 +2680,7 @@ async function saveUnfinishedAsPartial(passId = '') {
 }
 
 async function exportUnfinishedPassToNewDoc(passId = '') {
-  let draft = await getDraft(passId);
+  const draft = await getDraft(passId);
   if (!draft?.id || !draft?.messages?.length) {
     throw new Error('Незавершённый сбор не найден.');
   }
@@ -2690,20 +2690,6 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
       'Текущая часть ещё не является непрерывным архивом от начала чата. ' +
       'Дождитесь этапа сохранения сверху вниз.'
     );
-  }
-
-  // Before exporting a partial archive, try to hydrate every image reference
-  // already present in the saved prefix. This keeps partial export aligned with
-  // completed capture instead of silently dropping image binaries.
-  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '').catch(() => ({ available: false }));
-  if (recovery?.available && recovery.tab?.id != null) {
-    const hydration = await chrome.tabs.sendMessage(recovery.tab.id, {
-      type: 'ARCHIVER_HYDRATE_DRAFT_IMAGES',
-      draftId: draft.id
-    }).catch(() => null);
-    if (hydration?.ok) {
-      draft = await getDraft(passId) || draft;
-    }
   }
 
   // Materialize and verify the current chronological prefix locally first.
@@ -2728,10 +2714,7 @@ async function exportUnfinishedPassToNewDoc(passId = '') {
     partial: true,
     partialArchiveId: snapshot.id,
     partialSourceDraftId: draft.id,
-    exportedMessageCount: snapshot.messages.length,
-    imageCount: Number(snapshot.imageCount || 0),
-    imageBinaryReady: Number(snapshot.imageBinaryReady || 0),
-    imageBinaryFailed: Number(snapshot.imageBinaryFailed || 0)
+    exportedMessageCount: snapshot.messages.length
   };
 }
 
