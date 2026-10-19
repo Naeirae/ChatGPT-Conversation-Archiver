@@ -1945,12 +1945,40 @@
     return previous;
   }
 
+  function localConversationScroll(direction, bursts = 7) {
+    const normalizedDirection = direction === 'down' ? 'down' : 'up';
+    const turns = orderedTurns();
+    const anchor = normalizedDirection === 'up'
+      ? (turns[0] || null)
+      : (turns[turns.length - 1] || null);
+    const scroller = findScrollContainer(anchor);
+    if (!scroller) return { ok: false, moved: false, reason: 'scroll container not found' };
+
+    const amount = (normalizedDirection === 'up' ? -1 : 1) *
+      860 * Math.max(1, Math.min(24, Number(bursts) || 7));
+    const before = Number(scroller.scrollTop || 0);
+    scroller.scrollBy({ top: amount, left: 0, behavior: 'auto' });
+    const after = Number(scroller.scrollTop || 0);
+    return {
+      ok: true,
+      moved: Math.abs(after - before) >= 2,
+      before,
+      after,
+      method: 'content-script-scroll'
+    };
+  }
+
   async function physicalScroll(
     direction,
     bursts = 7,
     { settleTimeout = 8000, quietWindow = 1400 } = {}
   ) {
     const normalizedDirection = direction === 'down' ? 'down' : 'up';
+    const beforeSignature = visibleTurnSignature();
+    const atRequestedEdgeBefore = normalizedDirection === 'up'
+      ? physicalScrollStartVisible()
+      : physicalScrollEndVisible();
+
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
       jobId: state.jobId,
@@ -1959,8 +1987,30 @@
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
     state.lastScrollDirection = normalizedDirection;
-    await waitForTurnSettle(settleTimeout, quietWindow);
-    return result;
+
+    let settled = await waitForTurnSettle(settleTimeout, quietWindow);
+    const atRequestedEdgeAfter = normalizedDirection === 'up'
+      ? physicalScrollStartVisible()
+      : physicalScrollEndVisible();
+
+    // The service worker can only infer which element Chrome actually scrolled.
+    // The content script knows the exact conversation container. If the visible
+    // turn window did not change and we are not already at the requested edge,
+    // force the scroll on that exact container here instead of counting a
+    // no-op as a successful navigation step.
+    if (!atRequestedEdgeBefore &&
+        !atRequestedEdgeAfter &&
+        beforeSignature &&
+        settled === beforeSignature) {
+      const local = localConversationScroll(normalizedDirection, bursts);
+      if (local?.ok) {
+        await sleep(120);
+        settled = await waitForTurnSettle(settleTimeout, quietWindow);
+        return { ...result, contentFallback: local, settledSignature: settled };
+      }
+    }
+
+    return { ...result, settledSignature: settled };
   }
 
   async function reachLiveBottomForSnapshot() {
@@ -3441,7 +3491,17 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 4) break;
+      if (stable >= 4) {
+        // Four identical virtualized windows are only a stopping condition at
+        // the actual physical bottom. Away from the bottom this is a stalled
+        // navigation step, so force a small exact-container scroll and continue.
+        if (physicalScrollEndVisible()) break;
+        localConversationScroll('down', 1);
+        await waitForTurnSettle(2200, 380);
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+      }
     }
 
     if (!boundaryIsVisible(boundary)) {
