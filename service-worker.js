@@ -4610,9 +4610,84 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
     return { ok: false, error: 'В архиве нет подготовленных данных изображения.' };
   }
 
+  // The primary path must put a real bitmap on the OS clipboard. Google Docs
+  // can accept execCommand/rich-HTML copy as "successful" while still treating
+  // the <img src> as an external upload and rejecting it with a permission
+  // snackbar. Convert every prepared image to PNG and write ClipboardItem
+  // directly from the focused Google Docs page under a debugger user gesture.
+  let binaryClipboardError = '';
+  try {
+    const expression = `(async () => {
+      const dataUrl = ${JSON.stringify(dataUrl)};
+      try {
+        if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+          throw new Error('ClipboardItem API недоступен.');
+        }
+
+        const response = await fetch(dataUrl);
+        const sourceBlob = await response.blob();
+        if (!sourceBlob.size) throw new Error('Пустые данные изображения.');
+
+        const bitmap = await createImageBitmap(sourceBlob);
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const context = canvas.getContext('2d');
+          if (!context) throw new Error('Не удалось создать PNG-буфер изображения.');
+          context.drawImage(bitmap, 0, 0);
+
+          const pngBlob = await new Promise((resolve, reject) => {
+            canvas.toBlob(blob => {
+              if (blob?.size) resolve(blob);
+              else reject(new Error('Не удалось преобразовать изображение в PNG.'));
+            }, 'image/png');
+          });
+
+          await navigator.clipboard.write([
+            new ClipboardItem({ 'image/png': pngBlob })
+          ]);
+
+          return {
+            ok: true,
+            method: 'navigator.clipboard-image-png',
+            type: 'image/png',
+            size: pngBlob.size
+          };
+        } finally {
+          bitmap.close?.();
+        }
+      } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+      }
+    })()`;
+
+    const result = await withTimeout(
+      cdp(tabId, 'Runtime.evaluate', {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true
+      }),
+      15000,
+      'Запись PNG в буфер обмена'
+    );
+    const value = result?.result?.value || {
+      ok: false,
+      error: 'Google Docs не подтвердил запись PNG в буфер обмена.'
+    };
+    if (value.ok) return value;
+    binaryClipboardError = value.error || 'navigator.clipboard.write failed';
+  } catch (error) {
+    binaryClipboardError = error?.message || String(error);
+  }
+
+  // Compatibility fallback only. Unlike the primary path, these methods can be
+  // interpreted by Google Docs as an external image upload, so their success
+  // must never be mistaken for proof that a bitmap reached the clipboard.
   let offscreenError = '';
   try {
-    await withTimeout(ensureOffscreen(), 10000, 'Подготовка буфера изображения');
+    await withTimeout(ensureOffscreen(), 10000, 'Подготовка резервного буфера изображения');
     const offscreen = await withTimeout(
       chrome.runtime.sendMessage({
         type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE',
@@ -4621,13 +4696,14 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
         alt: String(image?.alt || '')
       }),
       15000,
-      'Запись изображения в буфер обмена'
+      'Резервное копирование изображения'
     );
     if (offscreen?.ok) {
       return {
         ok: true,
         method: offscreen.method || 'offscreen-image-selection',
-        size: offscreen.size || dataUrl.length
+        size: offscreen.size || dataUrl.length,
+        fallbackFrom: binaryClipboardError
       };
     }
     offscreenError = offscreen?.error || 'offscreen image clipboard failed';
@@ -4635,9 +4711,6 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
     offscreenError = error?.message || String(error);
   }
 
-  // 0.3.x/early 0.4.x successfully relied on a rich-HTML clipboard payload
-  // containing the original image URL. Keep that proven route as the second
-  // fallback when Chromium refuses an image-only clipboard item.
   try {
     const source = String(image?.src || dataUrl);
     const alt = String(image?.alt || '');
@@ -4648,80 +4721,17 @@ async function copyImageClipboardInGoogleDocs(tabId, image) {
       ok: true,
       method: 'offscreen-rich-html-image',
       size: source.length,
-      fallbackFrom: offscreenError
+      fallbackFrom: [binaryClipboardError, offscreenError].filter(Boolean).join(' | ')
     };
   } catch (error) {
-    const richHtmlError = error?.message || String(error);
-
-    // Last resort: retain the in-page clipboard path introduced later. This is
-    // no longer the primary path because Google Docs can report success here
-    // while the clipboard image is not actually accepted by the editor.
-    const expression = `(async () => {
-      const dataUrl = ${JSON.stringify(dataUrl)};
-      let clipboardError = '';
-
-      try {
-        const response = await fetch(dataUrl);
-        const blob = await response.blob();
-        const type = blob.type || 'image/png';
-        if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
-          await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-          return { ok: true, method: 'navigator.clipboard', type, size: blob.size };
-        }
-      } catch (error) {
-        clipboardError = String(error?.message || error);
-      }
-
-      try {
-        const host = document.createElement('div');
-        host.contentEditable = 'true';
-        host.style.position = 'fixed';
-        host.style.left = '-10000px';
-        host.style.top = '0';
-        host.style.opacity = '0';
-
-        const img = document.createElement('img');
-        img.src = dataUrl;
-        host.appendChild(img);
-        document.body.appendChild(host);
-        if (img.decode) await img.decode();
-
-        const selection = getSelection();
-        const range = document.createRange();
-        range.selectNode(img);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        host.focus();
-
-        const ok = document.execCommand('copy');
-        selection.removeAllRanges();
-        host.remove();
-
-        if (!ok) throw new Error('document.execCommand(copy) returned false');
-        return { ok: true, method: 'execCommand-image', type: 'image/png', size: dataUrl.length };
-      } catch (error) {
-        return {
-          ok: false,
-          error: (clipboardError ? clipboardError + ' | ' : '') + String(error?.message || error)
-        };
-      }
-    })()`;
-
-    const result = await cdp(tabId, 'Runtime.evaluate', {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true
-    });
-    const value = result?.result?.value || { ok: false, error: 'Не удалось подготовить image clipboard.' };
-    if (!value.ok) {
-      value.error = [
+    return {
+      ok: false,
+      error: [
+        binaryClipboardError,
         offscreenError,
-        richHtmlError,
-        value.error || ''
-      ].filter(Boolean).join(' | ');
-    }
-    return value;
+        error?.message || String(error)
+      ].filter(Boolean).join(' | ')
+    };
   }
 }
 
