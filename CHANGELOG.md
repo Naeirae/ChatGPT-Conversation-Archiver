@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.38
+
+- Отменён ошибочный эксперимент 0.4.37 с прямой DOM-прокруткой: полный сбор снова использует рабочую debugger-wheel механику.
+- Найдена настоящая старая регрессия в 0.4.27: коммит `634da0e` добавил общий 15-секундный timeout в helper `cdp()` ради зависаний Google Docs, но этим же helper пользовалась прокрутка ChatGPT.
+- Поэтому нормальная фоновая `Input.dispatchMouseEvent(mouseWheel)`, которая иногда отвечает дольше, стала искусственно обрывать сбор сообщением «Команда Chrome (Input.dispatchMouseEvent) не ответила за 15 с».
+- `physicalScrollTab()` возвращён к до-0.4.27 поведению: для прокрутки ChatGPT он снова вызывает `chrome.debugger.sendCommand` напрямую, без Google-Docs timeout wrapper.
+- Таймауты Google Docs/clipboard сохранены: исправление 0.4.27 не удалено целиком, оно просто больше не вмешивается в transport полного сбора.
+- Вместе с этим восстановлен debugger-driven capture core до эксперимента 0.4.37, поэтому счётчик сообщений снова обновляется по прежнему проходу, а не зависает на прямом scroll-container traversal.
+- Версия расширения повышена до `0.4.38`.
+
 ## 0.4.37
 
 - Найдена более старая корневая регрессия полного сбора: коммит `175867fa` (`Drive capture with physical wheel scrolling`, ветка 0.3.6) заменил прямую прокрутку conversation container из content script на Chrome Debugger `Input.dispatchMouseEvent`.
