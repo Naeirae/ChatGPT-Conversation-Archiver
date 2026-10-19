@@ -4018,163 +4018,10 @@ async function cdp(tabId, method, params = {}, timeoutMs = 15000) {
   );
 }
 
-async function chatScrollMetrics(tabId, direction = 'down') {
-  const sign = direction === 'up' ? -1 : 1;
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: scrollSign => {
-      const roleSelector = [
-        '[data-chatgpt-search-unit-key$=":user"]',
-        '[data-chatgpt-search-unit-key$=":assistant"]',
-        '[data-testid^="conversation-turn-"]',
-        'article[data-turn]',
-        'section[data-turn]'
-      ].join(',');
-
-      const visibleTurns = [...document.querySelectorAll(roleSelector)].filter(el => {
-        const r = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        return r.width > 0 && r.height > 0 &&
-          style.display !== 'none' && style.visibility !== 'hidden';
-      });
-      const anchor = scrollSign < 0
-        ? (visibleTurns[0] || document.querySelector('main'))
-        : (visibleTurns[visibleTurns.length - 1] || document.querySelector('main'));
-
-      const scrollable = el => {
-        if (!(el instanceof Element)) return false;
-        const style = getComputedStyle(el);
-        return /(auto|scroll|overlay)/.test(style.overflowY) &&
-          el.scrollHeight > el.clientHeight + 80;
-      };
-
-      let scroller = anchor?.parentElement || null;
-      while (scroller && scroller !== document.body && scroller !== document.documentElement) {
-        if (scrollable(scroller)) break;
-        scroller = scroller.parentElement;
-      }
-
-      if (!scroller || !scrollable(scroller)) {
-        const candidates = [
-          document.scrollingElement,
-          document.documentElement,
-          ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
-        ].filter((el, index, all) => el && all.indexOf(el) === index && scrollable(el));
-
-        const containing = anchor
-          ? candidates.filter(el => el instanceof Element && el.contains(anchor))
-          : [];
-        scroller = (containing.length
-          ? containing.sort((a, b) =>
-              (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
-            )[0]
-          : candidates.sort((a, b) =>
-              (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
-            )[0]) || document.scrollingElement || document.documentElement;
-      }
-
-      const top = Number(scroller?.scrollTop || window.scrollY || 0);
-      const clientHeight = Number(scroller?.clientHeight || innerHeight || 0);
-      const scrollHeight = Number(scroller?.scrollHeight || document.documentElement.scrollHeight || 0);
-      const threshold = Math.max(24, Math.round(clientHeight * 0.04));
-      return {
-        top,
-        clientHeight,
-        scrollHeight,
-        atStart: top <= threshold,
-        atEnd: top + clientHeight >= scrollHeight - threshold
-      };
-    },
-    args: [sign]
-  });
-  return results?.[0]?.result || null;
-}
-
-async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
-  const sign = direction === 'up' ? -1 : 1;
-  const count = Math.max(1, Math.min(24, Number(bursts) || 7));
-  const results = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (scrollSign, burstCount) => {
-      const roleSelector = [
-        '[data-chatgpt-search-unit-key$=":user"]',
-        '[data-chatgpt-search-unit-key$=":assistant"]',
-        '[data-testid^="conversation-turn-"]',
-        'article[data-turn]',
-        'section[data-turn]'
-      ].join(',');
-
-      const visibleTurns = [...document.querySelectorAll(roleSelector)].filter(el => {
-        const r = el.getBoundingClientRect();
-        const style = getComputedStyle(el);
-        return r.width > 0 && r.height > 0 &&
-          style.display !== 'none' && style.visibility !== 'hidden';
-      });
-      const anchor = scrollSign < 0
-        ? (visibleTurns[0] || document.querySelector('main'))
-        : (visibleTurns[visibleTurns.length - 1] || document.querySelector('main'));
-
-      const scrollable = el => {
-        if (!(el instanceof Element)) return false;
-        const style = getComputedStyle(el);
-        return /(auto|scroll|overlay)/.test(style.overflowY) &&
-          el.scrollHeight > el.clientHeight + 80;
-      };
-
-      let scroller = anchor?.parentElement || null;
-      while (scroller && scroller !== document.body && scroller !== document.documentElement) {
-        if (scrollable(scroller)) break;
-        scroller = scroller.parentElement;
-      }
-
-      if (!scroller || !scrollable(scroller)) {
-        const candidates = [
-          document.scrollingElement,
-          document.documentElement,
-          ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
-        ].filter((el, index, all) => el && all.indexOf(el) === index && scrollable(el));
-
-        const containing = anchor
-          ? candidates.filter(el => el instanceof Element && el.contains(anchor))
-          : [];
-        scroller = (containing.length
-          ? containing.sort((a, b) =>
-              (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
-            )[0]
-          : candidates.sort((a, b) =>
-              (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
-            )[0]) || document.scrollingElement || document.documentElement;
-      }
-
-      const amount = scrollSign * 860 * burstCount;
-      const before = Number(scroller?.scrollTop || window.scrollY || 0);
-      if (scroller === document.documentElement ||
-          scroller === document.body ||
-          scroller === document.scrollingElement) {
-        window.scrollBy({ top: amount, left: 0, behavior: 'auto' });
-      } else {
-        scroller.scrollBy({ top: amount, left: 0, behavior: 'auto' });
-      }
-      const after = Number(scroller?.scrollTop || window.scrollY || 0);
-      return {
-        ok: true,
-        method: 'scripted-scroll-fallback',
-        before,
-        after,
-        delta: after - before
-      };
-    },
-    args: [sign, count]
-  });
-  return results?.[0]?.result || { ok: true, method: 'scripted-scroll-fallback' };
-}
-
 async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
-  let debuggerError = '';
-  const beforeMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
 
   try {
     const targets = await chrome.debugger.getTargets();
@@ -4189,7 +4036,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
       expression: '({width: innerWidth, height: innerHeight})',
       returnByValue: true
-    }, 5000);
+    });
     const viewport = viewportResult?.result?.value || {};
     const width = Math.max(640, Number(viewport.width) || 1280);
     const height = Math.max(480, Number(viewport.height) || 720);
@@ -4201,7 +4048,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
       x,
       y,
       button: 'none'
-    }, 2500).catch(() => {});
+    }).catch(() => {});
 
     for (let i = 0; i < count; i++) {
       await cdp(tabId, 'Input.dispatchMouseEvent', {
@@ -4210,60 +4057,14 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
         y,
         deltaX: 0,
         deltaY: sign * 860
-      }, 4000);
+      });
       await sleep(70);
     }
-  } catch (error) {
-    debuggerError = error?.message || String(error);
+
+    return { ok: true, direction, bursts: count };
   } finally {
-    if (attached) {
-      await withTimeout(
-        chrome.debugger.detach({ tabId }).catch(() => {}),
-        3000,
-        'Отключение Chrome Debugger'
-      ).catch(() => {});
-      attached = false;
-    }
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
-
-  await sleep(120);
-  const afterMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
-  const moved = Boolean(
-    beforeMetrics && afterMetrics &&
-    Math.abs(Number(afterMetrics.top || 0) - Number(beforeMetrics.top || 0)) >= 2
-  );
-  const alreadyAtRequestedEdge = direction === 'up'
-    ? Boolean(beforeMetrics?.atStart)
-    : Boolean(beforeMetrics?.atEnd);
-
-  if (!debuggerError && (moved || alreadyAtRequestedEdge)) {
-    return {
-      ok: true,
-      direction,
-      bursts: count,
-      method: moved ? 'debugger-wheel' : 'debugger-wheel-edge',
-      before: beforeMetrics?.top ?? null,
-      after: afterMetrics?.top ?? null
-    };
-  }
-
-  // Chrome can acknowledge Input.dispatchMouseEvent while the background tab
-  // does not actually move. Verify scrollTop, not merely command success. If
-  // the wheel was a no-op away from the requested edge, scroll the exact live
-  // ChatGPT container in-page and let the content script validate continuity.
-  const fallbackReason = debuggerError || 'debugger wheel returned success without moving the chat scroller';
-  const fallback = await withTimeout(
-    scriptedScrollChatTab(tabId, direction, count),
-    5000,
-    'Резервная прокрутка ChatGPT'
-  );
-  return {
-    ...fallback,
-    ok: true,
-    direction,
-    bursts: count,
-    fallbackFrom: fallbackReason
-  };
 }
 
 async function withChatDebugger(tabId, fn) {
@@ -4956,19 +4757,14 @@ async function pasteArchiveIntoGoogleDoc(
   const pasteChunk = async (
     buffer,
     withHeader,
-    {
-      stripImages = true,
-      preferOriginalImageSrc = false,
-      preserveUnreadyImages = false
-    } = {}
+    { stripImages = true, preferOriginalImageSrc = false } = {}
   ) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
       stripImages,
-      preferOriginalImageSrc,
-      preserveUnreadyImages
+      preferOriginalImageSrc
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -5022,53 +4818,47 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    const binaryReadyCount = (messages || []).reduce(
-      (total, message) => total + messageImagesReady(message).length,
-      0
-    );
-
-    if (imageBearingCount > 0 && binaryReadyCount > 0) {
-      // Prefer deterministic binary clipboard insertion whenever hydration
-      // succeeded. A remote-URL rich HTML paste can return success while
-      // Google Docs silently drops every image.
-      let buffer = [];
-      let headerPending = includeHeader;
-
-      for (const message of messages || []) {
-        const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-        if (!images.length) {
-          buffer.push(message);
-          continue;
-        }
-
-        if (buffer.length) {
-          await pasteChunk(buffer, headerPending, { stripImages: true });
-          buffer = [];
-          headerPending = false;
-        }
-
-        const unresolvedImages = images.filter(image =>
-          !(image?.binaryStatus === 'ready' && image?.dataUrl)
-        );
-        await pasteChunk([message], headerPending, {
-          stripImages: true,
-          preferOriginalImageSrc: true,
-          preserveUnreadyImages: unresolvedImages.length > 0
+    // Reproduce the pre-binary export path exactly: one rich HTML clipboard
+    // payload for the whole exported message range. This is the last version
+    // the user observed inserting ChatGPT images into Google Docs reliably.
+    // The newer per-image binary/debugger path remains a fallback only.
+    if (imageBearingCount > 0) {
+      try {
+        await pasteChunk(messages || [], includeHeader, {
+          stripImages: false,
+          preferOriginalImageSrc: true
         });
-        if (unresolvedImages.length) imageInlinePasteCount += unresolvedImages.length;
-        headerPending = false;
-        await pasteBinaryImages(message);
-      }
+        imageInlinePasteCount = imageBearingCount;
+      } catch (legacyError) {
+        let buffer = [];
+        let headerPending = includeHeader;
 
-      await pasteChunk(buffer, headerPending, { stripImages: true });
-    } else if (imageBearingCount > 0) {
-      // Last-resort compatibility path for archives whose binaries are still
-      // unavailable. Report this separately as an attempted rich-HTML transfer.
-      await pasteChunk(messages || [], includeHeader, {
-        stripImages: false,
-        preferOriginalImageSrc: true
-      });
-      imageInlinePasteCount = imageBearingCount;
+        for (const message of messages || []) {
+          const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+          if (!images.length) {
+            buffer.push(message);
+            continue;
+          }
+
+          if (buffer.length) {
+            await pasteChunk(buffer, headerPending, { stripImages: true });
+            buffer = [];
+            headerPending = false;
+          }
+
+          await pasteChunk([message], headerPending, { stripImages: true });
+          headerPending = false;
+          await pasteBinaryImages(message);
+        }
+
+        await pasteChunk(buffer, headerPending, { stripImages: true });
+        if (!imageInsertedCount && !imageFailedCount) {
+          failedImages.push({
+            src: '',
+            error: legacyError?.message || String(legacyError)
+          });
+        }
+      }
     } else {
       await pasteChunk(messages || [], includeHeader, { stripImages: true });
     }
