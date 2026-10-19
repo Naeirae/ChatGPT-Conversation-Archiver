@@ -452,9 +452,12 @@ try {
       !contentSource.includes("method: 'content-script-scroll'") ||
       !contentSource.includes('settled === beforeSignature') ||
       !contentSource.includes("if (physicalScrollEndVisible()) break;") ||
-      !contentSource.includes("localConversationScroll('down', 1)")) {
-    fail('full capture scrolling: stalled second-pass windows must scroll the exact conversation container and only stop at the physical bottom');
+      !contentSource.includes("localConversationScroll('down', 1)") ||
+      !contentSource.includes("if (physicalScrollStartVisible()) {") ||
+      !contentSource.includes("localConversationScroll('up', 1)")) {
+    fail('full capture scrolling: stalled first/second-pass windows must scroll the exact conversation container and only stop at the matching physical edge');
   }
+
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
       !serviceWorkerSource.includes('const passCounts = counts(passMessages)') ||
       !serviceWorkerSource.includes('onlyInUnfinishedPassCount += Math.max(0, passCount - archiveCount)')) {
