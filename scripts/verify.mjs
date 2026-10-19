@@ -417,6 +417,24 @@ try {
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
     fail('Google Docs images: page/worker/rendered-pixel hydration chain and binary-first export must remain wired');
   }
+  const imageClipboardStart = serviceWorkerSource.indexOf('async function copyImageClipboardInGoogleDocs');
+  const imageClipboardEnd = serviceWorkerSource.indexOf('async function pasteArchiveIntoGoogleDoc', imageClipboardStart);
+  const imageClipboardBlock = imageClipboardStart >= 0 && imageClipboardEnd > imageClipboardStart
+    ? serviceWorkerSource.slice(imageClipboardStart, imageClipboardEnd)
+    : '';
+  const pngClipboardIndex = imageClipboardBlock.indexOf("new ClipboardItem({ 'image/png': pngBlob })");
+  const offscreenClipboardIndex = imageClipboardBlock.indexOf("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'");
+  const richHtmlClipboardIndex = imageClipboardBlock.indexOf("method: 'offscreen-rich-html-image'");
+  if (!imageClipboardBlock ||
+      pngClipboardIndex < 0 ||
+      !imageClipboardBlock.includes("method: 'navigator.clipboard-image-png'") ||
+      !imageClipboardBlock.includes("canvas.toBlob") ||
+      offscreenClipboardIndex < 0 ||
+      richHtmlClipboardIndex < 0 ||
+      pngClipboardIndex > offscreenClipboardIndex ||
+      pngClipboardIndex > richHtmlClipboardIndex) {
+    fail('Google Docs images: real PNG ClipboardItem must remain the primary path before offscreen/rich-HTML fallbacks');
+  }
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
       !serviceWorkerSource.includes('const passCounts = counts(passMessages)') ||
       !serviceWorkerSource.includes('onlyInUnfinishedPassCount += Math.max(0, passCount - archiveCount)')) {
