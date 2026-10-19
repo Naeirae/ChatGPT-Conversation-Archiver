@@ -425,6 +425,19 @@ try {
     fail('Google Docs export: preserve the known-good 0.4.27 save path');
   }
 
+  const unfinishedExportStart = serviceWorkerSource.indexOf('async function exportUnfinishedPassToNewDoc');
+  const unfinishedExportEnd = serviceWorkerSource.indexOf('async function resumeUnfinishedInSavedTab', unfinishedExportStart);
+  const unfinishedExportBlock = unfinishedExportStart >= 0 && unfinishedExportEnd > unfinishedExportStart
+    ? serviceWorkerSource.slice(unfinishedExportStart, unfinishedExportEnd)
+    : '';
+  if (!unfinishedExportBlock ||
+      unfinishedExportBlock.includes('ARCHIVER_HYDRATE_DRAFT_IMAGES') ||
+      unfinishedExportBlock.includes('resolveDraftRecoveryTab(') ||
+      !unfinishedExportBlock.includes('syncPartialArchiveFromDraft(draft, { enable: false })') ||
+      !unfinishedExportBlock.includes('exportConversation({')) {
+    fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
+  }
+
   const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
