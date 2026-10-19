@@ -401,8 +401,6 @@ try {
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
       !serviceWorkerSource.includes("method: 'offscreen-rich-html-image'") ||
-      !serviceWorkerSource.includes('binaryReadyCount > 0') ||
-      !serviceWorkerSource.includes('await pasteBinaryImages(message)') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !serviceWorkerSource.includes('async function fetchImageBinaryForContent') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
@@ -410,56 +408,34 @@ try {
       !contentSource.includes("type: 'ARCHIVER_FETCH_IMAGE_BINARY'") ||
       !contentSource.includes("type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE'") ||
       !contentSource.includes('async function captureRenderedImageBlob') ||
-      !contentSource.includes("hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft'") ||
-      !serviceWorkerSource.includes('preserveUnreadyImages') ||
-      !serviceWorkerSource.includes('imageInlinePasteCount += unresolvedImages.length') ||
       !manifestSource.includes('https://*.oaiusercontent.com/*') ||
+      !serviceWorkerSource.includes('one rich HTML clipboard') ||
+      !serviceWorkerSource.includes('await pasteChunk(messages || [], includeHeader, {') ||
+      !serviceWorkerSource.includes('preferOriginalImageSrc: true') ||
       !serviceWorkerSource.includes('const imageInlinePasteCount = Number(messageResult.imageInlinePasteCount || 0);')) {
-    fail('Google Docs images: page/worker/rendered-pixel hydration chain and binary-first export must remain wired');
+    fail('Google Docs images: keep worker/rendered hydration fallbacks but restore exact 0.4.20 legacy batch rich-HTML export as the primary path');
   }
+
   const imageClipboardStart = serviceWorkerSource.indexOf('async function copyImageClipboardInGoogleDocs');
   const imageClipboardEnd = serviceWorkerSource.indexOf('async function pasteArchiveIntoGoogleDoc', imageClipboardStart);
   const imageClipboardBlock = imageClipboardStart >= 0 && imageClipboardEnd > imageClipboardStart
     ? serviceWorkerSource.slice(imageClipboardStart, imageClipboardEnd)
     : '';
-  const pngClipboardIndex = imageClipboardBlock.indexOf("new ClipboardItem({ 'image/png': pngBlob })");
-  const offscreenClipboardIndex = imageClipboardBlock.indexOf("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'");
-  const richHtmlClipboardIndex = imageClipboardBlock.indexOf("method: 'offscreen-rich-html-image'");
   if (!imageClipboardBlock ||
-      pngClipboardIndex < 0 ||
-      !imageClipboardBlock.includes("method: 'navigator.clipboard-image-png'") ||
-      !imageClipboardBlock.includes("canvas.toBlob") ||
-      offscreenClipboardIndex < 0 ||
-      richHtmlClipboardIndex < 0 ||
-      pngClipboardIndex > offscreenClipboardIndex ||
-      pngClipboardIndex > richHtmlClipboardIndex) {
-    fail('Google Docs images: real PNG ClipboardItem must remain the primary path before offscreen/rich-HTML fallbacks');
-  }
-  if (!serviceWorkerSource.includes('async function scriptedScrollChatTab') ||
-      !serviceWorkerSource.includes('async function chatScrollMetrics') ||
-      !serviceWorkerSource.includes("method: 'scripted-scroll-fallback'") ||
-      !serviceWorkerSource.includes("method: moved ? 'debugger-wheel' : 'debugger-wheel-edge'") ||
-      !serviceWorkerSource.includes('beforeMetrics = await chatScrollMetrics') ||
-      !serviceWorkerSource.includes('afterMetrics = await chatScrollMetrics') ||
-      !serviceWorkerSource.includes('debugger wheel returned success without moving the chat scroller') ||
-      !serviceWorkerSource.includes("'Резервная прокрутка ChatGPT'") ||
-      !serviceWorkerSource.includes("'Команда Chrome (' + method + ')'") ||
-      serviceWorkerSource.includes("'Команда Google Docs (' + method + ')'")) {
-    fail('ChatGPT scrolling: debugger wheel success must be verified by real scroll movement and fall back on no-op');
+      !imageClipboardBlock.includes("new ClipboardItem({ 'image/png': pngBlob })") ||
+      !imageClipboardBlock.includes("type: 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
+      !imageClipboardBlock.includes("method: 'offscreen-rich-html-image'")) {
+    fail('Google Docs images: binary/offscreen clipboard paths must remain available only as fallbacks behind the restored legacy batch export');
   }
 
-  if (!contentSource.includes('function localConversationScroll') ||
-      !contentSource.includes("method: 'content-script-scroll'") ||
-      !contentSource.includes('settled === beforeSignature') ||
-      !contentSource.includes("if (physicalScrollEndVisible()) break;") ||
-      !contentSource.includes("localConversationScroll('down', 1)") ||
-      !contentSource.includes("if (physicalScrollStartVisible()) {") ||
-      !contentSource.includes("localConversationScroll('up', 1)") ||
+  if (serviceWorkerSource.includes('async function scriptedScrollChatTab') ||
+      serviceWorkerSource.includes('async function chatScrollMetrics') ||
+      contentSource.includes('function localConversationScroll') ||
+      contentSource.includes('async function reachLiveBottomForSnapshot') ||
       !contentSource.includes("await physicalScroll('up', 7") ||
-      !contentSource.includes("await physicalScroll('down', 1") ||
-      contentSource.includes('async function recoverUpwardContinuity') ||
-      !contentSource.includes('Второй проход полного сбора перескочил участок без перекрытия')) {
-    fail('full capture scrolling: keep known-good first-pass cadence and overlap-safe granular second pass');
+      !contentSource.includes("await physicalScroll('down');") ||
+      !contentSource.includes('This is intentionally the old conservative stop rule')) {
+    fail('full capture: keep the restored 0.4.20 scroll/capture core without later scripted-scroll, exact-container or live-bottom layers');
   }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
