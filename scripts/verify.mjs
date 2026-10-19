@@ -436,13 +436,18 @@ try {
     fail('Google Docs images: real PNG ClipboardItem must remain the primary path before offscreen/rich-HTML fallbacks');
   }
   if (!serviceWorkerSource.includes('async function scriptedScrollChatTab') ||
+      !serviceWorkerSource.includes('async function chatScrollMetrics') ||
       !serviceWorkerSource.includes("method: 'scripted-scroll-fallback'") ||
-      !serviceWorkerSource.includes("method: 'debugger-wheel'") ||
+      !serviceWorkerSource.includes("method: moved ? 'debugger-wheel' : 'debugger-wheel-edge'") ||
+      !serviceWorkerSource.includes('beforeMetrics = await chatScrollMetrics') ||
+      !serviceWorkerSource.includes('afterMetrics = await chatScrollMetrics') ||
+      !serviceWorkerSource.includes('debugger wheel returned success without moving the chat scroller') ||
       !serviceWorkerSource.includes("'Резервная прокрутка ChatGPT'") ||
       !serviceWorkerSource.includes("'Команда Chrome (' + method + ')'") ||
       serviceWorkerSource.includes("'Команда Google Docs (' + method + ')'")) {
-    fail('ChatGPT scrolling: debugger mouse timeout must fall back to in-page scrolling without aborting capture');
+    fail('ChatGPT scrolling: debugger wheel success must be verified by real scroll movement and fall back on no-op');
   }
+
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
       !serviceWorkerSource.includes('const passCounts = counts(passMessages)') ||
       !serviceWorkerSource.includes('onlyInUnfinishedPassCount += Math.max(0, passCount - archiveCount)')) {
