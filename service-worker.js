@@ -4765,14 +4765,19 @@ async function pasteArchiveIntoGoogleDoc(
   const pasteChunk = async (
     buffer,
     withHeader,
-    { stripImages = true, preferOriginalImageSrc = false } = {}
+    {
+      stripImages = true,
+      preferOriginalImageSrc = false,
+      preserveUnreadyImages = false
+    } = {}
   ) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
       stripImages,
-      preferOriginalImageSrc
+      preferOriginalImageSrc,
+      preserveUnreadyImages
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -4826,47 +4831,53 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    // Reproduce the pre-binary export path exactly: one rich HTML clipboard
-    // payload for the whole exported message range. This is the last version
-    // the user observed inserting ChatGPT images into Google Docs reliably.
-    // The newer per-image binary/debugger path remains a fallback only.
-    if (imageBearingCount > 0) {
-      try {
-        await pasteChunk(messages || [], includeHeader, {
-          stripImages: false,
-          preferOriginalImageSrc: true
-        });
-        imageInlinePasteCount = imageBearingCount;
-      } catch (legacyError) {
-        let buffer = [];
-        let headerPending = includeHeader;
+    const binaryReadyCount = (messages || []).reduce(
+      (total, message) => total + messageImagesReady(message).length,
+      0
+    );
 
-        for (const message of messages || []) {
-          const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-          if (!images.length) {
-            buffer.push(message);
-            continue;
-          }
+    if (imageBearingCount > 0 && binaryReadyCount > 0) {
+      // Prefer deterministic binary clipboard insertion whenever hydration
+      // succeeded. A remote-URL rich HTML paste can return success while
+      // Google Docs silently drops every image.
+      let buffer = [];
+      let headerPending = includeHeader;
 
-          if (buffer.length) {
-            await pasteChunk(buffer, headerPending, { stripImages: true });
-            buffer = [];
-            headerPending = false;
-          }
+      for (const message of messages || []) {
+        const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+        if (!images.length) {
+          buffer.push(message);
+          continue;
+        }
 
-          await pasteChunk([message], headerPending, { stripImages: true });
+        if (buffer.length) {
+          await pasteChunk(buffer, headerPending, { stripImages: true });
+          buffer = [];
           headerPending = false;
-          await pasteBinaryImages(message);
         }
 
-        await pasteChunk(buffer, headerPending, { stripImages: true });
-        if (!imageInsertedCount && !imageFailedCount) {
-          failedImages.push({
-            src: '',
-            error: legacyError?.message || String(legacyError)
-          });
-        }
+        const unresolvedImages = images.filter(image =>
+          !(image?.binaryStatus === 'ready' && image?.dataUrl)
+        );
+        await pasteChunk([message], headerPending, {
+          stripImages: true,
+          preferOriginalImageSrc: true,
+          preserveUnreadyImages: unresolvedImages.length > 0
+        });
+        if (unresolvedImages.length) imageInlinePasteCount += unresolvedImages.length;
+        headerPending = false;
+        await pasteBinaryImages(message);
       }
+
+      await pasteChunk(buffer, headerPending, { stripImages: true });
+    } else if (imageBearingCount > 0) {
+      // Last-resort compatibility path for archives whose binaries are still
+      // unavailable. Report this separately as an attempted rich-HTML transfer.
+      await pasteChunk(messages || [], includeHeader, {
+        stripImages: false,
+        preferOriginalImageSrc: true
+      });
+      imageInlinePasteCount = imageBearingCount;
     } else {
       await pasteChunk(messages || [], includeHeader, { stripImages: true });
     }
