@@ -3431,7 +3431,7 @@
     let previousSignature = '';
     let previousSize = -1;
 
-    for (let i = 0; i < 520; i++) {
+    for (let i = 0; i < 1600; i++) {
       await waitIfPaused();
 
       await expandVisible();
@@ -3468,6 +3468,7 @@
       }
 
       const signature = visibleTurnSignature();
+      const beforeRefs = visibleNavigationRefsLightweight();
       const imageStats = capturedImageStats([...map.values()]);
       await progress(
         'Этап 2/3: сверяю сверху вниз · ' + map.size +
@@ -3485,9 +3486,68 @@
         }
       );
 
-      // Stable pre-recovery path: one physical scroll request, then wait for the
-      // virtualized window to settle. No checkpoint/storage/network/recovery work here.
-      await physicalScroll('down');
+      // Full capture must not accelerate through virtualized windows. One small
+      // step at a time preserves overlap between adjacent viewports and lets us
+      // prove that no messages were skipped on the way back down.
+      await physicalScroll('down', 1, {
+        settleTimeout: 2400,
+        quietWindow: 420
+      });
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      const afterTouchedIds = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(
+        afterTouchedIds.map(id => map.get(id)).filter(Boolean),
+        attemptedImageSources
+      );
+
+      if (boundaryIsVisible(boundary)) {
+        const imageStatsAfter = capturedImageStats([...map.values()]);
+        const countMatch = Number(firstPassCount || 0) === map.size;
+        await progress(
+          'Этап 2/3: второй проход завершён · первый ' + Number(firstPassCount || 0) +
+            ' · второй ' + map.size + ' · количество ' + (countMatch ? 'совпало' : 'не совпало'),
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            firstPassCount: Number(firstPassCount || 0),
+            secondPassCount: map.size,
+            passCountMatch: countMatch,
+            comparisonComplete: true,
+            imageCount: imageStatsAfter.total,
+            imageBinaryReady: imageStatsAfter.ready,
+            imageBinaryFailed: imageStatsAfter.failed,
+            force: true
+          }
+        );
+        return { boundaryReached: true, physicalEndReached: false };
+      }
+
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (beforeRefs.length && afterRefs.length &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Второй проход полного сбора перескочил участок без перекрытия. ' +
+            'Сбор остановлен, чтобы не сохранить неполный архив.'
+          );
+        }
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+        continue;
+      }
 
       const nextSignature = visibleTurnSignature();
       if (nextSignature && nextSignature === signature &&
@@ -3501,9 +3561,6 @@
       previousSize = map.size;
 
       if (stable >= 4) {
-        // Four identical virtualized windows are only a stopping condition at
-        // the actual physical bottom. Away from the bottom this is a stalled
-        // navigation step, so force a small exact-container scroll and continue.
         if (physicalScrollEndVisible()) break;
         localConversationScroll('down', 1);
         await waitForTurnSettle(2200, 380);
