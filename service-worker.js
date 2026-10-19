@@ -4023,6 +4023,14 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
 
+  // IMPORTANT: this path intentionally bypasses the generic cdp() timeout
+  // wrapper. Commit 634da0e (0.4.27) added a 15s timeout for Google Docs CDP
+  // calls, but cdp() was also shared by ChatGPT scrolling. That turned a
+  // normally slow/background wheel command into a hard capture failure.
+  // The pre-0.4.27 scrolling path used raw debugger.sendCommand and worked.
+  const raw = (method, params = {}) =>
+    chrome.debugger.sendCommand({ tabId }, method, params);
+
   try {
     const targets = await chrome.debugger.getTargets();
     const target = targets.find(item => item.tabId === tabId);
@@ -4033,7 +4041,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
 
-    const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
+    const viewportResult = await raw('Runtime.evaluate', {
       expression: '({width: innerWidth, height: innerHeight})',
       returnByValue: true
     });
@@ -4043,7 +4051,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     const x = Math.round(width * 0.68);
     const y = Math.round(height * 0.48);
 
-    await cdp(tabId, 'Input.dispatchMouseEvent', {
+    await raw('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x,
       y,
@@ -4051,14 +4059,14 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     }).catch(() => {});
 
     for (let i = 0; i < count; i++) {
-      await cdp(tabId, 'Input.dispatchMouseEvent', {
+      await raw('Input.dispatchMouseEvent', {
         type: 'mouseWheel',
         x,
         y,
         deltaX: 0,
         deltaY: sign * 860
       });
-      await sleep(70);
+      await sleep(90);
     }
 
     return { ok: true, direction, bursts: count };
