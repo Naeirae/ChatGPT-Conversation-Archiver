@@ -139,12 +139,18 @@ try {
       !contentSource.includes('повторный полный проход автоматически не запускается')) {
     fail('content-chatgpt.js: missing non-destructive navigation reconciliation');
   }
-  if (!contentSource.includes('firstPassCount') ||
-      !contentSource.includes('secondPassCount') ||
-      !contentSource.includes('passCountMatch') ||
-      !contentSource.includes('hydrateSequentialImages') ||
-      !contentSource.includes('await reachTopFullLegacy(map, order, settings, navigationWindows, boundary)')) {
-    fail('full capture: missing two-pass count comparison or sequential image hydration');
+  const fullCaptureStart = contentSource.indexOf("if (mode === 'full') {");
+  const fullCaptureWindow = fullCaptureStart >= 0
+    ? contentSource.slice(fullCaptureStart, fullCaptureStart + 12000)
+    : '';
+  if (!fullCaptureWindow ||
+      !contentSource.includes('Historical 0.3.14/0.4.17 behavior') ||
+      !contentSource.includes('await reachTopFullLegacy(map, order, settings);') ||
+      !contentSource.includes('navigationHighWater = 0;') ||
+      !contentSource.includes('navigationMessages = [];') ||
+      !contentSource.includes('navigationSequence = [];') ||
+      !contentSource.includes("if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment')")) {
+    fail('full capture: preserve 0.4.17 navigation-only upward pass and single canonical chronological save');
   }
   const pauseResumeBlock = contentSource.slice(
     contentSource.indexOf("message.type === 'ARCHIVER_RESUME_CAPTURE'"),
