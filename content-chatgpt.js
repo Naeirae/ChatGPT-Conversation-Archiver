@@ -3724,12 +3724,11 @@
         }
 
         if (mode === 'full') {
-          // The upward pass is a real first capture again. Keep its message set
-          // and navigation windows so the downward pass can prove coverage,
-          // recover a turn missed by either pass, and compare the two counts.
-          await reachTopFullLegacy(map, order, settings, navigationWindows, boundary);
-          navigationMessages = [...map.values()];
-          navigationSequence = buildNavigationSequence(navigationWindows);
+          // Historical 0.3.14/0.4.17 behavior: the upward pass is navigation
+          // only. The canonical archive is built once, chronologically, on the
+          // top-to-bottom pass. Do not compare two virtualized snapshots as if
+          // they were two independent canonical captures.
+          await reachTopFullLegacy(map, order, settings);
         } else {
           // Rich upward scans normally begin at the fixed lower boundary. Manual
           // full-range capture is different: the user already chose an explicit
@@ -3807,21 +3806,32 @@
         matchedAnchorSignature = matched?.signature || resumeAnchorSignature;
       }
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'full') {
+        navigationHighWater = 0;
+        navigationMessages = [];
+        navigationSequence = [];
+        firstPassCount = 0;
+        secondPassCount = 0;
+        await progress(
+          'Этап 1/3: начало подтверждено · начинаю сохранение сверху вниз',
+          map.size,
+          {
+            phase: 'top',
+            navigationOnly: true,
+            force: true
+          }
+        );
+      } else if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         navigationHighWater = map.size;
-        firstPassCount = navigationHighWater;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
         navigationFirstSignature = firstAtTop ? turnTextSignature(firstAtTop) : '';
         await progress(
-          mode === 'full'
-            ? 'Этап 1/3: первый проход вверх завершён · ' + navigationHighWater + ' сообщений'
-            : 'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
+          'Этап 1/3: начало подтверждено · навигационный минимум ' + navigationHighWater + ' сообщений',
           navigationHighWater,
           {
             phase: 'top',
             navigationHighWater,
-            firstPassCount: navigationHighWater,
             navigationOnly: false,
             force: true
           }
@@ -3834,7 +3844,6 @@
 
       const walkResult = mode === 'full'
         ? await walkDownFullLegacy(map, order, settings, boundary, {
-            firstPassCount,
             attemptedImageSources: sequentialImageSources
           })
         : await walkDown(map, order, settings, boundary, {
@@ -3883,7 +3892,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
@@ -3935,7 +3944,7 @@
           }
         );
 
-        if (mode === 'full' || mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
+        if (mode === 'reconcile' || mode === 'images-draft' || mode === 'fragment') {
           const finalCount = capturedMessages.length;
           const hasNavigationFirst = capturedMessages.some(item =>
             (navigationFirstId && item.id === navigationFirstId) ||
@@ -4307,9 +4316,9 @@
         lastImageBinaryReady: binaryStats.embedded,
         lastImageBinaryFailed: binaryStats.failed,
         lastCaptureMode: mode,
-        firstPassCount: mode === 'full' ? firstPassCount : undefined,
-        secondPassCount: mode === 'full' ? secondPassCount : undefined,
-        passCountMatch: mode === 'full' ? firstPassCount === secondPassCount : undefined,
+        firstPassCount: undefined,
+        secondPassCount: undefined,
+        passCountMatch: undefined,
         isFragment: mode === 'fragment',
         fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
         lastCaptureAddedCount: addedCount,
