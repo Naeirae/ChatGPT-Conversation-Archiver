@@ -3812,9 +3812,7 @@
       chronologicalStarted = true;
 
       const walkResult = mode === 'full'
-        ? await walkDownFullLegacy(map, order, settings, boundary, {
-            attemptedImageSources: sequentialImageSources
-          })
+        ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
             bursts: 3,
             requireBoundary: false,
