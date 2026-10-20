@@ -4005,7 +4005,8 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
-  let timedOut = false;
+  const send = (method, params = {}) =>
+    chrome.debugger.sendCommand({ tabId }, method, params);
 
   try {
     const targets = await chrome.debugger.getTargets();
@@ -4017,55 +4018,37 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     await chrome.debugger.attach({ tabId }, '1.3');
     attached = true;
 
-    const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
+    const viewportResult = await send('Runtime.evaluate', {
       expression: '({width: innerWidth, height: innerHeight})',
       returnByValue: true
-    }, 5000);
+    });
     const viewport = viewportResult?.result?.value || {};
     const width = Math.max(640, Number(viewport.width) || 1280);
     const height = Math.max(480, Number(viewport.height) || 720);
     const x = Math.round(width * 0.68);
     const y = Math.round(height * 0.48);
 
-    await cdp(tabId, 'Input.dispatchMouseEvent', {
+    await send('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
       x,
       y,
       button: 'none'
-    }, 3000).catch(() => {});
+    }).catch(() => {});
 
     for (let i = 0; i < count; i++) {
-      try {
-        await cdp(tabId, 'Input.dispatchMouseEvent', {
-          type: 'mouseWheel',
-          x,
-          y,
-          deltaX: 0,
-          deltaY: sign * 860
-        }, 3000);
-      } catch (error) {
-        // 0.4.38 removed the timeout entirely and exposed a worse regression:
-        // one debugger wheel acknowledgement could block a capture iteration
-        // for minutes. A timed-out wheel is not fatal; Chrome may already have
-        // delivered the input. Stop this burst, detach, and let the content
-        // collector inspect the actual DOM before deciding what to do next.
-        if (/Input\.dispatchMouseEvent|не ответила/i.test(String(error?.message || error))) {
-          timedOut = true;
-          break;
-        }
-        throw error;
-      }
-      await sleep(90);
+      await send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel',
+        x,
+        y,
+        deltaX: 0,
+        deltaY: sign * 860
+      });
+      await sleep(70);
     }
 
-    return { ok: true, direction, bursts: count, timedOut };
+    return { ok: true, direction, bursts: count };
   } finally {
-    if (attached) {
-      await Promise.race([
-        chrome.debugger.detach({ tabId }).catch(() => {}),
-        sleep(2000)
-      ]);
-    }
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
 }
 
