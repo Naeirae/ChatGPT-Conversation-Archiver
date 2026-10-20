@@ -3215,7 +3215,7 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
-  async function reachTopFullLegacy(map, order, settings, navigationWindows = null, boundary = null) {
+  async function reachTopFullLegacy(map, order, settings) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -3235,11 +3235,10 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
-      recordNavigationWindow(navigationWindows, settings, boundary);
+      collect(map, order, settings);
 
       const signature = visibleTurnSignature();
-      await progress('Этап 1/3: первый проход вверх · собрано ' + map.size + ' сообщений', map.size, {
+      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
@@ -3262,8 +3261,7 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
-      recordNavigationWindow(navigationWindows, settings, boundary);
+      collect(map, order, settings);
 
       const nextSignature = visibleTurnSignature();
       if (
@@ -3283,7 +3281,7 @@
       // This is intentionally the old conservative stop rule. If ChatGPT is
       // slow at the top, the user can press "I'm at the beginning".
       if (stable >= 4) {
-        await progress('Этап 1/3: первый проход завершён · собрано ' + map.size + ' сообщений', map.size, {
+        await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
           force: true
@@ -3295,7 +3293,7 @@
     throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
   }
 
-  async function walkDownFullLegacy(map, order, settings, boundary, { firstPassCount = 0, attemptedImageSources = new Set() } = {}) {
+  async function walkDownFullLegacy(map, order, settings, boundary) {
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -3305,54 +3303,25 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      const touchedIds = collect(map, order, settings, boundary);
-      await hydrateSequentialImages(
-        touchedIds.map(id => map.get(id)).filter(Boolean),
-        attemptedImageSources
-      );
+      collect(map, order, settings, boundary);
 
       if (boundaryIsVisible(boundary)) {
-        const imageStats = capturedImageStats([...map.values()]);
-        const countMatch = Number(firstPassCount || 0) === map.size;
-        await progress(
-          'Этап 2/3: второй проход завершён · первый ' + Number(firstPassCount || 0) +
-            ' · второй ' + map.size + ' · количество ' + (countMatch ? 'совпало' : 'не совпало'),
-          map.size,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            boundaryReached: true,
-            chronologicalCount: map.size,
-            firstPassCount: Number(firstPassCount || 0),
-            secondPassCount: map.size,
-            passCountMatch: countMatch,
-            comparisonComplete: true,
-            imageCount: imageStats.total,
-            imageBinaryReady: imageStats.ready,
-            imageBinaryFailed: imageStats.failed,
-            force: true
-          }
-        );
+        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
         return { boundaryReached: true, physicalEndReached: false };
       }
 
       const signature = visibleTurnSignature();
-      const imageStats = capturedImageStats([...map.values()]);
-      await progress(
-        'Этап 2/3: сверяю сверху вниз · ' + map.size +
-          (firstPassCount ? ' из ' + firstPassCount + ' сообщений первого прохода' : ' сообщений'),
-        map.size,
-        {
-          phase: 'walk',
-          iteration: i + 1,
-          chronologicalCount: map.size,
-          firstPassCount: Number(firstPassCount || 0),
-          secondPassCount: map.size,
-          imageCount: imageStats.total,
-          imageBinaryReady: imageStats.ready,
-          imageBinaryFailed: imageStats.failed
-        }
-      );
+      await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
+        phase: 'walk',
+        iteration: i + 1,
+        chronologicalCount: map.size
+      });
 
       // Stable pre-recovery path: one physical scroll request, then wait for the
       // virtualized window to settle. No checkpoint/storage/network/recovery work here.
