@@ -4732,29 +4732,18 @@ async function pasteArchiveIntoGoogleDoc(
   let imageInlinePasteCount = 0;
   let imageFailedCount = 0;
   const failedImages = [];
-  const imageBearingCount = (messages || []).reduce(
-    (total, message) => total + (message?.images || []).filter(
-      image => image?.src || image?.dataUrl
-    ).length,
-    0
-  );
 
   const pasteChunk = async (
     buffer,
     withHeader,
-    {
-      stripImages = true,
-      preferOriginalImageSrc = false,
-      preserveUnreadyImages = false
-    } = {}
+    { stripImages = true, preferOriginalImageSrc = false } = {}
   ) => {
     if (!buffer.length && !withHeader) return;
     const html = buildRichHtml(conversation, settings, {
       messages: buffer,
       includeHeader: withHeader,
       stripImages,
-      preferOriginalImageSrc,
-      preserveUnreadyImages
+      preferOriginalImageSrc
     });
     const text = buildPlainText(conversation, settings, {
       messages: buffer,
@@ -4808,56 +4797,48 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    const binaryReadyCount = (messages || []).reduce(
-      (total, message) => total + messageImagesReady(message).length,
-      0
-    );
+    let buffer = [];
+    let headerPending = includeHeader;
 
-    if (imageBearingCount > 0 && binaryReadyCount > 0) {
-      // Prefer deterministic binary clipboard insertion whenever hydration
-      // succeeded. A remote-URL rich HTML paste can return success while
-      // Google Docs silently drops every image.
-      let buffer = [];
-      let headerPending = includeHeader;
-
-      for (const message of messages || []) {
-        const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-        if (!images.length) {
-          buffer.push(message);
-          continue;
-        }
-
-        if (buffer.length) {
-          await pasteChunk(buffer, headerPending, { stripImages: true });
-          buffer = [];
-          headerPending = false;
-        }
-
-        const unresolvedImages = images.filter(image =>
-          !(image?.binaryStatus === 'ready' && image?.dataUrl)
-        );
-        await pasteChunk([message], headerPending, {
-          stripImages: true,
-          preferOriginalImageSrc: true,
-          preserveUnreadyImages: unresolvedImages.length > 0
-        });
-        if (unresolvedImages.length) imageInlinePasteCount += unresolvedImages.length;
-        headerPending = false;
-        await pasteBinaryImages(message);
+    for (const message of messages || []) {
+      const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
+      if (!images.length) {
+        buffer.push(message);
+        continue;
       }
 
-      await pasteChunk(buffer, headerPending, { stripImages: true });
-    } else if (imageBearingCount > 0) {
-      // Last-resort compatibility path for archives whose binaries are still
-      // unavailable. Report this separately as an attempted rich-HTML transfer.
-      await pasteChunk(messages || [], includeHeader, {
-        stripImages: false,
-        preferOriginalImageSrc: true
-      });
-      imageInlinePasteCount = imageBearingCount;
-    } else {
-      await pasteChunk(messages || [], includeHeader, { stripImages: true });
+      // Restore the pre-34f7bcb path that was observed to work in Google Docs:
+      // text and image markup for an image-bearing message travel through one
+      // rich HTML clipboard paste, using the original ChatGPT image URL first.
+      if (buffer.length) {
+        await pasteChunk(buffer, headerPending, { stripImages: true });
+        buffer = [];
+        headerPending = false;
+      }
+
+      try {
+        await pasteChunk([message], headerPending, {
+          stripImages: false,
+          preferOriginalImageSrc: true
+        });
+        headerPending = false;
+        imageInlinePasteCount += images.length;
+      } catch (error) {
+        // If the old rich-HTML route itself errors, keep the newer binary
+        // clipboard path as a fallback instead of losing the whole export.
+        await pasteChunk([message], headerPending, { stripImages: true });
+        headerPending = false;
+        await pasteBinaryImages(message);
+        if (!imageInsertedCount && !imageFailedCount) {
+          failedImages.push({
+            src: images[0]?.src || '',
+            error: error?.message || String(error)
+          });
+        }
+      }
     }
+
+    await pasteChunk(buffer, headerPending, { stripImages: true });
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
