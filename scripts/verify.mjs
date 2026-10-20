@@ -444,12 +444,12 @@ try {
     ? serviceWorkerSource.slice(docsPasteStart, docsPasteEnd)
     : '';
   if (!docsPasteBlock ||
-      !docsPasteBlock.includes('const binaryReadyCount =') ||
-      !docsPasteBlock.includes('if (imageBearingCount > 0 && binaryReadyCount > 0)') ||
-      !docsPasteBlock.includes('preserveUnreadyImages') ||
+      !docsPasteBlock.includes('Restore the pre-34f7bcb path that was observed to work in Google Docs') ||
+      !docsPasteBlock.includes("stripImages: false") ||
+      !docsPasteBlock.includes("preferOriginalImageSrc: true") ||
       !docsPasteBlock.includes('await pasteBinaryImages(message)') ||
-      !docsPasteBlock.includes('Last-resort compatibility path')) {
-    fail('Google Docs export: preserve the known-good 0.4.27 save path');
+      docsPasteBlock.includes('binaryReadyCount')) {
+    fail('Google Docs export: preserve 0.4.19 ordered rich-HTML primary path and keep binary insertion fallback-only');
   }
 
   const unfinishedExportStart = serviceWorkerSource.indexOf('async function exportUnfinishedPassToNewDoc');
