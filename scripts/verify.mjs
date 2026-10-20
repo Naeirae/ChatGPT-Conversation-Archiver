@@ -152,6 +152,27 @@ try {
       !contentSource.includes("if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment')")) {
     fail('full capture: preserve 0.4.17 navigation-only upward pass and single canonical chronological save');
   }
+  const fullTopStart = contentSource.indexOf('async function reachTopFullLegacy');
+  const fullDownStart = contentSource.indexOf('async function walkDownFullLegacy', fullTopStart);
+  const fullDownEnd = contentSource.indexOf('async function walkDown(', fullDownStart);
+  const fullTopBlock = fullTopStart >= 0 && fullDownStart > fullTopStart
+    ? contentSource.slice(fullTopStart, fullDownStart)
+    : '';
+  const fullDownBlock = fullDownStart >= 0 && fullDownEnd > fullDownStart
+    ? contentSource.slice(fullDownStart, fullDownEnd)
+    : '';
+  if (!fullTopBlock ||
+      !fullDownBlock ||
+      !fullTopBlock.includes("await physicalScroll('up', 7") ||
+      !fullTopBlock.includes('stable >= 4') ||
+      fullTopBlock.includes('recordNavigationWindow(') ||
+      !fullDownBlock.includes("await physicalScroll('down');") ||
+      !fullDownBlock.includes('stable >= 4') ||
+      fullDownBlock.includes('hydrateSequentialImages(') ||
+      fullDownBlock.includes('firstPassCount')) {
+    fail('full capture: preserve exact 0.4.17 traversal hot path without later image/reconciliation work inside the scroll loop');
+  }
+
   const pauseResumeBlock = contentSource.slice(
     contentSource.indexOf("message.type === 'ARCHIVER_RESUME_CAPTURE'"),
     contentSource.indexOf("message.type === 'ARCHIVER_CANCEL_CAPTURE'")
@@ -450,18 +471,14 @@ try {
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
   if (!physicalScrollBlock ||
-      !physicalScrollBlock.includes("await cdp(tabId, 'Input.dispatchMouseEvent'") ||
-      !physicalScrollBlock.includes("}, 3000)") ||
-      !physicalScrollBlock.includes("timedOut = true") ||
-      !physicalScrollBlock.includes("break;") ||
-      !physicalScrollBlock.includes("return { ok: true, direction, bursts: count, timedOut }")) {
-    fail('full capture: debugger wheel must stay bounded without turning a stalled acknowledgement into a fatal capture error');
+      !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
+      !physicalScrollBlock.includes("deltaY: sign * 860") ||
+      !physicalScrollBlock.includes("await sleep(70)") ||
+      physicalScrollBlock.includes('timedOut') ||
+      physicalScrollBlock.includes('}, 3000)')) {
+    fail('full capture: preserve the pre-timeout 0.4.17 debugger-wheel transport without silent partial bursts');
   }
 
-  if (!serviceWorkerSource.includes("async function cdp(tabId, method, params = {}, timeoutMs = 15000)") ||
-      !serviceWorkerSource.includes("withTimeout(")) {
-    fail('Google Docs: bounded CDP/clipboard operations must remain available');
-  }
 
   if (!serviceWorkerSource.includes('async function compactCompatibleDrafts') ||
       !serviceWorkerSource.includes('const passCounts = counts(passMessages)') ||
