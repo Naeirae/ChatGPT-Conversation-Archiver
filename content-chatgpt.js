@@ -103,7 +103,7 @@
     if (!checkpoint || pauseCheckpointVisible(checkpoint)) return true;
 
     for (let i = 0; i < 180; i++) {
-      await physicalScroll('up', i < 12 ? 2 : 4);
+      await physicalScroll('up', 1);
       await sleep(120);
       if (pauseCheckpointVisible(checkpoint)) return true;
     }
@@ -1854,7 +1854,7 @@
 
   function visibleTurnSignature() {
     const keys = orderedTurns().map(turn => turnStableKey(turn) || turnTextSignature(turn));
-    return keys.slice(0, 3).concat(keys.slice(-3)).join('|') + '::' + keys.length;
+    return keys.join('|') + '::' + keys.length;
   }
 
   function scrollObservation(capturedCount = 0) {
@@ -2067,7 +2067,7 @@
             boundarySearchIteration: i + 1
           }
         );
-        await physicalScroll(direction, direction === 'up' ? 6 : 4, {
+        await physicalScroll(direction, 1, {
           settleTimeout: 2600,
           quietWindow: 350
         });
@@ -2452,7 +2452,7 @@
         iteration: i + 1
       });
 
-      await physicalScroll('up');
+      await physicalScroll('up', 1);
 
       const after = scrollObservation(map.size);
       const stall = scrollRuntime().updateStabilityState(upwardStability, before, after, {
@@ -2521,7 +2521,7 @@
         }
 
         const before = scrollObservation(map.size);
-        await physicalScroll('down', 3);
+        await physicalScroll('down', 1);
         const after = scrollObservation(map.size);
         const stall = scrollRuntime().updateStabilityState(downwardStability, before, after, {
           requireLastKey: true
@@ -2788,11 +2788,7 @@
         }
 
         const before = visibleTurnSignature();
-        const bursts = crossedFrontier
-          ? 1
-          : direction === 'down'
-            ? 2
-            : (enteredSavedPrefix ? 2 : 5);
+        const bursts = 1;
 
         await physicalScroll(direction, bursts, {
           settleTimeout: 2600,
@@ -2915,7 +2911,7 @@
       );
 
       const before = visibleTurnSignature();
-      await physicalScroll(direction, direction === 'down' ? 3 : 5);
+      await physicalScroll(direction, 1);
       const after = visibleTurnSignature();
 
       if (after && after === before && after === previousSignature) unchanged++;
