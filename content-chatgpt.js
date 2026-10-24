@@ -1535,11 +1535,16 @@
     };
   }
 
+  function messageStrongId(message) {
+    const id = String(message?.id || '');
+    return message?.identityStrong || isStrongMessageId(id) ? id : '';
+  }
+
   function navigationRef(message) {
     const id = String(message?.id || '');
     return {
       id,
-      strongId: message?.identityStrong || isStrongMessageId(id) ? id : '',
+      strongId: messageStrongId(message),
       signature: message ? messageTextSignature(message) : '',
       externalSignature: message
         ? externalMatchSignature(message?.role || 'unknown', message?.text || '')
@@ -4099,9 +4104,9 @@
           // proven resume anchor. Text equality is not evidence of duplication:
           // users and ChatGPT can legitimately repeat the same message later.
           // Only a stable ID can prove that a captured turn is already present.
-          const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+          const existingIds = new Set(existing.messages.map(messageStrongId).filter(Boolean));
           const delta = capturedMessages.filter(item =>
-            !(item.id && existingIds.has(item.id))
+            !(messageStrongId(item) && existingIds.has(messageStrongId(item)))
           );
 
           addedCount = delta.length;
@@ -4225,9 +4230,9 @@
         // the saved anchor. Do not deduplicate by text signature: a later turn
         // may intentionally repeat an earlier one. Stable IDs are the only
         // safe cross-boundary duplicate filter here.
-        const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+        const existingIds = new Set(existing.messages.map(messageStrongId).filter(Boolean));
         const delta = capturedMessages.filter(item =>
-          !(item.id && existingIds.has(item.id))
+          !(messageStrongId(item) && existingIds.has(messageStrongId(item)))
         );
 
         addedCount = delta.length;
