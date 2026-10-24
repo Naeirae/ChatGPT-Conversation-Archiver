@@ -2149,6 +2149,12 @@
     return result;
   }
 
+  function hasStableResumeAnchor(id) {
+    const strongId = String(id || '');
+    if (!isStrongMessageId(strongId)) return false;
+    return orderedTurns().some(turn => turnStableKey(turn) === strongId);
+  }
+
   function hasResumeAnchor(id, signature) {
     return orderedTurns().some(turn => {
       const key = turnStableKey(turn);
