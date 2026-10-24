@@ -3418,38 +3418,28 @@
     const right = (b || []).filter(ref => ref && (ref.strongId || ref.signature));
     if (!left.length || !right.length) return false;
 
-    // Only real ChatGPT message IDs are strong enough to prove overlap alone.
-    for (const x of left) {
-      if (!x.strongId) continue;
-      if (right.some(y => y.strongId && y.strongId === x.strongId)) return true;
-    }
+    const refSame = (x, y) => {
+      if (x.strongId && y.strongId && x.strongId === y.strongId) return true;
+      return Boolean(x.signature && y.signature && x.signature === y.signature);
+    };
 
-    // Text signatures can repeat, so require at least two adjacent messages in
-    // the same order before treating two virtualized windows as continuous.
-    const maxLength = Math.min(4, left.length, right.length);
-    for (let length = maxLength; length >= 2; length--) {
-      for (let i = 0; i <= left.length - length; i++) {
-        for (let j = 0; j <= right.length - length; j++) {
-          let same = true;
-          for (let offset = 0; offset < length; offset++) {
-            const aRef = left[i + offset];
-            const bRef = right[j + offset];
-            const strongSame = Boolean(
-              aRef.strongId &&
-              bRef.strongId &&
-              aRef.strongId === bRef.strongId
-            );
-            const textSame = Boolean(
-              aRef.signature &&
-              aRef.signature === bRef.signature
-            );
-            if (!strongSame && !textSame) {
-              same = false;
-              break;
-            }
-          }
-          if (same) return true;
-        }
+    // Downward continuity is directional: the tail of the previous viewport
+    // must be the prefix of the next viewport. Matching an arbitrary repeated
+    // phrase somewhere in both windows is not evidence that no turns were skipped.
+    const maxLength = Math.min(6, left.length, right.length);
+    for (let length = maxLength; length >= 1; length--) {
+      const leftTail = left.slice(left.length - length);
+      const rightHead = right.slice(0, length);
+
+      if (length === 1) {
+        const x = leftTail[0];
+        const y = rightHead[0];
+        if (x.strongId && y.strongId && x.strongId === y.strongId) return true;
+        continue;
+      }
+
+      if (leftTail.every((ref, index) => refSame(ref, rightHead[index]))) {
+        return true;
       }
     }
 
