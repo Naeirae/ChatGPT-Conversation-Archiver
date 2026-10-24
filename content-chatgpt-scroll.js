@@ -150,6 +150,15 @@
     return state;
   }
 
+  function primeStabilityState(state, observation) {
+    const target = resetStabilityState(state);
+    target.previousSignature = String(observation?.signature || '');
+    target.previousCapturedCount = Number(observation?.capturedCount) || 0;
+    target.previousFirstKey = String(observation?.firstKey || '');
+    target.previousLastKey = String(observation?.lastKey || '');
+    return target;
+  }
+
   function sameWindow(left, right, {
     requireCapturedCount = true,
     requireFirstKey = false,
@@ -261,6 +270,7 @@
     observeWindow,
     createStabilityState,
     resetStabilityState,
+    primeStabilityState,
     sameWindow,
     updateStabilityState,
     waitForTurnSettle,
