@@ -313,35 +313,42 @@
     const result = [];
     const seen = new Set();
 
-    // Current ChatGPT virtualizes the conversation. A data-turn-key wrapper can
-    // contain both the user and assistant message, so it is not itself a message.
-    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(shell => {
-      if (!roleOf(shell) || seen.has(shell)) return;
-      seen.add(shell);
-      result.push(shell);
-    });
-
-    getRoleNodes().forEach(node => {
-      const turn = getTurn(node);
-      if (!roleOf(turn) || seen.has(turn)) return;
+    const add = turn => {
+      if (!(turn instanceof Element) || !roleOf(turn) || seen.has(turn)) return;
       seen.add(turn);
       result.push(turn);
-    });
+    };
 
-    // Fallback only for rollouts that expose a single message directly under a
-    // data-turn-key wrapper and no more specific message shell.
-    if (!result.length) {
-      document.querySelectorAll(TURN_WRAPPER_SELECTOR).forEach(wrapper => {
-        const role = roleOf(wrapper);
-        if (!role) return;
-        const units = wrapper.querySelectorAll(
-          '[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]'
-        );
-        if (units.length > 1 || seen.has(wrapper)) return;
-        seen.add(wrapper);
-        result.push(wrapper);
-      });
-    }
+    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(add);
+
+    getRoleNodes().forEach(node => add(getTurn(node)));
+
+    // ChatGPT can mix rollout shapes in one virtualized viewport. A wrapper is
+    // therefore not merely an all-or-nothing fallback: if it contains exactly
+    // one logical role and no already-discovered turn represents it, keep it.
+    document.querySelectorAll(TURN_WRAPPER_SELECTOR).forEach(wrapper => {
+      if (seen.has(wrapper)) return;
+
+      const represented = result.some(turn =>
+        turn === wrapper ||
+        wrapper.contains(turn) ||
+        turn.contains?.(wrapper)
+      );
+      if (represented) return;
+
+      const roleCandidates = [
+        ...wrapper.querySelectorAll(
+          TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR
+        )
+      ].map(node => roleOf(node)).filter(Boolean);
+      const ownRole = roleOf(wrapper);
+      if (ownRole) roleCandidates.push(ownRole);
+
+      const roles = [...new Set(roleCandidates)];
+      if (roles.length !== 1) return;
+
+      add(wrapper);
+    });
 
     return result.sort((a, b) => {
       const pos = a.compareDocumentPosition(b);
@@ -2514,11 +2521,12 @@
     existingCount = 0,
     {
       fullCapture = false,
-      timeoutMs = 2 * 60 * 60 * 1000
+      timeoutMs = 30 * 60 * 1000
     } = {}
   ) {
     let confirmedIdle = 0;
-    const stability = scrollRuntime().createStabilityState();
+    let previousTopText = '';
+    let repeatedWithoutPhysicalTop = 0;
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2542,7 +2550,8 @@
 
       if (await recoverVisibleLoadError('top', existingCount)) {
         confirmedIdle = 0;
-        scrollRuntime().resetStabilityState(stability);
+        previousTopText = '';
+        repeatedWithoutPhysicalTop = 0;
       }
 
       if (sharedConversationStartVisible()) {
@@ -2554,11 +2563,11 @@
         return;
       }
 
-      const before = scrollObservation(existingCount);
+      const beforeText = visibleTopTextSignature();
 
       await progress(
         fullCapture
-          ? 'Этап 1/3: быстро иду к началу · можно помочь вручную'
+          ? 'Этап 1/3: быстро иду к началу · без разбора сообщений на пути вверх'
           : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений…',
         existingCount,
         {
@@ -2570,11 +2579,9 @@
         }
       );
 
-      // This phase is navigation only. Give ChatGPT enough time to replace the
-      // virtualized message window before deciding that upward motion is over.
-      await physicalScroll('up', 24, {
-        settleTimeout: 4500,
-        quietWindow: 450
+      await physicalScroll('up', 16, {
+        settleTimeout: 3200,
+        quietWindow: 420
       });
 
       if (state.manualTopConfirmed) {
@@ -2602,59 +2609,81 @@
         return;
       }
 
-      const after = scrollObservation(existingCount);
-      const candidate = scrollRuntime().updateStabilityState(stability, before, after, {
-        requireFirstKey: true
-      });
+      const afterText = visibleTopTextSignature();
+      const sameTextWindow = Boolean(
+        afterText &&
+        beforeText &&
+        afterText === beforeText &&
+        afterText === previousTopText
+      );
 
-      if (candidate.unchanged) {
-        await progress(
-          'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
-          existingCount,
-          {
-            phase: 'top',
-            iteration: i + 1,
-            topIdleConfirmations: candidate.stable,
-            retryWalkOnly: !fullCapture,
-            manualAssistAllowed: true
+      if (sameTextWindow) {
+        await sleep(900);
+        const afterWaitText = visibleTopTextSignature();
+        if (afterWaitText === afterText && !visibleRetryButton()) {
+          confirmedIdle++;
+          const atPhysicalTop = physicalScrollStartVisible();
+          repeatedWithoutPhysicalTop = atPhysicalTop
+            ? 0
+            : repeatedWithoutPhysicalTop + 1;
+
+          if (atPhysicalTop && confirmedIdle >= 2) {
+            await progress(
+              fullCapture
+                ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+                : 'Начало подтверждено. Запускаю хронологический проход вниз…',
+              existingCount,
+              {
+                phase: 'walk',
+                iteration: i + 1,
+                topIdleConfirmations: confirmedIdle,
+                retryWalkOnly: !fullCapture,
+                force: true
+              }
+            );
+            return;
           }
-        );
 
-        await sleep(700);
-        const afterWait = scrollObservation(existingCount);
-        if (scrollRuntime().sameWindow(after, afterWait, { requireFirstKey: true })) {
-          confirmedIdle = candidate.stable;
+          // Some ChatGPT virtualized layouts report a local scrollTop that is
+          // not a reliable global edge. Three repeated large upward probes with
+          // an identical oldest text window are enough evidence of the top.
+          if (confirmedIdle >= 3) {
+            await progress(
+              'Этап 1/3: начало подтверждено по неизменному старейшему окну.',
+              existingCount,
+              {
+                phase: 'walk',
+                iteration: i + 1,
+                topIdleConfirmations: confirmedIdle,
+                retryWalkOnly: !fullCapture,
+                force: true
+              }
+            );
+            return;
+          }
+
+          if (repeatedWithoutPhysicalTop >= 6) {
+            throw new Error(
+              'Прокрутка вверх не меняет старейшие видимые сообщения, но физический верх не подтверждается. ' +
+              'Сбор остановлен вместо многочасового холостого цикла.'
+            );
+          }
         } else {
           confirmedIdle = 0;
-          scrollRuntime().primeStabilityState(stability, afterWait);
+          repeatedWithoutPhysicalTop = 0;
         }
       } else {
         confirmedIdle = 0;
+        repeatedWithoutPhysicalTop = 0;
       }
 
-      if (confirmedIdle >= 2) {
-        await progress(
-          fullCapture
-            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-          existingCount,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            topIdleConfirmations: confirmedIdle,
-            retryWalkOnly: !fullCapture,
-            manualAssistAllowed: true,
-            force: true
-          }
-        );
-        return;
-      }
+      previousTopText = afterText;
     }
 
     throw new Error(
       fullCapture
-        ? 'Не удалось подтвердить начало переписки за два часа непрерывной навигации.'
-        : 'Не удалось надежно вернуть рабочую вкладку к началу за два часа.'
+        ? 'Не удалось подтвердить начало переписки в пределах времени навигации.'
+        : 'Не удалось надежно вернуть рабочую вкладку к началу в пределах времени навигации.'
     );
   }
 
