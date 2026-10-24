@@ -1724,23 +1724,39 @@
   function reconcileNavigationCoverage(capturedMessages, navigationMessages, navigationSequence) {
     const result = [...(capturedMessages || [])];
     const navMessages = [...(navigationMessages || [])];
+    const navRefs = (navigationSequence || []).filter(Boolean);
 
-    const matchesRef = (message, ref) => sameNavigationRef(navigationRef(message), ref);
-    const findResultIndex = ref => result.findIndex(message => matchesRef(message, ref));
-    const findNavigationMessage = ref => navMessages.find(message => matchesRef(message, ref)) || null;
+    const resultRefs = () => result.map(navigationRef);
+    const navMessageRefs = navMessages.map(navigationRef);
 
-    // First use the upward pass as a richness fallback for messages that are
-    // already present in the chronological pass.
+    const findResultIndex = ref => {
+      const sourceIndex = navRefs.indexOf(ref);
+      return findContextualRefIndex(resultRefs(), ref, navRefs, sourceIndex);
+    };
+
+    const findNavigationMessage = ref => {
+      const sourceIndex = navRefs.indexOf(ref);
+      const index = findContextualRefIndex(navMessageRefs, ref, navRefs, sourceIndex);
+      return index >= 0 ? navMessages[index] : null;
+    };
+
+    // Enrich only when the correspondence is strong or uniquely contextual.
+    // Repeated standalone text is never enough to merge two messages.
     for (let i = 0; i < result.length; i++) {
-      const fallback = navMessages.find(message =>
-        sameNavigationRef(navigationRef(result[i]), navigationRef(message))
+      const index = findContextualMessageIndex(
+        navMessages,
+        result[i],
+        result,
+        i
       );
-      if (fallback) result[i] = mergeRicherCapture(result[i], fallback);
+      if (index >= 0) {
+        result[i] = mergeRicherCapture(result[i], navMessages[index]);
+      }
     }
 
     const missingGroups = [];
     let current = [];
-    for (const ref of navigationSequence || []) {
+    for (const ref of navRefs) {
       if (findResultIndex(ref) >= 0) {
         if (current.length) {
           missingGroups.push(current);
@@ -1758,27 +1774,21 @@
     for (const group of missingGroups) {
       const firstRef = group[0];
       const lastRef = group[group.length - 1];
-      const firstNavIndex = (navigationSequence || []).findIndex(ref => sameNavigationRef(ref, firstRef));
-      let lastNavIndex = firstNavIndex;
-      for (let i = firstNavIndex; i < (navigationSequence || []).length; i++) {
-        if (sameNavigationRef(navigationSequence[i], lastRef)) {
-          lastNavIndex = i;
-          break;
-        }
-      }
+      const firstNavIndex = navRefs.indexOf(firstRef);
+      const lastNavIndex = navRefs.indexOf(lastRef);
 
       let previousRef = null;
       for (let i = firstNavIndex - 1; i >= 0; i--) {
-        if (findResultIndex(navigationSequence[i]) >= 0) {
-          previousRef = navigationSequence[i];
+        if (findResultIndex(navRefs[i]) >= 0) {
+          previousRef = navRefs[i];
           break;
         }
       }
 
       let nextRef = null;
-      for (let i = lastNavIndex + 1; i < (navigationSequence || []).length; i++) {
-        if (findResultIndex(navigationSequence[i]) >= 0) {
-          nextRef = navigationSequence[i];
+      for (let i = lastNavIndex + 1; i < navRefs.length; i++) {
+        if (findResultIndex(navRefs[i]) >= 0) {
+          nextRef = navRefs[i];
           break;
         }
       }
@@ -1810,17 +1820,8 @@
       insertedCount += messages.length;
     }
 
-    const unresolvedRefs = (navigationSequence || []).filter(ref => findResultIndex(ref) < 0);
-    const unsequencedNavigation = navMessages.filter(message =>
-      !(navigationSequence || []).some(ref => matchesRef(message, ref)) &&
-      !result.some(existing =>
-        sameNavigationRef(navigationRef(existing), navigationRef(message))
-      )
-    );
-    unresolvedCount = Math.max(
-      unresolvedCount,
-      unresolvedRefs.length + unsequencedNavigation.length
-    );
+    const unresolvedRefs = navRefs.filter(ref => findResultIndex(ref) < 0);
+    unresolvedCount = Math.max(unresolvedCount, unresolvedRefs.length);
 
     return {
       messages: result,
