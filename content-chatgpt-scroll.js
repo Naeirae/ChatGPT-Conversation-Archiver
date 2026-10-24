@@ -231,20 +231,40 @@
     return previous;
   }
 
+  function scrollTargetPoint(turns = []) {
+    const scroller = findScrollContainer(turns[0] || turns[turns.length - 1] || null);
+    if (!(scroller instanceof Element)) return null;
+    const rect = scroller.getBoundingClientRect();
+    const viewportWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+    const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    const left = Math.max(0, rect.left);
+    const right = Math.min(viewportWidth, rect.right);
+    const top = Math.max(0, rect.top);
+    const bottom = Math.min(viewportHeight, rect.bottom);
+    if (right - left < 40 || bottom - top < 40) return null;
+    return {
+      x: Math.round(left + (right - left) * 0.72),
+      y: Math.round(top + (bottom - top) * 0.5)
+    };
+  }
+
   async function physicalScroll({
     jobId,
     direction = 'up',
     bursts = 7,
     getSignature,
     settleTimeout = 8000,
-    quietWindow = 1400
+    quietWindow = 1400,
+    turns = []
   } = {}) {
     const normalizedDirection = direction === 'down' ? 'down' : 'up';
+    const point = scrollTargetPoint(turns);
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_SCROLL',
       jobId,
       direction: normalizedDirection,
-      bursts
+      bursts,
+      point
     });
 
     if (!result?.ok) {
@@ -267,6 +287,7 @@
     physicalScrollStartVisible,
     physicalScrollEndVisible,
     findVisibleLoadRetry,
+    scrollTargetPoint,
     observeWindow,
     createStabilityState,
     resetStabilityState,
