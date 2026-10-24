@@ -4001,7 +4001,7 @@ async function cdp(tabId, method, params = {}, timeoutMs = 15000) {
   );
 }
 
-async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
+async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
@@ -4025,8 +4025,14 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     const viewport = viewportResult?.result?.value || {};
     const width = Math.max(640, Number(viewport.width) || 1280);
     const height = Math.max(480, Number(viewport.height) || 720);
-    const x = Math.round(width * 0.68);
-    const y = Math.round(height * 0.48);
+    const requestedX = Number(point?.x);
+    const requestedY = Number(point?.y);
+    const x = Number.isFinite(requestedX)
+      ? Math.max(1, Math.min(width - 1, Math.round(requestedX)))
+      : Math.round(width * 0.68);
+    const y = Number.isFinite(requestedY)
+      ? Math.max(1, Math.min(height - 1, Math.round(requestedY)))
+      : Math.round(height * 0.48);
 
     await send('Input.dispatchMouseEvent', {
       type: 'mouseMoved',
@@ -5996,7 +6002,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             lastPhysicalActivity: 'scroll'
           });
         }
-        return await physicalScrollTab(job.captureTabId, message.direction, message.bursts);
+        return await physicalScrollTab(
+          job.captureTabId,
+          message.direction,
+          message.bursts,
+          message.point || null
+        );
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
         const job = await getJob();
