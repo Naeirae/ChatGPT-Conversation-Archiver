@@ -1954,6 +1954,50 @@
     };
   }
 
+  function weakIdentityContextKey(message) {
+    const context = message?.identityContext || {};
+    if (!context.previous && !context.next) return '';
+    return hashText([
+      context.previous || '',
+      messageTextSignature(message),
+      context.next || ''
+    ].join('|'));
+  }
+
+  function buildImageScanPool(candidates) {
+    const pooled = [];
+    const byKey = new Map();
+
+    for (const candidate of candidates || []) {
+      if (!candidate) continue;
+      const strongId = messageStrongId(candidate);
+      const weakContext = weakIdentityContextKey(candidate);
+      const key = strongId
+        ? 'strong:' + strongId
+        : weakContext
+          ? 'weak:' + String(candidate.id || '') + ':' + weakContext
+          : '';
+
+      if (!key) {
+        pooled.push({ ...candidate, images: [...(candidate.images || [])] });
+        continue;
+      }
+
+      const previous = byKey.get(key);
+      if (!previous) {
+        const copy = { ...candidate, images: [...(candidate.images || [])] };
+        byKey.set(key, copy);
+        pooled.push(copy);
+        continue;
+      }
+
+      const merged = mergeImageRecords(previous.images || [], candidate.images || []);
+      previous.images = merged.images;
+    }
+
+    return pooled;
+  }
+
   function mergeRecoveredImagesIntoArchive(existingMessages, scannedMessages) {
     const scanned = scannedMessages || [];
     const result = (existingMessages || []).map(message => ({ ...message }));
@@ -4121,21 +4165,10 @@
         }
 
         previousCount = existing.messages.length;
-        const scanPool = [];
-        const scanByRef = new Map();
-        for (const candidate of [...navigationMessages, ...capturedMessages]) {
-          const ref = navigationRef(candidate);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          if (!key) continue;
-          const previous = scanByRef.get(key);
-          if (!previous) {
-            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
-            continue;
-          }
-          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
-          previous.images = merged.images;
-        }
-        scanPool.push(...scanByRef.values());
+        const scanPool = buildImageScanPool([
+          ...navigationMessages,
+          ...capturedMessages
+        ]);
 
         const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
         messages = merged.messages;
@@ -4164,16 +4197,17 @@
         // One reconcile pass owns both text and images. Track images that are
         // newly discovered relative to the saved archive so the same result can
         // later be patched into a linked Google Doc without a second scan.
-        const existingByRef = new Map();
-        for (const message of existing.messages || []) {
-          const ref = navigationRef(message);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          if (key) existingByRef.set(key, message);
-        }
-        for (const message of messages) {
-          const ref = navigationRef(message);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          const previous = key ? existingByRef.get(key) : null;
+        for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+          const message = messages[messageIndex];
+          const previousIndex = findContextualMessageIndex(
+            existing.messages || [],
+            message,
+            messages,
+            messageIndex
+          );
+          const previous = previousIndex >= 0
+            ? existing.messages[previousIndex]
+            : null;
           const previousImages = new Map(
             (previous?.images || []).map(image => [String(image?.src || ''), image])
           );
@@ -4200,21 +4234,10 @@
 
         // The upward and downward scans can each expose a different subset of
         // lazy-loaded images. Union them before merging into the saved archive.
-        const scanPool = [];
-        const scanByRef = new Map();
-        for (const candidate of [...navigationMessages, ...capturedMessages]) {
-          const ref = navigationRef(candidate);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          if (!key) continue;
-          const previous = scanByRef.get(key);
-          if (!previous) {
-            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
-            continue;
-          }
-          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
-          previous.images = merged.images;
-        }
-        scanPool.push(...scanByRef.values());
+        const scanPool = buildImageScanPool([
+          ...navigationMessages,
+          ...capturedMessages
+        ]);
 
         const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
         messages = merged.messages;
