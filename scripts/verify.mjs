@@ -250,6 +250,13 @@ try {
     fail('full capture: keep fast upward navigation but require one-burst overlap-verified chronological movement');
   }
 
+  if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
+      !contentSource.includes('if (!isStrongMessageId(strongId)) return false') ||
+      !contentSource.includes('strongId: isStrongMessageId(id) ? id :') ||
+      !contentSource.includes('y.strongId && y.strongId === x.strongId')) {
+    fail('scroll/continuation identity: stable anchors and one-message overlap must use strong IDs only');
+  }
+
   const topOnlyStart = contentSource.indexOf('async function reachTopWithoutCapture');
   const topOnlyEnd = contentSource.indexOf('async function reachResumeAnchor', topOnlyStart);
   const topOnlyBlock = topOnlyStart >= 0 && topOnlyEnd > topOnlyStart
