@@ -164,13 +164,15 @@ try {
   if (!fullTopBlock ||
       !fullDownBlock ||
       !fullTopBlock.includes("await physicalScroll('up', 7") ||
-      !fullTopBlock.includes('stable >= 4') ||
+      !fullTopBlock.includes("recoverVisibleLoadError('top'") ||
+      !fullTopBlock.includes('stable >= 4 && !visibleRetryButton()') ||
       fullTopBlock.includes('recordNavigationWindow(') ||
       !fullDownBlock.includes("await physicalScroll('down');") ||
-      !fullDownBlock.includes('stable >= 4') ||
+      !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
+      !fullDownBlock.includes('stable >= 4 && !visibleRetryButton()') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: preserve exact 0.4.17 traversal hot path without later image/reconciliation work inside the scroll loop');
+    fail('full capture: preserve 0.4.17 traversal cadence while keeping verified load-error recovery in both directions');
   }
 
   const pauseResumeBlock = contentSource.slice(
