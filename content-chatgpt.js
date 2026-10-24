@@ -2115,6 +2115,14 @@
     return keys.join('|') + '::' + keys.length;
   }
 
+  function visibleTopTextSignature(limit = 6) {
+    const signatures = orderedTurns()
+      .slice(0, Math.max(2, Number(limit) || 6))
+      .map(turn => turnTextSignature(turn))
+      .filter(Boolean);
+    return signatures.join('|') + '::' + signatures.length;
+  }
+
   function scrollObservation(capturedCount = 0) {
     const turns = orderedTurns();
     return scrollRuntime().observeWindow({
@@ -2143,7 +2151,8 @@
       bursts,
       getSignature: visibleTurnSignature,
       settleTimeout,
-      quietWindow
+      quietWindow,
+      turns: orderedTurns()
     });
     state.lastScrollDirection = result.direction;
     return result;
@@ -3874,11 +3883,15 @@
         }
 
         if (mode === 'full') {
-          // Historical 0.3.14/0.4.17 behavior: the upward pass is navigation
-          // only. The canonical archive is built once, chronologically, on the
-          // top-to-bottom pass. Do not compare two virtualized snapshots as if
-          // they were two independent canonical captures.
-          await reachTopFullLegacy(map, order, settings);
+          // Full capture must not parse/store the conversation while travelling
+          // upward. The upward phase is navigation only; the canonical archive
+          // is built once, chronologically, after the real top is confirmed.
+          map.clear();
+          order.length = 0;
+          await reachTopWithoutCapture(0, {
+            fullCapture: true,
+            timeoutMs: 20 * 60 * 1000
+          });
         } else {
           // Rich upward scans normally begin at the fixed lower boundary. Manual
           // full-range capture is different: the user already chose an explicit
