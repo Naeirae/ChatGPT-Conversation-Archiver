@@ -119,3 +119,15 @@ Remaining live validation must include deliberately repeated short messages (`Д
 During identity review, `reachResumeAnchor()` was found calling `hasStableResumeAnchor()` even though that helper was absent from the current content script. This is a runtime-only failure: JavaScript syntax checks do not detect an undefined function until the continuation path executes.
 
 The helper is restored with stricter semantics: only `data-message-id` / `data-turn-id` qualify as a stable one-message resume anchor. Legacy weak IDs fall through to multi-turn tail/context matching.
+
+
+## Long-top / persistent-gap regression findings
+
+Further review against the 0.3.87 fast-navigation implementation found several regressions that can explain both multi-hour top navigation and persistent silent message loss:
+
+- full capture had reverted to `reachTopFullLegacy()`, which parses and collects the viewport twice on every upward step; full capture now uses navigation-only ascent again;
+- top confirmation used wrapper-qualified keys, so recyclable virtual wrapper IDs could keep the viewport looking "changed" forever even when the oldest text was stable; top confirmation now uses the text signatures of the oldest visible turns;
+- physical wheel events were always sent to a fixed viewport point (68% / 48%) even though the content script already knew the real scroll container; the runtime now sends a point inside the detected scroller to the worker;
+- top navigation is bounded and aborts a non-moving transport instead of allowing a two-hour idle loop;
+- `orderedTurns()` previously treated ambiguous outer shells as one message and only considered `data-turn-key` wrappers when no normal turn was found at all; mixed rollout DOM can therefore hide visible messages. Logical turns now prefer role-bearing nodes, ambiguous shells are split, and unambiguous wrappers can coexist with ordinary shells;
+- chronological overlap proof is now directional: the suffix of the previous viewport must match the prefix of the next viewport. Arbitrary repeated pairs elsewhere in both windows no longer prove continuity.
