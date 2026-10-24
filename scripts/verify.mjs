@@ -272,11 +272,11 @@ try {
     ? contentSource.slice(topOnlyStart, topOnlyEnd)
     : '';
   if (!topOnlyBlock ||
-      !topOnlyBlock.includes('createStabilityState()') ||
-      !topOnlyBlock.includes('scrollObservation(existingCount)') ||
-      !topOnlyBlock.includes('updateStabilityState(stability, before, after') ||
-      !topOnlyBlock.includes('sameWindow(after, afterWait')) {
-    fail('continuation navigation: top-only traversal must use the shared scroll observation/stall state');
+      !topOnlyBlock.includes('visibleTopTextSignature()') ||
+      !topOnlyBlock.includes("await physicalScroll('up', 16") ||
+      !topOnlyBlock.includes('confirmedIdle >= 3') ||
+      !topOnlyBlock.includes('repeatedWithoutPhysicalTop')) {
+    fail('continuation navigation: top-only traversal must use text-stable progress detection and bounded stalls');
   }
 
   const resumeAnchorStart = contentSource.indexOf('async function reachResumeAnchor');
@@ -587,7 +587,7 @@ try {
     fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
   }
 
-  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
@@ -596,9 +596,11 @@ try {
       !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
       !physicalScrollBlock.includes("deltaY: sign * 860") ||
       !physicalScrollBlock.includes("await sleep(70)") ||
+      !physicalScrollBlock.includes('Number(point?.x)') ||
+      !physicalScrollBlock.includes('Number(point?.y)') ||
       physicalScrollBlock.includes('timedOut') ||
       physicalScrollBlock.includes('}, 3000)')) {
-    fail('full capture: preserve the pre-timeout 0.4.17 debugger-wheel transport without silent partial bursts');
+    fail('full capture: debugger-wheel transport must preserve complete bursts and honor the detected chat scroller point');
   }
 
 
