@@ -43,6 +43,7 @@
         "https://chat.openai.com/*"
       ],
       "js": [
+        "content-chatgpt-scroll.js",
         "content-chatgpt.js"
       ],
       "run_at": "document_idle"
