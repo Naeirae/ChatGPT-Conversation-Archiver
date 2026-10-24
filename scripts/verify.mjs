@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 
 const jsFiles = [
   'service-worker.js',
+  'content-chatgpt-scroll.js',
   'content-chatgpt.js',
   'popup.js',
   'updater.js',
@@ -57,7 +58,24 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_COMPARE_CURRENT'")) {
     fail('service-worker.js: missing compare-current route');
   }
+  const scrollSource = await readFile('content-chatgpt-scroll.js', 'utf8');
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
+  if (!scrollSource.includes("globalThis[KEY] = Object.freeze") ||
+      !scrollSource.includes('findScrollContainer') ||
+      !scrollSource.includes('physicalScrollStartVisible') ||
+      !scrollSource.includes('physicalScrollEndVisible') ||
+      !scrollSource.includes('findVisibleLoadRetry') ||
+      !scrollSource.includes('waitForTurnSettle') ||
+      !scrollSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
+    fail('scroll runtime: missing shared container/edge/retry/settle/transport primitives');
+  }
+  if (!contentSource.includes('function scrollRuntime()') ||
+      !contentSource.includes('scrollRuntime().findScrollContainer') ||
+      !contentSource.includes('scrollRuntime().findVisibleLoadRetry') ||
+      !contentSource.includes('scrollRuntime().physicalScroll') ||
+      contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
+    fail('content-chatgpt.js: traversal must use the shared scroll runtime instead of reimplementing transport');
+  }
   if (!contentSource.includes("return 'turn:' + wrapperKey + ':' + role + ':'") ||
       !contentSource.includes('hashText(normalizeMatchText(turnMessageText(turn)))')) {
     fail('long-chat identity: virtual data-turn-key wrappers must remain message-qualified; wrapper keys are recyclable');
@@ -566,6 +584,12 @@ try {
 
 try {
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+  const chatScripts = manifest.content_scripts?.find(item =>
+    (item.matches || []).some(match => String(match).includes('chatgpt.com'))
+  )?.js || [];
+  if (chatScripts[0] !== 'content-chatgpt-scroll.js' || chatScripts[1] !== 'content-chatgpt.js') {
+    fail('manifest.json: shared scroll runtime must load immediately before content-chatgpt.js');
+  }
   if (manifest.manifest_version !== 3) {
     fail('manifest.json: manifest_version must be 3');
   }
