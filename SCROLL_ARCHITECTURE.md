@@ -1,6 +1,6 @@
 # Scroll architecture cleanup
 
-Status: in progress. Branch: `scroll-architecture-cleanup-2026-10-24`.
+Status: in progress. Branch: `scroll-architecture-cleanup-2026-10-24`. Draft PR: #33.
 
 ## Current stop point
 
@@ -31,8 +31,8 @@ The current production source is 0.4.45. Full capture was patched so a verified 
 | ID | Task | Requirements | Status | Verification |
 | --- | --- | --- | --- | --- |
 | T001 | Inventory current scroll paths and duplicated rules. | R001-R007 | Verified | Full/continue/reconcile/draft paths and worker CDP transport inspected. |
-| T002 | Extract shared page-side scroll primitives from `content-chatgpt.js`. | R001-R003,R005-R006 | In progress | Syntax + static guard + unchanged full cadence. |
-| T003 | Route existing full/rich/resume code through the extracted primitives without changing policy. | R001-R004,R006 | Not started | Static regression gate, then Chrome live test. |
+| T002 | Extract shared page-side scroll primitives from `content-chatgpt.js`. | R001-R003,R005-R006 | Done, not live-verified | `content-chatgpt-scroll.js` now owns container/edge/retry/settle/physical-scroll request. |
+| T003 | Route existing full/rich/resume code through the extracted primitives without changing policy. | R001-R004,R006 | Done, not live-verified | `content-chatgpt.js` now uses thin wrappers; full cadence remains 7-burst up / one request down. |
 | T004 | Make retry/stall state explicit and common across traversal policies. | R001-R003,R006 | Not started | Fixtures + long-chat live test with forced load stall. |
 | T005 | Separate traversal policies from capture/image work. | R003-R006 | Not started | No image hydration calls in scroll runtime; policy-specific tests. |
 | T006 | Consolidate worker CDP transport behind one helper with bounded command behavior and transport diagnostics. | R003,R006-R007 | Not started | Static check + long-chat live test. |
@@ -40,8 +40,18 @@ The current production source is 0.4.45. Full capture was patched so a verified 
 
 ## Progress
 
-Verified checklist points: 1/7 (14%). One implementation task is in progress. No live behavior on this branch is claimed yet.
+Verified checklist points: 1/7 (14%). Source implementation is complete for T002/T003 but not counted as verified until browser/runtime checks. No live behavior on this branch is claimed yet.
 
 ## Next operation
 
-Finish T002/T003: load `content-chatgpt-scroll.js` before the main content adapter, replace duplicated primitives in `content-chatgpt.js` with thin wrappers, add package/verification guards, and keep capture policies otherwise byte-equivalent where possible.
+Start T004: introduce one explicit scroll observation/stall state shared by full/top, full/down, rich traversal and continuation search. Do not change the historical full-capture wheel cadence yet. Then run a scroll-only live regression matrix before touching image architecture.
+
+
+## CI note — 2026-10-24
+
+Draft PR #33 triggers CI. The new scroll file parses and all 46 dependency-free tests pass, but the extension job is still red because the current `main` baseline is already red on two stale/unrelated static guards:
+
+- verifier still requires `reachLiveBottomForSnapshot`, which is absent from current `main`;
+- verifier still requires an older Google Docs debugger/clipboard timeout contract, also absent from current `main`.
+
+The same `main` head (`d25b2f95...`, 0.4.45) fails CI independently. Do not mix those baseline repairs into the scroll refactor unless explicitly taken as a separate task.
