@@ -91,3 +91,24 @@ The branch now changes only chronological full capture:
 - failure to re-establish overlap aborts instead of saving a holey archive.
 
 This is now a stronger invariant than preserving the old 0.4.17 downward request shape.
+
+
+## Identity / deduplication hardening
+
+A second silent-loss class was confirmed independently of scrolling: weak virtualized IDs and standalone text signatures were being used as if they proved message identity.
+
+Changes on this branch:
+
+- `data-message-id` / `data-turn-id` are the only single-message strong identities;
+- virtual wrapper/text IDs remain useful capture keys, but collisions are checked against neighbouring message context;
+- if the same weak ID reappears with incompatible neighbours, both occurrences are preserved;
+- `sameNavigationRef()` now accepts strong IDs only;
+- weak text matches are allowed only inside an ordered 2–4 message sequence and only when that contextual match is unique;
+- navigation reconciliation, archive reconciliation and image recovery use contextual matching instead of standalone text equality;
+- continuation cross-boundary deduplication now filters only by strong IDs;
+- image scan pooling no longer groups different repeated messages by text/weak ID alone;
+- rebuilding the capture map preserves weak-ID collisions rather than silently dropping the second entry;
+- automatic snapshot boundaries carry up to three preceding message signatures, so repeated boundary text cannot stop the pass early by itself;
+- scroll settle signatures now include every visible turn rather than only the first/last three.
+
+Remaining live validation must include deliberately repeated short messages (`Да`, `Окей`, identical assistant replies) across several virtualized windows.
