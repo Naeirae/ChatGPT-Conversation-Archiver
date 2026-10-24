@@ -4470,21 +4470,10 @@
           const storedArchive = await chrome.storage.local.get('archive:' + existingArchiveId);
           const existingArchive = storedArchive['archive:' + existingArchiveId];
           if (existingArchive?.messages?.length) {
-            const partialScan = [];
-            const partialByRef = new Map();
-            for (const candidate of [...navigationMessages, ...order.map(id => map.get(id)).filter(Boolean)]) {
-              const ref = navigationRef(candidate);
-              const key = ref.id || ref.signature || ref.externalSignature;
-              if (!key) continue;
-              const previous = partialByRef.get(key);
-              if (!previous) {
-                partialByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
-                continue;
-              }
-              const union = mergeImageRecords(previous.images || [], candidate.images || []);
-              previous.images = union.images;
-            }
-            partialScan.push(...partialByRef.values());
+            const partialScan = buildImageScanPool([
+              ...navigationMessages,
+              ...order.map(id => map.get(id)).filter(Boolean)
+            ]);
 
             const salvaged = mergeRecoveredImagesIntoArchive(existingArchive.messages, partialScan);
             if (salvaged.recovered.length) {
@@ -4560,14 +4549,19 @@
               // resume-draft starts after a proven anchor. Repeated text is valid
               // new content; only stable IDs may prove an overlap with the old
               // saved prefix.
-              const seenIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-              const delta = draftMessages.filter(item =>
-                !(item.id && seenIds.has(item.id))
-              );
-              const refreshed = existing.messages.map(previous => {
-                const newer = draftMessages.find(item =>
-                  previous.id && item.id === previous.id
+              const seenIds = new Set(existing.messages.map(messageStrongId).filter(Boolean));
+              const delta = draftMessages.filter(item => {
+                const strongId = messageStrongId(item);
+                return !(strongId && seenIds.has(strongId));
+              });
+              const refreshed = existing.messages.map((previous, previousIndex) => {
+                const newerIndex = findContextualMessageIndex(
+                  draftMessages,
+                  previous,
+                  existing.messages,
+                  previousIndex
                 );
+                const newer = newerIndex >= 0 ? draftMessages[newerIndex] : null;
                 return newer ? mergeRicherCapture(newer, previous) : previous;
               });
               draftMessages = refreshed.concat(delta);
