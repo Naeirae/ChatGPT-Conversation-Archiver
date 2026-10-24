@@ -1486,6 +1486,39 @@
     return [...new Set(touchedIds)];
   }
 
+  function rebuildCaptureMap(map, order, messages) {
+    map.clear();
+    order.length = 0;
+
+    for (let index = 0; index < (messages || []).length; index++) {
+      const message = messages[index];
+      if (!message?.id) continue;
+
+      let id = String(message.id);
+      if (map.has(id)) {
+        if (messageStrongId(message)) {
+          // A duplicate strong ID is the same logical message; keep the richer
+          // snapshot instead of inventing a second occurrence.
+          map.set(id, mergeRicherCapture(message, map.get(id)));
+          continue;
+        }
+
+        const contextKey = weakIdentityContextKey(message) ||
+          hashText([messageTextSignature(message), String(index)].join('|'));
+        let candidate = id + ':ctx:' + contextKey;
+        let collision = 1;
+        while (map.has(candidate)) {
+          candidate = id + ':ctx:' + contextKey + ':' + collision++;
+        }
+        id = candidate;
+        message.id = id;
+      }
+
+      map.set(id, message);
+      order.push(id);
+    }
+  }
+
   function capturedImageStats(messages) {
     const images = (messages || []).flatMap(item => item?.images || []);
     return {
@@ -1537,7 +1570,7 @@
 
   function messageStrongId(message) {
     const id = String(message?.id || '');
-    return message?.identityStrong || isStrongMessageId(id) ? id : '';
+    return (message?.identityStrong || isStrongMessageId(id)) ? id : '';
   }
 
   function navigationRef(message) {
@@ -4000,13 +4033,7 @@
 
         // Keep the best first-pass result as the unfinished-pass source too. The old
         // coverage retry cleared map/order and could destroy a usable capture.
-        map.clear();
-        order.length = 0;
-        for (const message of capturedMessages) {
-          if (!message?.id || map.has(message.id)) continue;
-          map.set(message.id, message);
-          order.push(message.id);
-        }
+        rebuildCaptureMap(map, order, capturedMessages);
 
         await progress(
           mode === 'full'
