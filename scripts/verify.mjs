@@ -233,7 +233,7 @@ try {
   if (!fullCaptureWindow ||
       !fullCaptureWindow.includes('await reachTopWithoutCapture(0') ||
       !fullCaptureWindow.includes('fullCapture: true') ||
-      fullCaptureWindow.includes('await reachTopFullLegacy(map, order, settings)') ||
+      contentSource.includes('async function reachTopFullLegacy') ||
       !contentSource.includes('navigationHighWater = 0;') ||
       !contentSource.includes('navigationMessages = [];') ||
       !contentSource.includes('navigationSequence = [];') ||
