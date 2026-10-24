@@ -3475,73 +3475,7 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
-  async function reachTopFullLegacy(map, order, settings) {
-    const stability = scrollRuntime().createStabilityState();
 
-    for (let i = 0; i < 260; i++) {
-      await waitIfPaused();
-
-      if (await recoverVisibleLoadError('top', map.size)) {
-        scrollRuntime().resetStabilityState(stability);
-      }
-
-      if (state.manualTopConfirmed) {
-        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          manualTopConfirmed: true,
-          force: true
-        });
-        return;
-      }
-
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-
-      const before = scrollObservation(map.size);
-      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
-        phase: 'top',
-        iteration: i + 1
-      });
-
-      // Historical working cadence from 0.3.14.
-      await physicalScroll('up', 7, {
-        settleTimeout: 1600,
-        quietWindow: 360
-      });
-
-      if (state.manualTopConfirmed) {
-        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          manualTopConfirmed: true,
-          force: true
-        });
-        return;
-      }
-
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-
-      const after = scrollObservation(map.size);
-      const stall = scrollRuntime().updateStabilityState(stability, before, after);
-
-      // Keep the old conservative stop rule, but make the retry/error state part
-      // of the shared observation so a failed lazy-load window cannot count.
-      if (stall.stable >= 4) {
-        await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          force: true
-        });
-        return;
-      }
-    }
-
-    throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
-  }
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
     const stability = scrollRuntime().createStabilityState();
@@ -3965,9 +3899,10 @@
         }
 
         if (mode === 'full') {
-          // Full capture must not parse/store the conversation while travelling
-          // upward. The upward phase is navigation only; the canonical archive
-          // is built once, chronologically, after the real top is confirmed.
+          // Restore the 0.3.87 fast path: full capture must not parse/store the
+          // conversation while travelling upward. The upward phase is navigation
+          // only; the canonical archive is built once, chronologically, after
+          // the real top is confirmed.
           map.clear();
           order.length = 0;
           await reachTopWithoutCapture(0, {
