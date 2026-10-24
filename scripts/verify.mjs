@@ -65,6 +65,10 @@ try {
       !scrollSource.includes('physicalScrollStartVisible') ||
       !scrollSource.includes('physicalScrollEndVisible') ||
       !scrollSource.includes('findVisibleLoadRetry') ||
+      !scrollSource.includes('observeWindow') ||
+      !scrollSource.includes('createStabilityState') ||
+      !scrollSource.includes('updateStabilityState') ||
+      !scrollSource.includes('sameWindow') ||
       !scrollSource.includes('waitForTurnSettle') ||
       !scrollSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
     fail('scroll runtime: missing shared container/edge/retry/settle/transport primitives');
@@ -183,14 +187,31 @@ try {
       !fullDownBlock ||
       !fullTopBlock.includes("await physicalScroll('up', 7") ||
       !fullTopBlock.includes("recoverVisibleLoadError('top'") ||
-      !fullTopBlock.includes('stable >= 4 && !visibleRetryButton()') ||
+      !fullTopBlock.includes('scrollObservation(map.size)') ||
+      !fullTopBlock.includes('updateStabilityState(stability, before, after)') ||
+      !fullTopBlock.includes('stall.stable >= 4') ||
       fullTopBlock.includes('recordNavigationWindow(') ||
       !fullDownBlock.includes("await physicalScroll('down');") ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
-      !fullDownBlock.includes('stable >= 4 && !visibleRetryButton()') ||
+      !fullDownBlock.includes('scrollObservation(map.size)') ||
+      !fullDownBlock.includes('updateStabilityState(stability, before, after)') ||
+      !fullDownBlock.includes('stall.stable >= 4') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: preserve 0.4.17 traversal cadence while keeping verified load-error recovery in both directions');
+    fail('full capture: preserve 0.4.17 cadence while using the shared retry-aware scroll observation state');
+  }
+
+  const topOnlyStart = contentSource.indexOf('async function reachTopWithoutCapture');
+  const topOnlyEnd = contentSource.indexOf('async function reachResumeAnchor', topOnlyStart);
+  const topOnlyBlock = topOnlyStart >= 0 && topOnlyEnd > topOnlyStart
+    ? contentSource.slice(topOnlyStart, topOnlyEnd)
+    : '';
+  if (!topOnlyBlock ||
+      !topOnlyBlock.includes('createStabilityState()') ||
+      !topOnlyBlock.includes('scrollObservation(existingCount)') ||
+      !topOnlyBlock.includes('updateStabilityState(stability, before, after') ||
+      !topOnlyBlock.includes('sameWindow(after, afterWait')) {
+    fail('continuation navigation: top-only traversal must use the shared scroll observation/stall state');
   }
 
   const pauseResumeBlock = contentSource.slice(
@@ -224,7 +245,8 @@ try {
       !contentSource.includes("collect(map, order, settings, boundary)") ||
       !contentSource.includes('locateBoundaryForUpwardScan') ||
       !contentSource.includes('recordNavigationWindow(navigationWindows, settings, checkpointBoundary)') ||
-      !contentSource.includes('reachLiveBottomForSnapshot') ||
+      !contentSource.includes('fixedCaptureBoundary') ||
+      !contentSource.includes('trimMessagesThroughBoundary(capturedMessages, boundary)') ||
       !contentSource.includes("['compare', 'images'].includes(mode)")) {
     fail('content-chatgpt.js: missing proven live-bottom snapshot boundary or bounded rich traversal');
   }
