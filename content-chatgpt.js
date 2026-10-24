@@ -3223,6 +3223,12 @@
     for (let i = 0; i < 260; i++) {
       await waitIfPaused();
 
+      if (await recoverVisibleLoadError('top', map.size)) {
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+      }
+
       if (state.manualTopConfirmed) {
         await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
           phase: 'top',
@@ -3264,7 +3270,9 @@
       collect(map, order, settings);
 
       const nextSignature = visibleTurnSignature();
+      const retryVisible = Boolean(visibleRetryButton());
       if (
+        !retryVisible &&
         nextSignature &&
         nextSignature === signature &&
         signature === previousSignature &&
@@ -3280,7 +3288,7 @@
 
       // This is intentionally the old conservative stop rule. If ChatGPT is
       // slow at the top, the user can press "I'm at the beginning".
-      if (stable >= 4) {
+      if (stable >= 4 && !visibleRetryButton()) {
         await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
@@ -3300,6 +3308,12 @@
 
     for (let i = 0; i < 520; i++) {
       await waitIfPaused();
+
+      if (await recoverVisibleLoadError('walk', map.size)) {
+        stable = 0;
+        previousSignature = '';
+        previousSize = -1;
+      }
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -3328,7 +3342,8 @@
       await physicalScroll('down');
 
       const nextSignature = visibleTurnSignature();
-      if (nextSignature && nextSignature === signature &&
+      const retryVisible = Boolean(visibleRetryButton());
+      if (!retryVisible && nextSignature && nextSignature === signature &&
           signature === previousSignature && map.size === previousSize) {
         stable++;
       } else {
@@ -3338,7 +3353,7 @@
       previousSignature = nextSignature;
       previousSize = map.size;
 
-      if (stable >= 4) break;
+      if (stable >= 4 && !visibleRetryButton()) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
