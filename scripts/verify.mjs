@@ -262,8 +262,10 @@ try {
   if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
       !contentSource.includes('if (!isStrongMessageId(strongId)) return false') ||
       !contentSource.includes('strongId: isStrongMessageId(id) ? id :') ||
-      !contentSource.includes('y.strongId && y.strongId === x.strongId')) {
-    fail('scroll/continuation identity: stable anchors and one-message overlap must use strong IDs only');
+      !contentSource.includes('const leftTail = left.slice(left.length - length)') ||
+      !contentSource.includes('const rightHead = right.slice(0, length)') ||
+      !contentSource.includes('x.strongId === y.strongId')) {
+    fail('scroll/continuation identity: stable anchors and directional one-message overlap must use strong IDs only');
   }
 
   const topOnlyStart = contentSource.indexOf('async function reachTopWithoutCapture');
