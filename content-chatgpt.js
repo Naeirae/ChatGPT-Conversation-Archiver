@@ -1857,6 +1857,16 @@
     return keys.slice(0, 3).concat(keys.slice(-3)).join('|') + '::' + keys.length;
   }
 
+  function scrollObservation(capturedCount = 0) {
+    const turns = orderedTurns();
+    return scrollRuntime().observeWindow({
+      turns,
+      getTurnKey: turn => turnStableKey(turn) || turnTextSignature(turn),
+      signature: visibleTurnSignature(),
+      capturedCount
+    });
+  }
+
   async function waitForTurnSettle(timeout = 8000, quietWindow = 1400) {
     return scrollRuntime().waitForTurnSettle(visibleTurnSignature, {
       timeout,
@@ -3134,17 +3144,13 @@
   }
 
   async function reachTopFullLegacy(map, order, settings) {
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
+    const stability = scrollRuntime().createStabilityState();
 
     for (let i = 0; i < 260; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('top', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
       }
 
       if (state.manualTopConfirmed) {
@@ -3161,7 +3167,7 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
-      const signature = visibleTurnSignature();
+      const before = scrollObservation(map.size);
       await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
@@ -3187,26 +3193,12 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings);
 
-      const nextSignature = visibleTurnSignature();
-      const retryVisible = Boolean(visibleRetryButton());
-      if (
-        !retryVisible &&
-        nextSignature &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        map.size === previousSize
-      ) {
-        stable++;
-      } else {
-        stable = 0;
-      }
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(stability, before, after);
 
-      previousSignature = nextSignature;
-      previousSize = map.size;
-
-      // This is intentionally the old conservative stop rule. If ChatGPT is
-      // slow at the top, the user can press "I'm at the beginning".
-      if (stable >= 4 && !visibleRetryButton()) {
+      // Keep the old conservative stop rule, but make the retry/error state part
+      // of the shared observation so a failed lazy-load window cannot count.
+      if (stall.stable >= 4) {
         await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
           phase: 'top',
           iteration: i + 1,
@@ -3220,17 +3212,13 @@
   }
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
+    const stability = scrollRuntime().createStabilityState();
 
     for (let i = 0; i < 520; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -3248,7 +3236,7 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const signature = visibleTurnSignature();
+      const before = scrollObservation(map.size);
       await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
         phase: 'walk',
         iteration: i + 1,
@@ -3259,19 +3247,9 @@
       // virtualized window to settle. No checkpoint/storage/network/recovery work here.
       await physicalScroll('down');
 
-      const nextSignature = visibleTurnSignature();
-      const retryVisible = Boolean(visibleRetryButton());
-      if (!retryVisible && nextSignature && nextSignature === signature &&
-          signature === previousSignature && map.size === previousSize) {
-        stable++;
-      } else {
-        stable = 0;
-      }
-
-      previousSignature = nextSignature;
-      previousSize = map.size;
-
-      if (stable >= 4 && !visibleRetryButton()) break;
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(stability, before, after);
+      if (stall.stable >= 4) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
