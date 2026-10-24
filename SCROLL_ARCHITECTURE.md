@@ -33,18 +33,18 @@ The current production source is 0.4.45. Full capture was patched so a verified 
 | T001 | Inventory current scroll paths and duplicated rules. | R001-R007 | Verified | Full/continue/reconcile/draft paths and worker CDP transport inspected. |
 | T002 | Extract shared page-side scroll primitives from `content-chatgpt.js`. | R001-R003,R005-R006 | Done, not live-verified | `content-chatgpt-scroll.js` now owns container/edge/retry/settle/physical-scroll request. |
 | T003 | Route existing full/rich/resume code through the extracted primitives without changing policy. | R001-R004,R006 | Done, not live-verified | `content-chatgpt.js` now uses thin wrappers; full cadence remains 7-burst up / one request down. |
-| T004 | Make retry/stall state explicit and common across traversal policies. | R001-R003,R006 | Not started | Fixtures + long-chat live test with forced load stall. |
+| T004 | Make retry/stall state explicit and common across traversal policies. | R001-R003,R006 | Done, not live-verified | Full up/down, rich up/down, top-only continuation and resume-anchor search use shared observations/stability state. |
 | T005 | Separate traversal policies from capture/image work. | R003-R006 | Not started | No image hydration calls in scroll runtime; policy-specific tests. |
 | T006 | Consolidate worker CDP transport behind one helper with bounded command behavior and transport diagnostics. | R003,R006-R007 | Not started | Static check + long-chat live test. |
 | T007 | Run scroll-only live regression matrix before touching image architecture. | R001-R007 | Not started | short/long/full/continue/retry/error/manual pause. |
 
 ## Progress
 
-Verified checklist points: 1/7 (14%). Source implementation is complete for T002/T003 but not counted as verified until browser/runtime checks. No live behavior on this branch is claimed yet.
+Verified checklist points: 1/7 (14%). Source implementation is complete for T002/T003/T004 but not counted as live-verified. Static syntax passes, all 46 dependency-free tests pass, and scroll-specific guards pass. No browser live behavior on this branch is claimed yet.
 
 ## Next operation
 
-Start T004: introduce one explicit scroll observation/stall state shared by full/top, full/down, rich traversal and continuation search. Do not change the historical full-capture wheel cadence yet. Then run a scroll-only live regression matrix before touching image architecture.
+Run T007 before further architecture changes: live-test long full capture, forced Retry/load stall, continuation from a saved tail, resume-draft, and pause/resume. Keep images/export frozen until this scroll matrix is stable.
 
 
 ## CI note — 2026-10-24
@@ -55,3 +55,21 @@ Draft PR #33 triggers CI. The new scroll file parses and all 46 dependency-free 
 - verifier still requires an older Google Docs debugger/clipboard timeout contract, also absent from current `main`.
 
 The same `main` head (`d25b2f95...`, 0.4.45) fails CI independently. Do not mix those baseline repairs into the scroll refactor unless explicitly taken as a separate task.
+
+
+## T004 result
+
+The shared observation now records visible-window signature, first/last visible message keys, visible count, captured count, verified load-error/retry state, and physical edge metrics. One shared stability state tracks repeated windows.
+
+Applied without changing established motion cadence to:
+
+- legacy full-capture upward navigation;
+- legacy full-capture chronological downward pass;
+- rich upward traversal;
+- rich downward traversal;
+- top-only navigation used before retrying a chronological pass;
+- saved continuation-anchor search, including its downward fallback.
+
+A single `physicalScrollStartVisible()` result no longer aborts continuation-anchor search. The search requires repeated unchanged observations without a verified load error; when downward fallback is allowed, a confirmed top transitions into that fallback instead of throwing immediately.
+
+CI run 709 on commit `1581c565...` reports no scroll/static/test failures. All 46 tests pass. The only extension-job error is the pre-existing Google Docs timeout guard also present on current `main`; it remains outside this scroll task.
