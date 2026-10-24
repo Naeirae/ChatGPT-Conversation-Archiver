@@ -107,6 +107,94 @@
     }) || null;
   }
 
+  function observeWindow({
+    turns = [],
+    getTurnKey,
+    signature = '',
+    capturedCount = 0
+  } = {}) {
+    const keyOf = typeof getTurnKey === 'function'
+      ? getTurnKey
+      : () => '';
+    const first = turns[0] || null;
+    const last = turns[turns.length - 1] || null;
+    return Object.freeze({
+      signature: String(signature || ''),
+      firstKey: first ? String(keyOf(first) || '') : '',
+      lastKey: last ? String(keyOf(last) || '') : '',
+      visibleCount: turns.length,
+      capturedCount: Number(capturedCount) || 0,
+      retryVisible: Boolean(findVisibleLoadRetry()),
+      atStart: physicalScrollStartVisible(turns),
+      atEnd: physicalScrollEndVisible(turns)
+    });
+  }
+
+  function createStabilityState() {
+    return {
+      stable: 0,
+      previousSignature: '',
+      previousCapturedCount: -1,
+      previousFirstKey: '',
+      previousLastKey: ''
+    };
+  }
+
+  function resetStabilityState(state) {
+    if (!state) return createStabilityState();
+    state.stable = 0;
+    state.previousSignature = '';
+    state.previousCapturedCount = -1;
+    state.previousFirstKey = '';
+    state.previousLastKey = '';
+    return state;
+  }
+
+  function sameWindow(left, right, {
+    requireCapturedCount = true,
+    requireFirstKey = false,
+    requireLastKey = false
+  } = {}) {
+    if (!left || !right || right.retryVisible) return false;
+    if (!right.signature || right.signature !== left.signature) return false;
+    if (requireCapturedCount && right.capturedCount !== left.capturedCount) return false;
+    if (requireFirstKey && right.firstKey !== left.firstKey) return false;
+    if (requireLastKey && right.lastKey !== left.lastKey) return false;
+    return true;
+  }
+
+  function updateStabilityState(state, before, after, {
+    requireCapturedCount = true,
+    requireFirstKey = false,
+    requireLastKey = false
+  } = {}) {
+    const target = state || createStabilityState();
+    const repeatedPrevious = Boolean(
+      after?.signature &&
+      before?.signature === target.previousSignature &&
+      (!requireCapturedCount || after.capturedCount === target.previousCapturedCount) &&
+      (!requireFirstKey || after.firstKey === target.previousFirstKey) &&
+      (!requireLastKey || after.lastKey === target.previousLastKey)
+    );
+    const unchanged = sameWindow(before, after, {
+      requireCapturedCount,
+      requireFirstKey,
+      requireLastKey
+    }) && repeatedPrevious;
+
+    target.stable = unchanged ? target.stable + 1 : 0;
+    target.previousSignature = String(after?.signature || '');
+    target.previousCapturedCount = Number(after?.capturedCount) || 0;
+    target.previousFirstKey = String(after?.firstKey || '');
+    target.previousLastKey = String(after?.lastKey || '');
+
+    return {
+      unchanged,
+      stable: target.stable,
+      observation: after
+    };
+  }
+
   async function waitForTurnSettle(
     getSignature,
     { timeout = 8000, quietWindow = 1400, pollMs = 220 } = {}
@@ -170,6 +258,11 @@
     physicalScrollStartVisible,
     physicalScrollEndVisible,
     findVisibleLoadRetry,
+    observeWindow,
+    createStabilityState,
+    resetStabilityState,
+    sameWindow,
+    updateStabilityState,
     waitForTurnSettle,
     physicalScroll
   });
