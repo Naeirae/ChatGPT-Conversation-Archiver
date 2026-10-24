@@ -2108,9 +2108,7 @@
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
     let confirmedIdle = 0;
-    let previousSignature = '';
-    let previousSize = -1;
-    let firstVisibleKey = '';
+    const stability = scrollRuntime().createStabilityState();
 
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
@@ -2128,9 +2126,7 @@
 
       if (await recoverVisibleLoadError('top', map.size)) {
         confirmedIdle = 0;
-        previousSignature = '';
-        previousSize = -1;
-        firstVisibleKey = '';
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -2145,11 +2141,7 @@
           text: turnMessageText(turn)
         }, startAnchor))) return;
 
-      const turnsBefore = orderedTurns();
-      const signature = visibleTurnSignature();
-      const firstBefore = turnsBefore.length
-        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
-        : '';
+      const before = scrollObservation(map.size);
 
       await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
@@ -2188,26 +2180,16 @@
           text: turnMessageText(turn)
         }, startAnchor))) return;
 
-      let nextSignature = visibleTurnSignature();
-      let turnsAfter = orderedTurns();
-      let firstAfter = turnsAfter.length
-        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-        : '';
-      let nextSize = map.size;
+      const after = scrollObservation(map.size);
+      const candidate = scrollRuntime().updateStabilityState(stability, before, after, {
+        requireFirstKey: true
+      });
 
-      const unchanged =
-        Boolean(nextSignature) &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        nextSize === previousSize &&
-        firstAfter === firstBefore &&
-        firstAfter === firstVisibleKey;
-
-      if (unchanged) {
+      if (candidate.unchanged) {
         await progress('Этап 1/3: проверяю, не догружается ли начало…', map.size, {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: confirmedIdle + 1
+          topIdleConfirmations: candidate.stable
         });
 
         await sleep(700);
@@ -2216,33 +2198,18 @@
         collect(map, order, settings, checkpointBoundary);
         recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
-        const afterWaitSignature = visibleTurnSignature();
-        turnsAfter = orderedTurns();
-        const afterWaitFirst = turnsAfter.length
-          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-          : '';
-
-        if (
-          afterWaitSignature === nextSignature &&
-          map.size === nextSize &&
-          afterWaitFirst === firstAfter
-        ) {
-          confirmedIdle++;
+        const afterWait = scrollObservation(map.size);
+        if (scrollRuntime().sameWindow(after, afterWait, { requireFirstKey: true })) {
+          confirmedIdle = candidate.stable;
         } else {
           confirmedIdle = 0;
-          nextSignature = afterWaitSignature;
-          firstAfter = afterWaitFirst;
-          nextSize = map.size;
+          scrollRuntime().primeStabilityState(stability, afterWait);
         }
       } else {
         confirmedIdle = 0;
       }
 
-      previousSignature = nextSignature;
-      previousSize = nextSize;
-      firstVisibleKey = firstAfter;
-
-      if (confirmedIdle >= 2 && !visibleRetryButton()) {
+      if (confirmedIdle >= 2) {
         if (startAnchor) {
           throw new Error('Не удалось найти отмеченное начало: достигнуто начало переписки.');
         }
@@ -3270,9 +3237,7 @@
       attemptedImageSources = new Set()
     } = {}
   ) {
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
+    const stability = scrollRuntime().createStabilityState();
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -3280,9 +3245,7 @@
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -3321,7 +3284,7 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const signature = visibleTurnSignature();
+      const before = scrollObservation(map.size);
       const walkImageStats = capturedImageStats([...map.values()]);
       await progress(
         'Этап 2/3: физически прохожу вниз · ' +
@@ -3393,24 +3356,17 @@
           );
         }
 
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
         await saveRecoveryCheckpoint(map, order, boundary);
         continue;
       }
 
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      const nextSignature = visibleTurnSignature();
-      if (nextSignature && nextSignature === signature &&
-          signature === previousSignature && map.size === previousSize) stable++;
-      else stable = 0;
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(stability, before, after);
 
-      previousSignature = nextSignature;
-      previousSize = map.size;
-
-      if (stable >= 3 && physicalScrollEndVisible()) {
+      if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
           throw new Error(
             'Достигнут физический конец, но отмеченная нижняя граница не найдена. ' +
@@ -3439,7 +3395,7 @@
         return { boundaryReached: false, physicalEndReached: true };
       }
 
-      if (stable >= 6) {
+      if (stall.stable >= 6) {
         throw new Error(
           'Хронологический проход остановился до зафиксированного конца снимка.'
         );
