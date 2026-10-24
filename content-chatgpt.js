@@ -419,6 +419,29 @@
     return '';
   }
 
+  function isStrongMessageId(id = '') {
+    return /^(?:data-message-id|data-turn-id):/.test(String(id || ''));
+  }
+
+  function turnIdentityContext(turn) {
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    if (index < 0) return { previous: '', next: '' };
+    const previousTurn = index > 0 ? turns[index - 1] : null;
+    const nextTurn = index + 1 < turns.length ? turns[index + 1] : null;
+    return {
+      previous: previousTurn ? turnTextSignature(previousTurn) : '',
+      next: nextTurn ? turnTextSignature(nextTurn) : ''
+    };
+  }
+
+  function identityContextsCompatible(a, b) {
+    if (!a || !b) return true;
+    if (a.previous && b.previous && a.previous !== b.previous) return false;
+    if (a.next && b.next && a.next !== b.next) return false;
+    return true;
+  }
+
   function turnMessageText(turn) {
     const role = roleOf(turn) || 'unknown';
     const root = contentRoot(turn, role);
@@ -1140,8 +1163,11 @@
       : { html: '', text: '', label: '', count: 0 };
 
     const stableId = turnStableKey(turn);
+    const identityContext = turnIdentityContext(turn);
     return {
       id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
+      identityStrong: isStrongMessageId(stableId),
+      identityContext,
       role,
       text,
       html: extraBefore.join('') + clone.innerHTML + extraAfter.join(''),
@@ -1420,17 +1446,34 @@
       const message = captureTurn(turn, ordinal, settings);
 
       if (message) {
-        touchedIds.push(message.id);
-        const existing = map.get(message.id);
+        let messageId = message.id;
+        let existing = map.get(messageId);
+
+        // A virtual wrapper/text ID is only a weak identity. If the same weak ID
+        // reappears with incompatible neighbours, keep both occurrences instead
+        // of silently merging a repeated message into the earlier one.
+        if (existing && !message.identityStrong &&
+            !identityContextsCompatible(existing.identityContext, message.identityContext)) {
+          const contextKey = hashText([
+            message.identityContext?.previous || '',
+            messageTextSignature(message),
+            message.identityContext?.next || ''
+          ].join('|'));
+          messageId = message.id + ':ctx:' + contextKey;
+          message.id = messageId;
+          existing = map.get(messageId);
+        }
+
+        touchedIds.push(messageId);
         if (!existing) {
-          order.push(message.id);
-          map.set(message.id, message);
+          order.push(messageId);
+          map.set(messageId, message);
         } else {
           // Virtualization can recreate the same turn after a prepared image has
           // disappeared or been recreated as a fresh pending <img>. Preserve the
           // richer snapshot, including ready image binaries even when image counts
           // are equal.
-          map.set(message.id, mergeRicherCapture(message, existing));
+          map.set(messageId, mergeRicherCapture(message, existing));
         }
       }
 
@@ -1493,8 +1536,10 @@
   }
 
   function navigationRef(message) {
+    const id = String(message?.id || '');
     return {
-      id: String(message?.id || ''),
+      id,
+      strongId: message?.identityStrong || isStrongMessageId(id) ? id : '',
       signature: message ? messageTextSignature(message) : '',
       externalSignature: message
         ? externalMatchSignature(message?.role || 'unknown', message?.text || '')
@@ -1504,12 +1549,28 @@
 
   function sameNavigationRef(a, b) {
     if (!a || !b) return false;
-    if (a.id && b.id && a.id === b.id) return true;
+    return Boolean(a.strongId && b.strongId && a.strongId === b.strongId);
+  }
+
+  function sameNavigationText(a, b) {
+    if (!a || !b) return false;
     if (a.signature && b.signature && a.signature === b.signature) return true;
     return Boolean(
       a.externalSignature &&
       b.externalSignature &&
       a.externalSignature === b.externalSignature
+    );
+  }
+
+  function sameNavigationSequence(left, right, minWeakLength = 2) {
+    const a = (left || []).filter(Boolean);
+    const b = (right || []).filter(Boolean);
+    if (!a.length || a.length !== b.length) return false;
+    const allStrong = a.every((ref, index) => sameNavigationRef(ref, b[index]));
+    if (allStrong) return true;
+    if (a.length < minWeakLength) return false;
+    return a.every((ref, index) =>
+      sameNavigationRef(ref, b[index]) || sameNavigationText(ref, b[index])
     );
   }
 
