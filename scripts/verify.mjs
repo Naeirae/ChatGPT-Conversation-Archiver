@@ -191,14 +191,17 @@ try {
       !fullTopBlock.includes('updateStabilityState(stability, before, after)') ||
       !fullTopBlock.includes('stall.stable >= 4') ||
       fullTopBlock.includes('recordNavigationWindow(') ||
-      !fullDownBlock.includes("await physicalScroll('down');") ||
+      !fullDownBlock.includes("await physicalScroll('down', 1") ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
+      !fullDownBlock.includes('visibleNavigationRefsLightweight()') ||
+      !fullDownBlock.includes('navigationWindowsOverlap(beforeRefs, afterRefs)') ||
+      !fullDownBlock.includes('recoverDownwardContinuity(') ||
       !fullDownBlock.includes('scrollObservation(map.size)') ||
       !fullDownBlock.includes('updateStabilityState(stability, before, after)') ||
       !fullDownBlock.includes('stall.stable >= 4') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: preserve 0.4.17 cadence while using the shared retry-aware scroll observation state');
+    fail('full capture: keep fast upward navigation but require one-burst overlap-verified chronological movement');
   }
 
   const topOnlyStart = contentSource.indexOf('async function reachTopWithoutCapture');
