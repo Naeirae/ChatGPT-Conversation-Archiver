@@ -454,8 +454,19 @@
       role: String(value.role || ''),
       ordinal: Number.isFinite(Number(value.ordinal)) ? Number(value.ordinal) : -1,
       signature: String(value.signature || ''),
+      contextBefore: Array.isArray(value.contextBefore)
+        ? value.contextBefore.map(item => String(item || '')).filter(Boolean).slice(-3)
+        : [],
       strictStable: Boolean(value.strictStable)
     };
+  }
+
+  function boundaryContextBefore(turns, index, limit = 3) {
+    if (!Array.isArray(turns) || index <= 0) return [];
+    return turns
+      .slice(Math.max(0, index - Math.max(1, limit)), index)
+      .map(turn => turnTextSignature(turn))
+      .filter(Boolean);
   }
 
   function makeCaptureBoundary(turns) {
@@ -467,31 +478,61 @@
           key,
           role: roleOf(turns[i]) || '',
           ordinal: i,
-          signature: turnTextSignature(turns[i])
+          signature: turnTextSignature(turns[i]),
+          contextBefore: boundaryContextBefore(turns, i)
         };
       }
     }
 
     for (let i = turns.length - 1; i >= 0; i--) {
       if (roleOf(turns[i]) === 'user') {
-        return { kind: 'signature', key: turnTextSignature(turns[i]), role: 'user', ordinal: i };
+        return {
+          kind: 'signature',
+          key: turnTextSignature(turns[i]),
+          role: 'user',
+          ordinal: i,
+          contextBefore: boundaryContextBefore(turns, i)
+        };
       }
     }
 
     const last = turns[turns.length - 1];
-    return last ? { kind: 'signature', key: turnTextSignature(last), role: roleOf(last) || '', ordinal: turns.length - 1 } : null;
+    const index = turns.length - 1;
+    return last ? {
+      kind: 'signature',
+      key: turnTextSignature(last),
+      role: roleOf(last) || '',
+      ordinal: index,
+      contextBefore: boundaryContextBefore(turns, index)
+    } : null;
+  }
+
+  function boundaryContextMatchesTurns(turn, boundary) {
+    const expected = (boundary?.contextBefore || []).filter(Boolean);
+    if (!expected.length) return true;
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    if (index < expected.length) return false;
+    const actual = boundaryContextBefore(turns, index, expected.length);
+    return actual.length === expected.length &&
+      actual.every((signature, offset) => signature === expected[offset]);
   }
 
   function matchesBoundary(turn, boundary) {
     if (!boundary || !turn) return false;
+    const contextMatches = boundaryContextMatchesTurns(turn, boundary);
     if (boundary.kind === 'stable') {
-      if (turnStableKey(turn) === boundary.key) return true;
+      if (turnStableKey(turn) === boundary.key) return contextMatches;
       // Explicitly marked boundaries are user-selected message identities.
       // They must never stop early on another message with identical text.
       if (boundary.strictStable) return false;
-      return Boolean(boundary.signature && turnTextSignature(turn) === boundary.signature);
+      return Boolean(
+        boundary.signature &&
+        turnTextSignature(turn) === boundary.signature &&
+        contextMatches
+      );
     }
-    return turnTextSignature(turn) === boundary.key;
+    return turnTextSignature(turn) === boundary.key && contextMatches;
   }
 
   function physicalScrollEndVisible() {
@@ -1411,15 +1452,38 @@
     };
   }
 
-  function messageMatchesBoundary(message, boundary) {
+  function messageBoundaryContextMatches(rows, index, boundary) {
+    const expected = (boundary?.contextBefore || []).filter(Boolean);
+    if (!expected.length) return true;
+    if (index < expected.length) return false;
+    const actual = rows
+      .slice(index - expected.length, index)
+      .map(message => messageTextSignature(message))
+      .filter(Boolean);
+    return actual.length === expected.length &&
+      actual.every((signature, offset) => signature === expected[offset]);
+  }
+
+  function messageMatchesBoundary(message, boundary, rows = [], index = -1) {
     if (!message || !boundary) return false;
-    if (boundary.kind === 'stable') return message.id === boundary.key;
-    return messageTextSignature(message) === boundary.key;
+    const contextMatches = messageBoundaryContextMatches(rows, index, boundary);
+    if (boundary.kind === 'stable') {
+      if (message.id === boundary.key) return contextMatches;
+      if (boundary.strictStable) return false;
+      return Boolean(
+        boundary.signature &&
+        messageTextSignature(message) === boundary.signature &&
+        contextMatches
+      );
+    }
+    return messageTextSignature(message) === boundary.key && contextMatches;
   }
 
   function trimMessagesThroughBoundary(messages, boundary) {
     const rows = [...(messages || [])];
-    const index = rows.findIndex(message => messageMatchesBoundary(message, boundary));
+    const index = rows.findIndex((message, i) =>
+      messageMatchesBoundary(message, boundary, rows, i)
+    );
     if (index < 0) return { messages: rows, found: false, trimmed: 0 };
     return {
       messages: rows.slice(0, index + 1),
