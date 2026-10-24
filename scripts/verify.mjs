@@ -80,6 +80,25 @@ try {
       contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
     fail('content-chatgpt.js: traversal must use the shared scroll runtime instead of reimplementing transport');
   }
+  if (!scrollSource.includes('scrollTargetPoint') ||
+      !scrollSource.includes('point = scrollTargetPoint(turns)') ||
+      !contentSource.includes('turns: orderedTurns()') ||
+      !serviceWorkerSource.includes('message.point || null') ||
+      !serviceWorkerSource.includes('Number(point?.x)')) {
+    fail('scroll transport: wheel events must target the detected conversation scroller');
+  }
+  if (!contentSource.includes('function visibleTopTextSignature') ||
+      !contentSource.includes('const beforeText = visibleTopTextSignature()') ||
+      !contentSource.includes('const afterText = visibleTopTextSignature()') ||
+      !contentSource.includes('confirmedIdle >= 3')) {
+    fail('top navigation: real-top confirmation must ignore recyclable wrapper IDs and use stable text windows');
+  }
+  if (!contentSource.includes('function elementLogicalRoles') ||
+      !contentSource.includes('function unambiguousTurnContainer') ||
+      !contentSource.includes('Ambiguous outer shells may contain both a user and assistant message') ||
+      !contentSource.includes('getRoleNodes().forEach(node => add(getTurn(node)))')) {
+    fail('turn discovery: ambiguous/mixed ChatGPT DOM shells must not collapse multiple logical messages');
+  }
   if (!contentSource.includes("return 'turn:' + wrapperKey + ':' + role + ':'") ||
       !contentSource.includes('hashText(normalizeMatchText(turnMessageText(turn)))')) {
     fail('long-chat identity: virtual data-turn-key wrappers must remain message-qualified; wrapper keys are recyclable');
@@ -212,31 +231,21 @@ try {
     ? contentSource.slice(fullCaptureStart, fullCaptureStart + 12000)
     : '';
   if (!fullCaptureWindow ||
-      !contentSource.includes('Historical 0.3.14/0.4.17 behavior') ||
-      !contentSource.includes('await reachTopFullLegacy(map, order, settings);') ||
+      !fullCaptureWindow.includes('await reachTopWithoutCapture(0') ||
+      !fullCaptureWindow.includes('fullCapture: true') ||
+      fullCaptureWindow.includes('await reachTopFullLegacy(map, order, settings)') ||
       !contentSource.includes('navigationHighWater = 0;') ||
       !contentSource.includes('navigationMessages = [];') ||
       !contentSource.includes('navigationSequence = [];') ||
       !contentSource.includes("if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment')")) {
-    fail('full capture: preserve 0.4.17 navigation-only upward pass and single canonical chronological save');
+    fail('full capture: upward travel must be navigation-only; canonical messages are saved only on the chronological pass');
   }
-  const fullTopStart = contentSource.indexOf('async function reachTopFullLegacy');
-  const fullDownStart = contentSource.indexOf('async function walkDownFullLegacy', fullTopStart);
+  const fullDownStart = contentSource.indexOf('async function walkDownFullLegacy');
   const fullDownEnd = contentSource.indexOf('async function walkDown(', fullDownStart);
-  const fullTopBlock = fullTopStart >= 0 && fullDownStart > fullTopStart
-    ? contentSource.slice(fullTopStart, fullDownStart)
-    : '';
   const fullDownBlock = fullDownStart >= 0 && fullDownEnd > fullDownStart
     ? contentSource.slice(fullDownStart, fullDownEnd)
     : '';
-  if (!fullTopBlock ||
-      !fullDownBlock ||
-      !fullTopBlock.includes("await physicalScroll('up', 7") ||
-      !fullTopBlock.includes("recoverVisibleLoadError('top'") ||
-      !fullTopBlock.includes('scrollObservation(map.size)') ||
-      !fullTopBlock.includes('updateStabilityState(stability, before, after)') ||
-      !fullTopBlock.includes('stall.stable >= 4') ||
-      fullTopBlock.includes('recordNavigationWindow(') ||
+  if (!fullDownBlock ||
       !fullDownBlock.includes("await physicalScroll('down', 1") ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
       !fullDownBlock.includes('visibleNavigationRefsLightweight()') ||
@@ -247,7 +256,7 @@ try {
       !fullDownBlock.includes('stall.stable >= 4') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: keep fast upward navigation but require one-burst overlap-verified chronological movement');
+    fail('full capture: chronological pass must stay one-burst and overlap-verified');
   }
 
   if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
