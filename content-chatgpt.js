@@ -2459,11 +2459,13 @@
         requireFirstKey: true
       });
       if (stall.stable >= 2 && after.atStart) {
+        if (allowDownwardFallback) break;
         throw new Error(
           'Сохранённый стык не найден после подтверждённого прохода до начала переписки.'
         );
       }
       if (stall.stable >= 5) {
+        if (allowDownwardFallback) break;
         throw new Error(
           'Поиск сохранённого стыка остановился на неизменном участке до подтверждённого начала.'
         );
