@@ -526,8 +526,9 @@ try {
       !contentSource.includes("(mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length")) {
     fail('unified reconcile: one pass must reconcile text and recover/hydrate images');
   }
-  if (!contentSource.includes('map.set(message.id, mergeRicherCapture(message, existing))')) {
-    fail('image capture: virtualized recapture must preserve richer prepared image binaries');
+  if (!contentSource.includes('map.set(messageId, mergeRicherCapture(message, existing))') ||
+      !contentSource.includes('map.set(id, mergeRicherCapture(message, map.get(id)))')) {
+    fail('image capture: virtualized recapture must preserve richer prepared image binaries across collision-aware IDs');
   }
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
