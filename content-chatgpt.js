@@ -1574,6 +1574,51 @@
     );
   }
 
+  function findContextualRefIndex(targetRefs, ref, sourceRefs = [], sourceIndex = -1) {
+    const target = (targetRefs || []).filter(Boolean);
+    if (!ref || !target.length) return -1;
+
+    const strongMatches = target
+      .map((candidate, index) => sameNavigationRef(candidate, ref) ? index : -1)
+      .filter(index => index >= 0);
+    if (strongMatches.length === 1) return strongMatches[0];
+    if (strongMatches.length > 1) return -1;
+
+    if (sourceIndex < 0 || !sourceRefs.length) return -1;
+
+    const windows = [];
+    for (const length of [4, 3, 2]) {
+      for (let start = Math.max(0, sourceIndex - length + 1);
+           start <= Math.min(sourceIndex, sourceRefs.length - length);
+           start++) {
+        const end = start + length;
+        if (sourceIndex < start || sourceIndex >= end) continue;
+        windows.push({ start, end, length });
+      }
+    }
+
+    for (const window of windows) {
+      const needle = sourceRefs.slice(window.start, window.end);
+      const offset = sourceIndex - window.start;
+      const matches = [];
+      for (let i = 0; i <= target.length - needle.length; i++) {
+        const candidate = target.slice(i, i + needle.length);
+        if (sameNavigationSequence(needle, candidate, 2)) {
+          matches.push(i + offset);
+        }
+      }
+      if (matches.length === 1) return matches[0];
+    }
+
+    return -1;
+  }
+
+  function findContextualMessageIndex(messages, message, sourceMessages = [], sourceIndex = -1) {
+    const targetRefs = (messages || []).map(navigationRef);
+    const sourceRefs = (sourceMessages || []).map(navigationRef);
+    return findContextualRefIndex(targetRefs, navigationRef(message), sourceRefs, sourceIndex);
+  }
+
   function recordNavigationWindow(windows, settings, stopBoundary = null) {
     if (!Array.isArray(windows)) return;
     const refs = [];
@@ -1589,7 +1634,7 @@
     const previous = windows[windows.length - 1] || [];
     if (
       previous.length === refs.length &&
-      previous.every((ref, index) => sameNavigationRef(ref, refs[index]))
+      sameNavigationSequence(previous, refs, 2)
     ) return;
 
     windows.push(refs);
@@ -1599,27 +1644,24 @@
     let sequence = [];
 
     for (const windowRefs of windows || []) {
-      const refs = (windowRefs || []).filter(ref => ref && (ref.id || ref.signature));
+      const refs = (windowRefs || []).filter(ref =>
+        ref && (ref.strongId || ref.id || ref.signature)
+      );
       if (!refs.length) continue;
       if (!sequence.length) {
         sequence = [...refs];
         continue;
       }
 
-      const allKnown = refs.every(ref => sequence.some(existing => sameNavigationRef(ref, existing)));
-      if (allKnown) continue;
-
       let overlap = 0;
       const maxOverlap = Math.min(refs.length, sequence.length);
       for (let size = maxOverlap; size >= 1; size--) {
-        let same = true;
-        for (let offset = 0; offset < size; offset++) {
-          if (!sameNavigationRef(refs[refs.length - size + offset], sequence[offset])) {
-            same = false;
-            break;
-          }
-        }
-        if (same) {
+        const left = refs.slice(refs.length - size);
+        const right = sequence.slice(0, size);
+        if (
+          (size === 1 && sameNavigationRef(left[0], right[0])) ||
+          (size >= 2 && sameNavigationSequence(left, right, 2))
+        ) {
           overlap = size;
           break;
         }
@@ -1630,6 +1672,9 @@
         continue;
       }
 
+      // A single weak text match is never enough to pivot or deduplicate an
+      // upward navigation window. Only a strong message ID may anchor a
+      // one-message overlap; otherwise preserve the whole window as evidence.
       let pivot = null;
       for (let i = 0; i < refs.length && !pivot; i++) {
         const j = sequence.findIndex(existing => sameNavigationRef(refs[i], existing));
@@ -1641,16 +1686,16 @@
         continue;
       }
 
-      // Upward traversal only moves toward older turns. If virtualization gives
-      // us a non-overlapping window, its visible messages are still older than
-      // the sequence already observed below it.
-      const unseen = refs.filter(ref => !sequence.some(existing => sameNavigationRef(ref, existing)));
-      sequence = unseen.concat(sequence);
+      sequence = refs.concat(sequence);
     }
 
     const deduped = [];
     for (const ref of sequence) {
-      if (!deduped.some(existing => sameNavigationRef(ref, existing))) deduped.push(ref);
+      if (
+        ref.strongId &&
+        deduped.some(existing => sameNavigationRef(ref, existing))
+      ) continue;
+      deduped.push(ref);
     }
     return deduped;
   }
