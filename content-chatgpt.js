@@ -2390,16 +2390,13 @@
       throw new Error('У сохраненного архива нет якоря продолжения.');
     }
 
+    const upwardStability = scrollRuntime().createStabilityState();
+
     for (let i = 0; i < 72; i++) {
       await waitIfPaused();
 
-      if (physicalScrollStartVisible() && i > 0) {
-        throw new Error(
-          'Сохранённый стык не найден локально. Продолжение остановлено, чтобы не превращать его в полный проход к началу.'
-        );
-      }
-
       if (await recoverVisibleLoadError('top', map.size)) {
+        scrollRuntime().resetStabilityState(upwardStability);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
@@ -2449,15 +2446,32 @@
         return { id: '', signature: anchorSignature, matchLength: 1 };
       }
 
+      const before = scrollObservation(map.size);
       await progress('Этап 1/3: ищу последний сохраненный стык · ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
 
       await physicalScroll('up');
+
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(upwardStability, before, after, {
+        requireFirstKey: true
+      });
+      if (stall.stable >= 2 && after.atStart) {
+        throw new Error(
+          'Сохранённый стык не найден после подтверждённого прохода до начала переписки.'
+        );
+      }
+      if (stall.stable >= 5) {
+        throw new Error(
+          'Поиск сохранённого стыка остановился на неизменном участке до подтверждённого начала.'
+        );
+      }
     }
 
     if (allowDownwardFallback) {
+      const downwardStability = scrollRuntime().createStabilityState();
       await progress('Стык не найден выше; проверяю участок ниже текущей позиции…', map.size, {
         phase: 'top',
         force: true
@@ -2504,7 +2518,14 @@
           return { id: '', signature: anchorSignature, matchLength: 1 };
         }
 
+        const before = scrollObservation(map.size);
         await physicalScroll('down', 3);
+        const after = scrollObservation(map.size);
+        const stall = scrollRuntime().updateStabilityState(downwardStability, before, after, {
+          requireLastKey: true
+        });
+        if (stall.stable >= 3 && after.atEnd) break;
+        if (stall.stable >= 6) break;
       }
     }
 
