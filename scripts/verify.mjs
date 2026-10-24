@@ -214,6 +214,20 @@ try {
     fail('continuation navigation: top-only traversal must use the shared scroll observation/stall state');
   }
 
+  const resumeAnchorStart = contentSource.indexOf('async function reachResumeAnchor');
+  const resumeAnchorEnd = contentSource.indexOf('function visibleHasKnownSignatures', resumeAnchorStart);
+  const resumeAnchorBlock = resumeAnchorStart >= 0 && resumeAnchorEnd > resumeAnchorStart
+    ? contentSource.slice(resumeAnchorStart, resumeAnchorEnd)
+    : '';
+  if (!resumeAnchorBlock ||
+      resumeAnchorBlock.includes('if (physicalScrollStartVisible() && i > 0)') ||
+      !resumeAnchorBlock.includes('createStabilityState()') ||
+      !resumeAnchorBlock.includes('updateStabilityState(upwardStability, before, after') ||
+      !resumeAnchorBlock.includes('after.atStart') ||
+      !resumeAnchorBlock.includes('allowDownwardFallback) break')) {
+    fail('continuation anchor search: virtualized physical-start alone must not terminate the search');
+  }
+
   const pauseResumeBlock = contentSource.slice(
     contentSource.indexOf("message.type === 'ARCHIVER_RESUME_CAPTURE'"),
     contentSource.indexOf("message.type === 'ARCHIVER_CANCEL_CAPTURE'")
