@@ -38,6 +38,11 @@
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
+  function scrollRuntime() {
+    const runtime = globalThis.__CHATGPT_ARCHIVER_SCROLL__;
+    if (!runtime) throw new Error('Scroll runtime не загружен. Перезагрузите расширение.');
+    return runtime;
+  }
   const REASONING_ACTION_EXCLUDE_RE = /copy|share|regenerate|retry|edit|like|dislike|feedback|citation|source|download|listen|read aloud|stop|поделиться|скопировать|повторить|изменить|источник|скачать|озвучить/i;
   const REASONING_STATUS_RE = /^(?:обработка заняла|размышление заняло|размышления заняли|thought for|thinking for|reasoned for|processing took)\b/i;
   const REASONING_ATTR_HINT_RE = /(?:reasoning|thinking|thought|analysis|cot)/i;
@@ -191,34 +196,7 @@
   }
 
   function visibleRetryButton() {
-    const buttonPattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
-    const errorPattern = /(?:something went wrong|there was an error|network error|failed to load|не удалось загрузить|произошла ошибка|ошибка сети|возникла ошибка)/i;
-
-    return [...document.querySelectorAll('button, [role="button"]')].find(el => {
-      if (!visible(el) || el.disabled) return false;
-
-      const label = String(
-        el.innerText ||
-        el.textContent ||
-        el.getAttribute?.('aria-label') ||
-        el.getAttribute?.('title') ||
-        ''
-      ).replace(/\s+/g, ' ').trim();
-
-      if (!buttonPattern.test(label)) return false;
-
-      // ChatGPT can keep generic Retry buttons in unrelated UI. Recovery is
-      // expensive, so only enter it when the same local region also contains
-      // an actual load/network error message.
-      let node = el;
-      for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
-        const text = String(node.innerText || node.textContent || '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        if (text && errorPattern.test(text)) return true;
-      }
-      return false;
-    }) || null;
+    return scrollRuntime().findVisibleLoadRetry();
   }
 
   async function recoverVisibleLoadError(phase = 'top', count = 0) {
@@ -517,26 +495,11 @@
   }
 
   function physicalScrollEndVisible() {
-    const turns = orderedTurns();
-    const last = turns[turns.length - 1] || null;
-    const scroller = findScrollContainer(last);
-    if (!scroller) return false;
-    const top = Number(scroller.scrollTop || 0);
-    const height = Number(scroller.clientHeight || 0);
-    const total = Number(scroller.scrollHeight || 0);
-    if (!height || !total) return false;
-    return top + height >= total - Math.max(24, Math.round(height * 0.04));
+    return scrollRuntime().physicalScrollEndVisible(orderedTurns());
   }
 
   function physicalScrollStartVisible() {
-    const turns = orderedTurns();
-    const first = turns[0] || null;
-    const scroller = findScrollContainer(first);
-    if (!scroller) return false;
-    const top = Number(scroller.scrollTop || 0);
-    const height = Number(scroller.clientHeight || 0);
-    if (!height) return false;
-    return top <= Math.max(24, Math.round(height * 0.04));
+    return scrollRuntime().physicalScrollStartVisible(orderedTurns());
   }
 
   function boundaryIsVisible(boundary) {
@@ -544,39 +507,8 @@
   }
 
   function findScrollContainer(turn) {
-    let el = turn && turn.parentElement;
-    while (el && el !== document.body && el !== document.documentElement) {
-      const style = getComputedStyle(el);
-      if (/(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 80) return el;
-      el = el.parentElement;
-    }
-
-    const candidates = [
-      document.scrollingElement,
-      document.documentElement,
-      ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
-    ].filter((candidate, index, all) =>
-      candidate &&
-      all.indexOf(candidate) === index &&
-      candidate instanceof Element
-    ).filter(candidate => {
-      const style = getComputedStyle(candidate);
-      return /(auto|scroll|overlay)/.test(style.overflowY) &&
-        candidate.scrollHeight > candidate.clientHeight + 80;
-    });
-
-    const containing = candidates.filter(candidate => candidate.contains(turn));
-    if (containing.length) {
-      return containing.sort((a, b) =>
-        (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
-      )[0];
-    }
-
-    return candidates.sort((a, b) =>
-      (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
-    )[0] || document.scrollingElement || document.documentElement;
+    return scrollRuntime().findScrollContainer(turn);
   }
-
 
   function reasoningLabel(el) {
     return String(
@@ -1926,23 +1858,10 @@
   }
 
   async function waitForTurnSettle(timeout = 8000, quietWindow = 1400) {
-    const started = Date.now();
-    let previous = visibleTurnSignature();
-    let quietSince = Date.now();
-
-    while (Date.now() - started < timeout) {
-      await sleep(220);
-      const next = visibleTurnSignature();
-
-      if (next && next === previous) {
-        if (Date.now() - quietSince >= quietWindow) return next;
-      } else {
-        previous = next;
-        quietSince = Date.now();
-      }
-    }
-
-    return previous;
+    return scrollRuntime().waitForTurnSettle(visibleTurnSignature, {
+      timeout,
+      quietWindow
+    });
   }
 
   async function physicalScroll(
@@ -1950,16 +1869,15 @@
     bursts = 7,
     { settleTimeout = 8000, quietWindow = 1400 } = {}
   ) {
-    const normalizedDirection = direction === 'down' ? 'down' : 'up';
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_PHYSICAL_SCROLL',
+    const result = await scrollRuntime().physicalScroll({
       jobId: state.jobId,
-      direction: normalizedDirection,
-      bursts
+      direction,
+      bursts,
+      getSignature: visibleTurnSignature,
+      settleTimeout,
+      quietWindow
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
-    state.lastScrollDirection = normalizedDirection;
-    await waitForTurnSettle(settleTimeout, quietWindow);
+    state.lastScrollDirection = result.direction;
     return result;
   }
 
