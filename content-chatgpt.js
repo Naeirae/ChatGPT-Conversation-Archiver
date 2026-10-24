@@ -294,19 +294,80 @@
   const visible = isVisible;
 
   function getRoleNodes() {
-    const nodes = [...document.querySelectorAll(ROLE_SELECTOR)]
+    return [...document.querySelectorAll(ROLE_SELECTOR)]
       .filter(isVisible)
       .filter(node => !node.parentElement?.closest(ROLE_SELECTOR));
-    return nodes;
+  }
+
+  function elementLogicalRoles(element) {
+    if (!(element instanceof Element)) return [];
+    const roles = [];
+
+    const own =
+      element.getAttribute('data-message-author-role') ||
+      element.getAttribute('data-role') ||
+      element.getAttribute('data-message-author') ||
+      element.getAttribute('data-turn') ||
+      '';
+    if (own === 'user' || own === 'assistant') roles.push(own);
+
+    const searchUnit = String(element.getAttribute('data-chatgpt-search-unit-key') || '');
+    if (searchUnit.endsWith(':user')) roles.push('user');
+    if (searchUnit.endsWith(':assistant')) roles.push('assistant');
+
+    element.querySelectorAll(ROLE_SELECTOR).forEach(node => {
+      const role =
+        node.getAttribute('data-message-author-role') ||
+        node.getAttribute('data-role') ||
+        node.getAttribute('data-message-author') ||
+        '';
+      if (role === 'user' || role === 'assistant') roles.push(role);
+    });
+
+    element.querySelectorAll(
+      '[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]'
+    ).forEach(node => {
+      const key = String(node.getAttribute('data-chatgpt-search-unit-key') || '');
+      if (key.endsWith(':user')) roles.push('user');
+      if (key.endsWith(':assistant')) roles.push('assistant');
+    });
+
+    return [...new Set(roles)];
+  }
+
+  function unambiguousTurnContainer(element, role) {
+    if (!(element instanceof Element) || !role) return false;
+    const roles = elementLogicalRoles(element);
+    return roles.length === 1 && roles[0] === role;
   }
 
   function getTurn(node) {
-    return node.closest('[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]') ||
-      node.closest('[data-testid^="conversation-turn-"]') ||
-      node.closest('section[data-turn]') ||
-      node.closest('article[data-turn]') ||
-      node.closest('[data-turn-key]') ||
-      node;
+    const role = roleOf(node);
+    if (!role) return node;
+
+    const searchUnit = node.closest(
+      '[data-chatgpt-search-unit-key$=":' + role + '"]'
+    );
+    if (searchUnit) return searchUnit;
+
+    const semantic = node.closest(
+      'section[data-turn="' + role + '"], article[data-turn="' + role + '"]'
+    );
+    if (semantic) return semantic;
+
+    const conversationTurn = node.closest('[data-testid^="conversation-turn-"]');
+    if (conversationTurn && unambiguousTurnContainer(conversationTurn, role)) {
+      return conversationTurn;
+    }
+
+    const wrapper = node.closest('[data-turn-key]');
+    if (wrapper && unambiguousTurnContainer(wrapper, role)) {
+      return wrapper;
+    }
+
+    // Ambiguous outer shells may contain both a user and assistant message.
+    // Keep the role-bearing node itself rather than collapsing both messages.
+    return node;
   }
 
   function orderedTurns() {
@@ -319,35 +380,37 @@
       result.push(turn);
     };
 
-    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(add);
-
+    // Prefer role-bearing nodes because they cannot silently collapse two
+    // messages that happen to share one virtualized outer shell.
     getRoleNodes().forEach(node => add(getTurn(node)));
 
-    // ChatGPT can mix rollout shapes in one virtualized viewport. A wrapper is
-    // therefore not merely an all-or-nothing fallback: if it contains exactly
-    // one logical role and no already-discovered turn represents it, keep it.
+    // Add shell-shaped turns only when the shell itself is unambiguous and no
+    // already discovered logical turn represents it.
+    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(shell => {
+      const roles = elementLogicalRoles(shell);
+      if (roles.length !== 1) return;
+
+      const represented = result.some(turn =>
+        turn === shell ||
+        shell.contains(turn) ||
+        turn.contains?.(shell)
+      );
+      if (!represented) add(shell);
+    });
+
+    // Mixed rollout support: a data-turn-key wrapper may coexist with ordinary
+    // shells in the same viewport. Keep a wrapper only when it represents one
+    // role and is not already covered by a more specific logical turn.
     document.querySelectorAll(TURN_WRAPPER_SELECTOR).forEach(wrapper => {
-      if (seen.has(wrapper)) return;
+      const roles = elementLogicalRoles(wrapper);
+      if (roles.length !== 1) return;
 
       const represented = result.some(turn =>
         turn === wrapper ||
         wrapper.contains(turn) ||
         turn.contains?.(wrapper)
       );
-      if (represented) return;
-
-      const roleCandidates = [
-        ...wrapper.querySelectorAll(
-          TURN_SHELL_SELECTOR + ',' + ROLE_SELECTOR
-        )
-      ].map(node => roleOf(node)).filter(Boolean);
-      const ownRole = roleOf(wrapper);
-      if (ownRole) roleCandidates.push(ownRole);
-
-      const roles = [...new Set(roleCandidates)];
-      if (roles.length !== 1) return;
-
-      add(wrapper);
+      if (!represented) add(wrapper);
     });
 
     return result.sort((a, b) => {
