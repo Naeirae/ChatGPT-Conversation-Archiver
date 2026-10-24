@@ -2245,8 +2245,7 @@
     } = {}
   ) {
     let confirmedIdle = 0;
-    let previousSignature = '';
-    let firstVisibleKey = '';
+    const stability = scrollRuntime().createStabilityState();
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2270,8 +2269,7 @@
 
       if (await recoverVisibleLoadError('top', existingCount)) {
         confirmedIdle = 0;
-        previousSignature = '';
-        firstVisibleKey = '';
+        scrollRuntime().resetStabilityState(stability);
       }
 
       if (sharedConversationStartVisible()) {
@@ -2283,11 +2281,7 @@
         return;
       }
 
-      const turnsBefore = orderedTurns();
-      const signature = visibleTurnSignature();
-      const firstBefore = turnsBefore.length
-        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
-        : '';
+      const before = scrollObservation(existingCount);
 
       await progress(
         fullCapture
@@ -2335,54 +2329,37 @@
         return;
       }
 
-      let nextSignature = visibleTurnSignature();
-      let turnsAfter = orderedTurns();
-      let firstAfter = turnsAfter.length
-        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-        : '';
+      const after = scrollObservation(existingCount);
+      const candidate = scrollRuntime().updateStabilityState(stability, before, after, {
+        requireFirstKey: true
+      });
 
-      const unchanged =
-        Boolean(nextSignature) &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        firstAfter === firstBefore &&
-        firstAfter === firstVisibleKey;
-
-      if (unchanged) {
+      if (candidate.unchanged) {
         await progress(
           'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
           existingCount,
           {
             phase: 'top',
             iteration: i + 1,
-            topIdleConfirmations: confirmedIdle + 1,
+            topIdleConfirmations: candidate.stable,
             retryWalkOnly: !fullCapture,
             manualAssistAllowed: true
           }
         );
 
         await sleep(700);
-        const afterWaitSignature = visibleTurnSignature();
-        turnsAfter = orderedTurns();
-        const afterWaitFirst = turnsAfter.length
-          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-          : '';
-
-        if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
-          confirmedIdle++;
+        const afterWait = scrollObservation(existingCount);
+        if (scrollRuntime().sameWindow(after, afterWait, { requireFirstKey: true })) {
+          confirmedIdle = candidate.stable;
         } else {
           confirmedIdle = 0;
-          nextSignature = afterWaitSignature;
-          firstAfter = afterWaitFirst;
+          scrollRuntime().primeStabilityState(stability, afterWait);
         }
       } else {
         confirmedIdle = 0;
       }
 
-      previousSignature = nextSignature;
-      firstVisibleKey = firstAfter;
-
-      if (confirmedIdle >= 2 && !visibleRetryButton()) {
+      if (confirmedIdle >= 2) {
         await progress(
           fullCapture
             ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
