@@ -112,3 +112,10 @@ Changes on this branch:
 - scroll settle signatures now include every visible turn rather than only the first/last three.
 
 Remaining live validation must include deliberately repeated short messages (`Да`, `Окей`, identical assistant replies) across several virtualized windows.
+
+
+## Additional runtime regression found
+
+During identity review, `reachResumeAnchor()` was found calling `hasStableResumeAnchor()` even though that helper was absent from the current content script. This is a runtime-only failure: JavaScript syntax checks do not detect an undefined function until the continuation path executes.
+
+The helper is restored with stricter semantics: only `data-message-id` / `data-turn-id` qualify as a stable one-message resume anchor. Legacy weak IDs fall through to multi-turn tail/context matching.
