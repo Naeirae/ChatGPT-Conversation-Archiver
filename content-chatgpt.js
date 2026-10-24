@@ -1910,13 +1910,15 @@
 
     for (let oldIndex = 0; oldIndex < existing.length; oldIndex++) {
       const oldMessage = existing[oldIndex];
-      let found = -1;
-      for (let i = searchFrom; i < captured.length; i++) {
-        if (sameNavigationRef(navigationRef(oldMessage), navigationRef(captured[i]))) {
-          found = i;
-          break;
-        }
-      }
+      const candidateSlice = captured.slice(searchFrom);
+      const localIndex = findContextualMessageIndex(
+        candidateSlice,
+        oldMessage,
+        existing,
+        oldIndex
+      );
+      const found = localIndex >= 0 ? searchFrom + localIndex : -1;
+
       if (found < 0) {
         return {
           ok: false,
@@ -1926,6 +1928,7 @@
           addedCount: 0
         };
       }
+
       matchedCapturedIndexes.push(found);
       searchFrom = found + 1;
     }
@@ -1951,13 +1954,15 @@
     const result = (existingMessages || []).map(message => ({ ...message }));
     const recovered = [];
 
-    const findScanned = message => scanned.find(candidate =>
-      sameNavigationRef(navigationRef(message), navigationRef(candidate))
-    ) || null;
-
     for (let i = 0; i < result.length; i++) {
       const target = result[i];
-      const source = findScanned(target);
+      const sourceIndex = findContextualMessageIndex(
+        scanned,
+        target,
+        result,
+        i
+      );
+      const source = sourceIndex >= 0 ? scanned[sourceIndex] : null;
       if (!source?.images?.length) continue;
 
       const beforeImages = target.images || [];
