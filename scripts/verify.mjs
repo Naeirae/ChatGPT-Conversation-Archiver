@@ -84,6 +84,52 @@ try {
       !contentSource.includes('hashText(normalizeMatchText(turnMessageText(turn)))')) {
     fail('long-chat identity: virtual data-turn-key wrappers must remain message-qualified; wrapper keys are recyclable');
   }
+  const identityStart = contentSource.indexOf('function isStrongMessageId');
+  const identityEnd = contentSource.indexOf('function recordNavigationWindow', identityStart);
+  const identityBlock = identityStart >= 0 && identityEnd > identityStart
+    ? contentSource.slice(identityStart, identityEnd)
+    : '';
+  const sameRefStart = contentSource.indexOf('function sameNavigationRef');
+  const sameRefEnd = contentSource.indexOf('function sameNavigationText', sameRefStart);
+  const sameRefBlock = sameRefStart >= 0 && sameRefEnd > sameRefStart
+    ? contentSource.slice(sameRefStart, sameRefEnd)
+    : '';
+  if (!identityBlock ||
+      !identityBlock.includes('isStrongMessageId') ||
+      !identityBlock.includes('identityContextsCompatible') ||
+      !identityBlock.includes('sameNavigationSequence') ||
+      !identityBlock.includes('findContextualRefIndex') ||
+      !sameRefBlock.includes('a.strongId && b.strongId') ||
+      sameRefBlock.includes('a.signature') ||
+      sameRefBlock.includes('externalSignature')) {
+    fail('message identity: standalone text must never prove message identity; weak matches require sequence context');
+  }
+  if (!contentSource.includes('rebuildCaptureMap(map, order, capturedMessages)') ||
+      !contentSource.includes('weakIdentityContextKey') ||
+      !contentSource.includes('buildImageScanPool') ||
+      contentSource.includes('const key = ref.id || ref.signature || ref.externalSignature')) {
+    fail('message identity: weak-ID collisions must survive map rebuild and image recovery');
+  }
+  if (!contentSource.includes('existing.messages.map(messageStrongId).filter(Boolean)') ||
+      contentSource.includes('existing.messages.map(item => item.id).filter(Boolean)')) {
+    fail('continuation identity: cross-boundary duplicate filtering must use strong IDs only');
+  }
+  if (!contentSource.includes('contextBefore: boundaryContextBefore(turns, i)') ||
+      !contentSource.includes('boundaryContextMatchesTurns') ||
+      !contentSource.includes('messageBoundaryContextMatches')) {
+    fail('snapshot boundary: text fallback must be disambiguated by neighbouring message context');
+  }
+  const visibleSignatureStart = contentSource.indexOf('function visibleTurnSignature');
+  const visibleSignatureEnd = contentSource.indexOf('function scrollObservation', visibleSignatureStart);
+  const visibleSignatureBlock = visibleSignatureStart >= 0 && visibleSignatureEnd > visibleSignatureStart
+    ? contentSource.slice(visibleSignatureStart, visibleSignatureEnd)
+    : '';
+  if (!visibleSignatureBlock.includes("return keys.join('|')") ||
+      visibleSignatureBlock.includes('slice(0, 3)') ||
+      visibleSignatureBlock.includes('slice(-3)')) {
+    fail('scroll settle: signature must cover the whole visible virtualized window');
+  }
+
   if (/activeCaptureJob\s*:/.test(contentSource)) {
     fail('content-chatgpt.js: capture page must never overwrite worker-owned activeCaptureJob');
   }
