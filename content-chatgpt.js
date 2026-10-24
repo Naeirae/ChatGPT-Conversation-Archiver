@@ -3295,22 +3295,26 @@
 
   function visibleNavigationRefsLightweight() {
     return orderedTurns()
-      .map(turn => ({
-        id: String(turnStableKey(turn) || ''),
-        signature: String(turnTextSignature(turn) || '')
-      }))
-      .filter(ref => ref.id || ref.signature);
+      .map(turn => {
+        const id = String(turnStableKey(turn) || '');
+        return {
+          id,
+          strongId: isStrongMessageId(id) ? id : '',
+          signature: String(turnTextSignature(turn) || '')
+        };
+      })
+      .filter(ref => ref.strongId || ref.signature);
   }
 
   function navigationWindowsOverlap(a, b) {
-    const left = (a || []).filter(ref => ref && (ref.id || ref.signature));
-    const right = (b || []).filter(ref => ref && (ref.id || ref.signature));
+    const left = (a || []).filter(ref => ref && (ref.strongId || ref.signature));
+    const right = (b || []).filter(ref => ref && (ref.strongId || ref.signature));
     if (!left.length || !right.length) return false;
 
-    // A stable message ID is strong evidence on its own.
+    // Only real ChatGPT message IDs are strong enough to prove overlap alone.
     for (const x of left) {
-      if (!x.id) continue;
-      if (right.some(y => y.id && y.id === x.id)) return true;
+      if (!x.strongId) continue;
+      if (right.some(y => y.strongId && y.strongId === x.strongId)) return true;
     }
 
     // Text signatures can repeat, so require at least two adjacent messages in
@@ -3321,8 +3325,18 @@
         for (let j = 0; j <= right.length - length; j++) {
           let same = true;
           for (let offset = 0; offset < length; offset++) {
-            if (!left[i + offset].signature ||
-                left[i + offset].signature !== right[j + offset].signature) {
+            const aRef = left[i + offset];
+            const bRef = right[j + offset];
+            const strongSame = Boolean(
+              aRef.strongId &&
+              bRef.strongId &&
+              aRef.strongId === bRef.strongId
+            );
+            const textSame = Boolean(
+              aRef.signature &&
+              aRef.signature === bRef.signature
+            );
+            if (!strongSame && !textSame) {
               same = false;
               break;
             }
