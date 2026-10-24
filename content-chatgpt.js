@@ -3204,15 +3204,55 @@
       }
 
       const before = scrollObservation(map.size);
+      const beforeRefs = visibleNavigationRefsLightweight();
       await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
         phase: 'walk',
         iteration: i + 1,
         chronologicalCount: map.size
       });
 
-      // Stable pre-recovery path: one physical scroll request, then wait for the
-      // virtualized window to settle. No checkpoint/storage/network/recovery work here.
-      await physicalScroll('down');
+      // Chronological capture must stay granular. A request without an explicit
+      // burst count means seven wheel events, which can skip whole virtualized
+      // windows. Use one wheel event and prove overlap before accepting movement.
+      await physicalScroll('down', 1, {
+        settleTimeout: 2200,
+        quietWindow: 380
+      });
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+
+      if (boundaryIsVisible(boundary)) {
+        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
+        return { boundaryReached: true, physicalEndReached: false };
+      }
+
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (beforeRefs.length && afterRefs.length &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Полный хронологический проход потерял перекрытие между соседними участками. ' +
+            'Сбор остановлен, чтобы не сохранить архив с пропуском.'
+          );
+        }
+        scrollRuntime().resetStabilityState(stability);
+        continue;
+      }
 
       const after = scrollObservation(map.size);
       const stall = scrollRuntime().updateStabilityState(stability, before, after);
