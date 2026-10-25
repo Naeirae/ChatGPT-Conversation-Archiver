@@ -274,11 +274,18 @@ try {
     ? contentSource.slice(topOnlyStart, topOnlyEnd)
     : '';
   if (!topOnlyBlock ||
-      !topOnlyBlock.includes('visibleTopTextSignature()') ||
+      !topOnlyBlock.includes('explicitConversationStartVisible()') ||
+      !topOnlyBlock.includes('firstVisibleTurnSignature()') ||
       !topOnlyBlock.includes("await physicalScroll('up', 16") ||
-      !topOnlyBlock.includes('confirmedIdle >= 3') ||
-      !topOnlyBlock.includes('repeatedWithoutPhysicalTop')) {
-    fail('continuation navigation: top-only traversal must use text-stable progress detection and bounded stalls');
+      !topOnlyBlock.includes('physicalScrollStartVisible()') ||
+      !topOnlyBlock.includes('topConfirmations >= 2')) {
+    fail('continuation navigation: top-only traversal must recognize explicit first-turn markers or a stable first turn at physical top');
+  }
+
+  if (!contentSource.includes('function explicitConversationStartVisible()') ||
+      !contentSource.includes('[data-testid="conversation-turn-0"]') ||
+      !contentSource.includes('[data-chatgpt-search-unit-key^="fallback-turn-0:"]')) {
+    fail('top detection: normal ChatGPT chats need an explicit first-turn marker path');
   }
 
   const resumeAnchorStart = contentSource.indexOf('async function reachResumeAnchor');
