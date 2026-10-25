@@ -4,7 +4,7 @@ const API_COMMITS='https://api.github.com/repos/'+REPO+'/commits/';
 const API_TREES='https://api.github.com/repos/'+REPO+'/git/trees/';
 const API_BLOBS='https://api.github.com/repos/'+REPO+'/git/blobs/';
 const MANAGED_FILES=new Set([
-  'manifest.json','service-worker.js','content-chatgpt.js',
+  'manifest.json','service-worker.js','content-chatgpt-scroll.js','content-chatgpt.js',
   'popup.html','popup.css','popup.js',
   'help.html','help.css',
   'updater.html','updater.css','updater.js',
