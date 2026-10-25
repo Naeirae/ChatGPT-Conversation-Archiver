@@ -87,6 +87,15 @@ try {
       !serviceWorkerSource.includes('Number(point?.x)')) {
     fail('scroll transport: wheel events must target the detected conversation scroller');
   }
+  if (!scrollSource.includes('wheelDelta = 860') ||
+      !scrollSource.includes('wheelDelta') ||
+      !contentSource.includes('wheelDelta: 320') ||
+      !contentSource.includes("wheelDelta: phase === 'walk' ? 220 : 640") ||
+      !contentSource.includes('wheelDelta: 180') ||
+      !contentSource.includes('for (let attempt = 0; attempt < 6; attempt++)')) {
+    fail('chronological transport: capture/retry/recovery must use bounded small wheel distances distinct from fast top navigation');
+  }
+
   if (!contentSource.includes('function explicitConversationStartVisible()') ||
       !contentSource.includes('function firstVisibleTurnSignature()') ||
       !contentSource.includes('const beforeFirst = firstVisibleTurnSignature()') ||
@@ -598,14 +607,15 @@ try {
     fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
   }
 
-  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null)");
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null, wheelDelta = 860)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
   if (!physicalScrollBlock ||
       !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
-      !physicalScrollBlock.includes("deltaY: sign * 860") ||
+      !physicalScrollBlock.includes("deltaY: sign * delta") ||
+      !physicalScrollBlock.includes("Math.abs(Number(wheelDelta) || 860)") ||
       !physicalScrollBlock.includes("await sleep(70)") ||
       !physicalScrollBlock.includes('Number(point?.x)') ||
       !physicalScrollBlock.includes('Number(point?.y)') ||
