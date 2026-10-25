@@ -2580,6 +2580,24 @@
       /Пожаловаться на разговор/i.test(intro);
   }
 
+  function explicitConversationStartVisible() {
+    const selectors = [
+      '[data-testid="conversation-turn-0"]',
+      '[data-chatgpt-search-unit-key^="fallback-turn-0:"]',
+      '[data-chatgpt-search-unit-key="fallback-turn-0:user"]',
+      '[data-chatgpt-search-unit-key="fallback-turn-0:assistant"]'
+    ];
+
+    return selectors.some(selector =>
+      [...document.querySelectorAll(selector)].some(node => isVisible(node))
+    );
+  }
+
+  function firstVisibleTurnSignature() {
+    const first = orderedTurns()[0] || null;
+    return first ? turnTextSignature(first) : '';
+  }
+
   async function reachTopWithoutCapture(
     existingCount = 0,
     {
@@ -2587,9 +2605,7 @@
       timeoutMs = 30 * 60 * 1000
     } = {}
   ) {
-    let confirmedIdle = 0;
-    let previousTopText = '';
-    let repeatedWithoutPhysicalTop = 0;
+    let topConfirmations = 0;
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2612,21 +2628,19 @@
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
-        confirmedIdle = 0;
-        previousTopText = '';
-        repeatedWithoutPhysicalTop = 0;
+        topConfirmations = 0;
       }
 
-      if (sharedConversationStartVisible()) {
-        await progress('Начало опубликованной переписки подтверждено.', existingCount, {
+      if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
+        await progress('Этап 1/3: начало переписки найдено.', existingCount, {
           phase: 'walk',
           force: true,
-          sharedStartDetected: true
+          explicitStartDetected: true
         });
         return;
       }
 
-      const beforeText = visibleTopTextSignature();
+      const beforeFirst = firstVisibleTurnSignature();
 
       await progress(
         fullCapture
@@ -2636,15 +2650,15 @@
         {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: confirmedIdle,
+          topIdleConfirmations: topConfirmations,
           retryWalkOnly: !fullCapture,
           manualAssistAllowed: true
         }
       );
 
       await physicalScroll('up', 16, {
-        settleTimeout: 3200,
-        quietWindow: 420
+        settleTimeout: 2600,
+        quietWindow: 360
       });
 
       if (state.manualTopConfirmed) {
@@ -2663,84 +2677,58 @@
         return;
       }
 
-      if (sharedConversationStartVisible()) {
-        await progress('Начало опубликованной переписки найдено.', existingCount, {
+      if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
+        await progress('Этап 1/3: начало переписки найдено.', existingCount, {
           phase: 'walk',
+          iteration: i + 1,
           force: true,
-          sharedStartDetected: true
+          explicitStartDetected: true
         });
         return;
       }
 
-      const afterText = visibleTopTextSignature();
-      const sameTextWindow = Boolean(
-        afterText &&
-        beforeText &&
-        afterText === beforeText &&
-        afterText === previousTopText
-      );
+      const afterFirst = firstVisibleTurnSignature();
+      const atPhysicalTop = physicalScrollStartVisible();
+      const retryVisible = Boolean(visibleRetryButton());
 
-      if (sameTextWindow) {
-        await sleep(900);
-        const afterWaitText = visibleTopTextSignature();
-        if (afterWaitText === afterText && !visibleRetryButton()) {
-          confirmedIdle++;
-          const atPhysicalTop = physicalScrollStartVisible();
-          repeatedWithoutPhysicalTop = atPhysicalTop
-            ? 0
-            : repeatedWithoutPhysicalTop + 1;
-
-          if (atPhysicalTop && confirmedIdle >= 2) {
-            await progress(
-              fullCapture
-                ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-                : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-              existingCount,
-              {
-                phase: 'walk',
-                iteration: i + 1,
-                topIdleConfirmations: confirmedIdle,
-                retryWalkOnly: !fullCapture,
-                force: true
-              }
-            );
-            return;
-          }
-
-          // Some ChatGPT virtualized layouts report a local scrollTop that is
-          // not a reliable global edge. Three repeated large upward probes with
-          // an identical oldest text window are enough evidence of the top.
-          if (confirmedIdle >= 3) {
-            await progress(
-              'Этап 1/3: начало подтверждено по неизменному старейшему окну.',
-              existingCount,
-              {
-                phase: 'walk',
-                iteration: i + 1,
-                topIdleConfirmations: confirmedIdle,
-                retryWalkOnly: !fullCapture,
-                force: true
-              }
-            );
-            return;
-          }
-
-          if (repeatedWithoutPhysicalTop >= 6) {
-            throw new Error(
-              'Прокрутка вверх не меняет старейшие видимые сообщения, но физический верх не подтверждается. ' +
-              'Сбор остановлен вместо многочасового холостого цикла.'
-            );
-          }
-        } else {
-          confirmedIdle = 0;
-          repeatedWithoutPhysicalTop = 0;
-        }
+      if (
+        !retryVisible &&
+        atPhysicalTop &&
+        beforeFirst &&
+        afterFirst &&
+        beforeFirst === afterFirst
+      ) {
+        topConfirmations++;
       } else {
-        confirmedIdle = 0;
-        repeatedWithoutPhysicalTop = 0;
+        topConfirmations = 0;
       }
 
-      previousTopText = afterText;
+      if (topConfirmations >= 2) {
+        await sleep(500);
+
+        if (
+          !visibleRetryButton() &&
+          physicalScrollStartVisible() &&
+          firstVisibleTurnSignature() === afterFirst
+        ) {
+          await progress(
+            fullCapture
+              ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+              : 'Начало подтверждено. Запускаю хронологический проход вниз…',
+            existingCount,
+            {
+              phase: 'walk',
+              iteration: i + 1,
+              topIdleConfirmations: topConfirmations,
+              retryWalkOnly: !fullCapture,
+              force: true
+            }
+          );
+          return;
+        }
+
+        topConfirmations = 0;
+      }
     }
 
     throw new Error(
