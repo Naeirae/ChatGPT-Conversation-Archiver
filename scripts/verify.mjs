@@ -286,10 +286,10 @@ try {
   if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
       !contentSource.includes('if (!isStrongMessageId(strongId)) return false') ||
       !contentSource.includes('strongId: isStrongMessageId(id) ? id :') ||
-      !contentSource.includes('const leftTail = left.slice(left.length - length)') ||
-      !contentSource.includes('const rightHead = right.slice(0, length)') ||
-      !contentSource.includes('x.strongId === y.strongId')) {
-    fail('scroll/continuation identity: stable anchors and directional one-message overlap must use strong IDs only');
+      !contentSource.includes('for (let i = 0; i <= left.length - length; i++)') ||
+      !contentSource.includes('for (let j = 0; j <= right.length - length; j++)') ||
+      !contentSource.includes('if (!x.strongId) continue')) {
+    fail('scroll/continuation identity: overlap must preserve the proven 0.3.87 contiguous-window rule while using strong IDs for one-message evidence');
   }
 
   const topOnlyStart = contentSource.indexOf('async function reachTopWithoutCapture');
