@@ -131,3 +131,26 @@ Further review against the 0.3.87 fast-navigation implementation found several r
 - top navigation is bounded and aborts a non-moving transport instead of allowing a two-hour idle loop;
 - `orderedTurns()` previously treated ambiguous outer shells as one message and only considered `data-turn-key` wrappers when no normal turn was found at all; mixed rollout DOM can therefore hide visible messages. Logical turns now prefer role-bearing nodes, ambiguous shells are split, and unambiguous wrappers can coexist with ordinary shells;
 - chronological overlap proof is now directional: the suffix of the previous viewport must match the prefix of the next viewport. Arbitrary repeated pairs elsewhere in both windows no longer prove continuity.
+
+
+## Transport-distance regression
+
+A further root cause linked the two observed symptoms — skipped turns and multi-hour runs — to one transport mistake.
+
+The code treated "one burst" as a granular chronological step, but every wheel event still used a fixed `deltaY=860`. Therefore:
+
+- one supposedly granular downward step could still jump nearly a viewport;
+- load-error recovery during the downward pass used two such events, pushing another ~1720 px past the problematic region;
+- continuity recovery then spent many reverse steps trying to re-find overlap;
+- repeated overshoot/recovery cycles could both miss turns and make a run take hours.
+
+The branch now separates wheel distance by traversal purpose:
+
+- fast top navigation keeps the large default wheel distance;
+- chronological capture uses one 320 px wheel event;
+- load-error retry during chronological capture uses one 220 px step;
+- overlap recovery moves upward by 180 px;
+- continuity recovery is bounded to six attempts;
+- rich chronological traversal defaults to one small burst instead of three large bursts.
+
+This makes "fast navigation" and "safe capture" physically different transports rather than only different burst counts.
