@@ -87,6 +87,19 @@ try {
       !serviceWorkerSource.includes('Number(point?.x)')) {
     fail('scroll transport: wheel events must target the detected conversation scroller');
   }
+  const retryStart = contentSource.indexOf('async function recoverVisibleLoadError');
+  const retryEnd = contentSource.indexOf('async function getSettings', retryStart);
+  const retryBlock = retryStart >= 0 && retryEnd > retryStart
+    ? contentSource.slice(retryStart, retryEnd)
+    : '';
+  if (!retryBlock ||
+      !retryBlock.includes('physicalClickElement(retry)') ||
+      !retryBlock.includes('attempt <= 2') ||
+      !retryBlock.includes('ChatGPT дважды не смог догрузить этот участок') ||
+      retryBlock.includes("physicalScroll(direction, 2")) {
+    fail('load-error recovery: verified Retry must be clicked and persistent failures must abort instead of looping');
+  }
+
   if (!scrollSource.includes('wheelDelta = 860') ||
       !scrollSource.includes('wheelDelta') ||
       !contentSource.includes('wheelDelta: 320') ||
