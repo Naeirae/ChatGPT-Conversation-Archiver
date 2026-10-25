@@ -216,9 +216,10 @@
         { phase, retryVisible: true, force: true }
       );
 
-      await physicalScroll(direction, 2, {
-        settleTimeout: 2200,
-        quietWindow: 380
+      await physicalScroll(direction, 1, {
+        settleTimeout: 1800,
+        quietWindow: 320,
+        wheelDelta: phase === 'walk' ? 220 : 640
       });
 
       if (location.href !== originalUrl) {
@@ -2213,7 +2214,7 @@
   async function physicalScroll(
     direction,
     bursts = 7,
-    { settleTimeout = 8000, quietWindow = 1400 } = {}
+    { settleTimeout = 8000, quietWindow = 1400, wheelDelta = 860 } = {}
   ) {
     const result = await scrollRuntime().physicalScroll({
       jobId: state.jobId,
@@ -2222,7 +2223,8 @@
       getSignature: visibleTurnSignature,
       settleTimeout,
       quietWindow,
-      turns: orderedTurns()
+      turns: orderedTurns(),
+      wheelDelta
     });
     state.lastScrollDirection = result.direction;
     return result;
@@ -3435,7 +3437,7 @@
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
-    for (let attempt = 0; attempt < 14; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
@@ -3453,7 +3455,7 @@
       await physicalScroll(
         'up',
         1,
-        { settleTimeout: 2400, quietWindow: 400 }
+        { settleTimeout: 1800, quietWindow: 300, wheelDelta: 180 }
       );
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -3502,8 +3504,9 @@
       // burst count means seven wheel events, which can skip whole virtualized
       // windows. Use one wheel event and prove overlap before accepting movement.
       await physicalScroll('down', 1, {
-        settleTimeout: 2200,
-        quietWindow: 380
+        settleTimeout: 1800,
+        quietWindow: 300,
+        wheelDelta: 320
       });
 
       await expandVisible();
@@ -3558,7 +3561,7 @@
     settings,
     boundary,
     {
-      bursts = 3,
+      bursts = 1,
       requireBoundary = false,
       hydrateImages = false,
       attemptedImageSources = new Set()
@@ -3632,7 +3635,11 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts, { settleTimeout: 2200, quietWindow: 380 });
+      await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
+        settleTimeout: 1800,
+        quietWindow: 300,
+        wheelDelta: 320
+      });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -4013,7 +4020,7 @@
       const walkResult = mode === 'full'
         ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
-            bursts: 3,
+            bursts: 1,
             requireBoundary: false,
             hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
