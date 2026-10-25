@@ -80,12 +80,10 @@ try {
       contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
     fail('content-chatgpt.js: traversal must use the shared scroll runtime instead of reimplementing transport');
   }
-  if (!scrollSource.includes('scrollTargetPoint') ||
-      !scrollSource.includes('point = scrollTargetPoint(turns)') ||
-      !contentSource.includes('turns: orderedTurns()') ||
-      !serviceWorkerSource.includes('message.point || null') ||
-      !serviceWorkerSource.includes('Number(point?.x)')) {
-    fail('scroll transport: wheel events must target the detected conversation scroller');
+  if (scrollSource.includes('scrollTargetPoint(') ||
+      !serviceWorkerSource.includes('Math.round(width * 0.68)') ||
+      !serviceWorkerSource.includes('Math.round(height * 0.48)')) {
+    fail('scroll transport: preserve the stable fixed viewport wheel point; DOM container targeting regressed physical scrolling');
   }
   const retryStart = contentSource.indexOf('async function recoverVisibleLoadError');
   const retryEnd = contentSource.indexOf('async function getSettings', retryStart);
