@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 
 const jsFiles = [
   'service-worker.js',
-  'content-chatgpt-scroll.js',
+  'lib/content-chatgpt-scroll.js',
   'content-chatgpt.js',
   'popup.js',
   'updater.js',
@@ -58,7 +58,7 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_COMPARE_CURRENT'")) {
     fail('service-worker.js: missing compare-current route');
   }
-  const scrollSource = await readFile('content-chatgpt-scroll.js', 'utf8');
+  const scrollSource = await readFile('lib/content-chatgpt-scroll.js', 'utf8');
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
   if (!scrollSource.includes("globalThis[KEY] = Object.freeze") ||
       !scrollSource.includes('findScrollContainer') ||
@@ -725,7 +725,7 @@ try {
   const chatScripts = manifest.content_scripts?.find(item =>
     (item.matches || []).some(match => String(match).includes('chatgpt.com'))
   )?.js || [];
-  if (chatScripts[0] !== 'content-chatgpt-scroll.js' || chatScripts[1] !== 'content-chatgpt.js') {
+  if (chatScripts[0] !== 'lib/content-chatgpt-scroll.js' || chatScripts[1] !== 'content-chatgpt.js') {
     fail('manifest.json: shared scroll runtime must load immediately before content-chatgpt.js');
   }
   if (manifest.manifest_version !== 3) {
