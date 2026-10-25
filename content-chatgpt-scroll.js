@@ -255,7 +255,8 @@
     getSignature,
     settleTimeout = 8000,
     quietWindow = 1400,
-    turns = []
+    turns = [],
+    wheelDelta = 860
   } = {}) {
     const normalizedDirection = direction === 'down' ? 'down' : 'up';
     const point = scrollTargetPoint(turns);
@@ -264,7 +265,8 @@
       jobId,
       direction: normalizedDirection,
       bursts,
-      point
+      point,
+      wheelDelta
     });
 
     if (!result?.ok) {
