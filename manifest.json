@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Архиватор ChatGPT",
-  "version": "0.4.45",
+  "version": "0.4.46",
   "description": "Архиватор ChatGPT: полный сбор, продолжение архивов, Google Docs, копирование и восстановление.",
   "permissions": [
     "activeTab",
@@ -43,6 +43,7 @@
         "https://chat.openai.com/*"
       ],
       "js": [
+        "content-chatgpt-scroll.js",
         "content-chatgpt.js"
       ],
       "run_at": "document_idle"

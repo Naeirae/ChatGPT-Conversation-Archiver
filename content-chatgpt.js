@@ -38,6 +38,11 @@
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
+  function scrollRuntime() {
+    const runtime = globalThis.__CHATGPT_ARCHIVER_SCROLL__;
+    if (!runtime) throw new Error('Scroll runtime не загружен. Перезагрузите расширение.');
+    return runtime;
+  }
   const REASONING_ACTION_EXCLUDE_RE = /copy|share|regenerate|retry|edit|like|dislike|feedback|citation|source|download|listen|read aloud|stop|поделиться|скопировать|повторить|изменить|источник|скачать|озвучить/i;
   const REASONING_STATUS_RE = /^(?:обработка заняла|размышление заняло|размышления заняли|thought for|thinking for|reasoned for|processing took)\b/i;
   const REASONING_ATTR_HINT_RE = /(?:reasoning|thinking|thought|analysis|cot)/i;
@@ -98,7 +103,7 @@
     if (!checkpoint || pauseCheckpointVisible(checkpoint)) return true;
 
     for (let i = 0; i < 180; i++) {
-      await physicalScroll('up', i < 12 ? 2 : 4);
+      await physicalScroll('up', 1);
       await sleep(120);
       if (pauseCheckpointVisible(checkpoint)) return true;
     }
@@ -191,69 +196,85 @@
   }
 
   function visibleRetryButton() {
-    const buttonPattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
-    const errorPattern = /(?:something went wrong|there was an error|network error|failed to load|не удалось загрузить|произошла ошибка|ошибка сети|возникла ошибка)/i;
-
-    return [...document.querySelectorAll('button, [role="button"]')].find(el => {
-      if (!visible(el) || el.disabled) return false;
-
-      const label = String(
-        el.innerText ||
-        el.textContent ||
-        el.getAttribute?.('aria-label') ||
-        el.getAttribute?.('title') ||
-        ''
-      ).replace(/\s+/g, ' ').trim();
-
-      if (!buttonPattern.test(label)) return false;
-
-      // ChatGPT can keep generic Retry buttons in unrelated UI. Recovery is
-      // expensive, so only enter it when the same local region also contains
-      // an actual load/network error message.
-      let node = el;
-      for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
-        const text = String(node.innerText || node.textContent || '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        if (text && errorPattern.test(text)) return true;
-      }
-      return false;
-    }) || null;
+    return scrollRuntime().findVisibleLoadRetry();
   }
 
   async function recoverVisibleLoadError(phase = 'top', count = 0) {
-    // Retry physical scrolling, not ChatGPT's generic button, and only after
-    // visibleRetryButton() has verified a real nearby load error.
-    if (!visibleRetryButton()) return false;
+    const firstRetry = visibleRetryButton();
+    if (!firstRetry) return false;
 
-    const direction = phase === 'walk' ? 'down' : 'up';
     const originalUrl = location.href;
-    const before = visibleTurnSignature();
+    let previousSignature = visibleTurnSignature();
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       await waitIfPaused();
+
+      const retry = visibleRetryButton();
+      if (!retry) return true;
+
       await progress(
-        'ChatGPT не догрузил участок · повторяю прокрутку (' + attempt + '/2)…',
+        'ChatGPT не догрузил участок · нажимаю «Попробовать снова» (' + attempt + '/2)…',
         count,
         { phase, retryVisible: true, force: true }
       );
 
-      await physicalScroll(direction, 2, {
-        settleTimeout: 2200,
-        quietWindow: 380
-      });
-
-      if (location.href !== originalUrl) {
-        throw new Error('Переписка сменилась во время повторной прокрутки. Сбор остановлен.');
+      const clicked = await physicalClickElement(retry);
+      if (!clicked) {
+        throw new Error(
+          'ChatGPT показал «Попробовать снова», но Архиватор не смог нажать кнопку загрузки.'
+        );
       }
 
-      await sleep(350);
-      const after = visibleTurnSignature();
-      if (after && after !== before) return true;
-      if (!visibleRetryButton()) return true;
+      const waitStarted = Date.now();
+      let changed = false;
+      while (Date.now() - waitStarted < 4500) {
+        await sleep(250);
+
+        if (location.href !== originalUrl) {
+          throw new Error('Переписка сменилась во время повторной загрузки. Сбор остановлен.');
+        }
+
+        const currentSignature = visibleTurnSignature();
+        if (!visibleRetryButton()) {
+          changed = true;
+          break;
+        }
+        if (
+          currentSignature &&
+          previousSignature &&
+          currentSignature !== previousSignature
+        ) {
+          changed = true;
+          break;
+        }
+      }
+
+      if (changed) return true;
+      previousSignature = visibleTurnSignature();
+
+      // One small nudge is allowed between two verified Retry clicks. Never
+      // push the chronological walk farther past the failed region.
+      if (attempt === 1) {
+        await physicalScroll(
+          phase === 'walk' ? 'up' : 'up',
+          1,
+          {
+            settleTimeout: 1200,
+            quietWindow: 260,
+            wheelDelta: phase === 'walk' ? 120 : 320
+          }
+        );
+      }
     }
 
-    return false;
+    if (visibleRetryButton()) {
+      throw new Error(
+        'ChatGPT дважды не смог догрузить этот участок после «Попробовать снова». ' +
+        'Сбор остановлен, чтобы не зациклиться и не сохранить архив с пропуском.'
+      );
+    }
+
+    return true;
   }
 
   async function getSettings() {
@@ -316,54 +337,124 @@
   const visible = isVisible;
 
   function getRoleNodes() {
-    const nodes = [...document.querySelectorAll(ROLE_SELECTOR)]
+    return [...document.querySelectorAll(ROLE_SELECTOR)]
       .filter(isVisible)
       .filter(node => !node.parentElement?.closest(ROLE_SELECTOR));
-    return nodes;
+  }
+
+  function elementLogicalRoles(element) {
+    if (!(element instanceof Element)) return [];
+    const roles = [];
+
+    const own =
+      element.getAttribute('data-message-author-role') ||
+      element.getAttribute('data-role') ||
+      element.getAttribute('data-message-author') ||
+      element.getAttribute('data-turn') ||
+      '';
+    if (own === 'user' || own === 'assistant') roles.push(own);
+
+    const searchUnit = String(element.getAttribute('data-chatgpt-search-unit-key') || '');
+    if (searchUnit.endsWith(':user')) roles.push('user');
+    if (searchUnit.endsWith(':assistant')) roles.push('assistant');
+
+    element.querySelectorAll(ROLE_SELECTOR).forEach(node => {
+      const role =
+        node.getAttribute('data-message-author-role') ||
+        node.getAttribute('data-role') ||
+        node.getAttribute('data-message-author') ||
+        '';
+      if (role === 'user' || role === 'assistant') roles.push(role);
+    });
+
+    element.querySelectorAll(
+      '[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]'
+    ).forEach(node => {
+      const key = String(node.getAttribute('data-chatgpt-search-unit-key') || '');
+      if (key.endsWith(':user')) roles.push('user');
+      if (key.endsWith(':assistant')) roles.push('assistant');
+    });
+
+    return [...new Set(roles)];
+  }
+
+  function unambiguousTurnContainer(element, role) {
+    if (!(element instanceof Element) || !role) return false;
+    const roles = elementLogicalRoles(element);
+    return roles.length === 1 && roles[0] === role;
   }
 
   function getTurn(node) {
-    return node.closest('[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]') ||
-      node.closest('[data-testid^="conversation-turn-"]') ||
-      node.closest('section[data-turn]') ||
-      node.closest('article[data-turn]') ||
-      node.closest('[data-turn-key]') ||
-      node;
+    const role = roleOf(node);
+    if (!role) return node;
+
+    const searchUnit = node.closest(
+      '[data-chatgpt-search-unit-key$=":' + role + '"]'
+    );
+    if (searchUnit) return searchUnit;
+
+    const semantic = node.closest(
+      'section[data-turn="' + role + '"], article[data-turn="' + role + '"]'
+    );
+    if (semantic) return semantic;
+
+    const conversationTurn = node.closest('[data-testid^="conversation-turn-"]');
+    if (conversationTurn && unambiguousTurnContainer(conversationTurn, role)) {
+      return conversationTurn;
+    }
+
+    const wrapper = node.closest('[data-turn-key]');
+    if (wrapper && unambiguousTurnContainer(wrapper, role)) {
+      return wrapper;
+    }
+
+    // Ambiguous outer shells may contain both a user and assistant message.
+    // Keep the role-bearing node itself rather than collapsing both messages.
+    return node;
   }
 
   function orderedTurns() {
     const result = [];
     const seen = new Set();
 
-    // Current ChatGPT virtualizes the conversation. A data-turn-key wrapper can
-    // contain both the user and assistant message, so it is not itself a message.
-    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(shell => {
-      if (!roleOf(shell) || seen.has(shell)) return;
-      seen.add(shell);
-      result.push(shell);
-    });
-
-    getRoleNodes().forEach(node => {
-      const turn = getTurn(node);
-      if (!roleOf(turn) || seen.has(turn)) return;
+    const add = turn => {
+      if (!(turn instanceof Element) || !roleOf(turn) || seen.has(turn)) return;
       seen.add(turn);
       result.push(turn);
+    };
+
+    // Prefer role-bearing nodes because they cannot silently collapse two
+    // messages that happen to share one virtualized outer shell.
+    getRoleNodes().forEach(node => add(getTurn(node)));
+
+    // Add shell-shaped turns only when the shell itself is unambiguous and no
+    // already discovered logical turn represents it.
+    document.querySelectorAll(TURN_SHELL_SELECTOR).forEach(shell => {
+      const roles = elementLogicalRoles(shell);
+      if (roles.length !== 1) return;
+
+      const represented = result.some(turn =>
+        turn === shell ||
+        shell.contains(turn) ||
+        turn.contains?.(shell)
+      );
+      if (!represented) add(shell);
     });
 
-    // Fallback only for rollouts that expose a single message directly under a
-    // data-turn-key wrapper and no more specific message shell.
-    if (!result.length) {
-      document.querySelectorAll(TURN_WRAPPER_SELECTOR).forEach(wrapper => {
-        const role = roleOf(wrapper);
-        if (!role) return;
-        const units = wrapper.querySelectorAll(
-          '[data-chatgpt-search-unit-key$=":user"], [data-chatgpt-search-unit-key$=":assistant"]'
-        );
-        if (units.length > 1 || seen.has(wrapper)) return;
-        seen.add(wrapper);
-        result.push(wrapper);
-      });
-    }
+    // Mixed rollout support: a data-turn-key wrapper may coexist with ordinary
+    // shells in the same viewport. Keep a wrapper only when it represents one
+    // role and is not already covered by a more specific logical turn.
+    document.querySelectorAll(TURN_WRAPPER_SELECTOR).forEach(wrapper => {
+      const roles = elementLogicalRoles(wrapper);
+      if (roles.length !== 1) return;
+
+      const represented = result.some(turn =>
+        turn === wrapper ||
+        wrapper.contains(turn) ||
+        turn.contains?.(wrapper)
+      );
+      if (!represented) add(wrapper);
+    });
 
     return result.sort((a, b) => {
       const pos = a.compareDocumentPosition(b);
@@ -441,6 +532,29 @@
     return '';
   }
 
+  function isStrongMessageId(id = '') {
+    return /^(?:data-message-id|data-turn-id):/.test(String(id || ''));
+  }
+
+  function turnIdentityContext(turn) {
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    if (index < 0) return { previous: '', next: '' };
+    const previousTurn = index > 0 ? turns[index - 1] : null;
+    const nextTurn = index + 1 < turns.length ? turns[index + 1] : null;
+    return {
+      previous: previousTurn ? turnTextSignature(previousTurn) : '',
+      next: nextTurn ? turnTextSignature(nextTurn) : ''
+    };
+  }
+
+  function identityContextsCompatible(a, b) {
+    if (!a || !b) return true;
+    if (a.previous && b.previous && a.previous !== b.previous) return false;
+    if (a.next && b.next && a.next !== b.next) return false;
+    return true;
+  }
+
   function turnMessageText(turn) {
     const role = roleOf(turn) || 'unknown';
     const root = contentRoot(turn, role);
@@ -476,8 +590,19 @@
       role: String(value.role || ''),
       ordinal: Number.isFinite(Number(value.ordinal)) ? Number(value.ordinal) : -1,
       signature: String(value.signature || ''),
+      contextBefore: Array.isArray(value.contextBefore)
+        ? value.contextBefore.map(item => String(item || '')).filter(Boolean).slice(-3)
+        : [],
       strictStable: Boolean(value.strictStable)
     };
+  }
+
+  function boundaryContextBefore(turns, index, limit = 3) {
+    if (!Array.isArray(turns) || index <= 0) return [];
+    return turns
+      .slice(Math.max(0, index - Math.max(1, limit)), index)
+      .map(turn => turnTextSignature(turn))
+      .filter(Boolean);
   }
 
   function makeCaptureBoundary(turns) {
@@ -489,54 +614,69 @@
           key,
           role: roleOf(turns[i]) || '',
           ordinal: i,
-          signature: turnTextSignature(turns[i])
+          signature: turnTextSignature(turns[i]),
+          contextBefore: boundaryContextBefore(turns, i)
         };
       }
     }
 
     for (let i = turns.length - 1; i >= 0; i--) {
       if (roleOf(turns[i]) === 'user') {
-        return { kind: 'signature', key: turnTextSignature(turns[i]), role: 'user', ordinal: i };
+        return {
+          kind: 'signature',
+          key: turnTextSignature(turns[i]),
+          role: 'user',
+          ordinal: i,
+          contextBefore: boundaryContextBefore(turns, i)
+        };
       }
     }
 
     const last = turns[turns.length - 1];
-    return last ? { kind: 'signature', key: turnTextSignature(last), role: roleOf(last) || '', ordinal: turns.length - 1 } : null;
+    const index = turns.length - 1;
+    return last ? {
+      kind: 'signature',
+      key: turnTextSignature(last),
+      role: roleOf(last) || '',
+      ordinal: index,
+      contextBefore: boundaryContextBefore(turns, index)
+    } : null;
+  }
+
+  function boundaryContextMatchesTurns(turn, boundary) {
+    const expected = (boundary?.contextBefore || []).filter(Boolean);
+    if (!expected.length) return true;
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    if (index < expected.length) return false;
+    const actual = boundaryContextBefore(turns, index, expected.length);
+    return actual.length === expected.length &&
+      actual.every((signature, offset) => signature === expected[offset]);
   }
 
   function matchesBoundary(turn, boundary) {
     if (!boundary || !turn) return false;
+    const contextMatches = boundaryContextMatchesTurns(turn, boundary);
     if (boundary.kind === 'stable') {
-      if (turnStableKey(turn) === boundary.key) return true;
+      if (turnStableKey(turn) === boundary.key) return contextMatches;
       // Explicitly marked boundaries are user-selected message identities.
       // They must never stop early on another message with identical text.
       if (boundary.strictStable) return false;
-      return Boolean(boundary.signature && turnTextSignature(turn) === boundary.signature);
+      return Boolean(
+        boundary.signature &&
+        turnTextSignature(turn) === boundary.signature &&
+        contextMatches
+      );
     }
-    return turnTextSignature(turn) === boundary.key;
+    return turnTextSignature(turn) === boundary.key && contextMatches;
   }
 
   function physicalScrollEndVisible() {
-    const turns = orderedTurns();
-    const last = turns[turns.length - 1] || null;
-    const scroller = findScrollContainer(last);
-    if (!scroller) return false;
-    const top = Number(scroller.scrollTop || 0);
-    const height = Number(scroller.clientHeight || 0);
-    const total = Number(scroller.scrollHeight || 0);
-    if (!height || !total) return false;
-    return top + height >= total - Math.max(24, Math.round(height * 0.04));
+    return scrollRuntime().physicalScrollEndVisible(orderedTurns());
   }
 
   function physicalScrollStartVisible() {
-    const turns = orderedTurns();
-    const first = turns[0] || null;
-    const scroller = findScrollContainer(first);
-    if (!scroller) return false;
-    const top = Number(scroller.scrollTop || 0);
-    const height = Number(scroller.clientHeight || 0);
-    if (!height) return false;
-    return top <= Math.max(24, Math.round(height * 0.04));
+    return scrollRuntime().physicalScrollStartVisible(orderedTurns());
   }
 
   function boundaryIsVisible(boundary) {
@@ -544,39 +684,8 @@
   }
 
   function findScrollContainer(turn) {
-    let el = turn && turn.parentElement;
-    while (el && el !== document.body && el !== document.documentElement) {
-      const style = getComputedStyle(el);
-      if (/(auto|scroll|overlay)/.test(style.overflowY) && el.scrollHeight > el.clientHeight + 80) return el;
-      el = el.parentElement;
-    }
-
-    const candidates = [
-      document.scrollingElement,
-      document.documentElement,
-      ...document.querySelectorAll('main, main *, [class*="overflow-y-auto"], [class*="overflow-auto"]')
-    ].filter((candidate, index, all) =>
-      candidate &&
-      all.indexOf(candidate) === index &&
-      candidate instanceof Element
-    ).filter(candidate => {
-      const style = getComputedStyle(candidate);
-      return /(auto|scroll|overlay)/.test(style.overflowY) &&
-        candidate.scrollHeight > candidate.clientHeight + 80;
-    });
-
-    const containing = candidates.filter(candidate => candidate.contains(turn));
-    if (containing.length) {
-      return containing.sort((a, b) =>
-        (a.scrollHeight - a.clientHeight) - (b.scrollHeight - b.clientHeight)
-      )[0];
-    }
-
-    return candidates.sort((a, b) =>
-      (b.scrollHeight - b.clientHeight) - (a.scrollHeight - a.clientHeight)
-    )[0] || document.scrollingElement || document.documentElement;
+    return scrollRuntime().findScrollContainer(turn);
   }
-
 
   function reasoningLabel(el) {
     return String(
@@ -1167,8 +1276,11 @@
       : { html: '', text: '', label: '', count: 0 };
 
     const stableId = turnStableKey(turn);
+    const identityContext = turnIdentityContext(turn);
     return {
       id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
+      identityStrong: isStrongMessageId(stableId),
+      identityContext,
       role,
       text,
       html: extraBefore.join('') + clone.innerHTML + extraAfter.join(''),
@@ -1447,17 +1559,34 @@
       const message = captureTurn(turn, ordinal, settings);
 
       if (message) {
-        touchedIds.push(message.id);
-        const existing = map.get(message.id);
+        let messageId = message.id;
+        let existing = map.get(messageId);
+
+        // A virtual wrapper/text ID is only a weak identity. If the same weak ID
+        // reappears with incompatible neighbours, keep both occurrences instead
+        // of silently merging a repeated message into the earlier one.
+        if (existing && !message.identityStrong &&
+            !identityContextsCompatible(existing.identityContext, message.identityContext)) {
+          const contextKey = hashText([
+            message.identityContext?.previous || '',
+            messageTextSignature(message),
+            message.identityContext?.next || ''
+          ].join('|'));
+          messageId = message.id + ':ctx:' + contextKey;
+          message.id = messageId;
+          existing = map.get(messageId);
+        }
+
+        touchedIds.push(messageId);
         if (!existing) {
-          order.push(message.id);
-          map.set(message.id, message);
+          order.push(messageId);
+          map.set(messageId, message);
         } else {
           // Virtualization can recreate the same turn after a prepared image has
           // disappeared or been recreated as a fresh pending <img>. Preserve the
           // richer snapshot, including ready image binaries even when image counts
           // are equal.
-          map.set(message.id, mergeRicherCapture(message, existing));
+          map.set(messageId, mergeRicherCapture(message, existing));
         }
       }
 
@@ -1470,6 +1599,39 @@
     return [...new Set(touchedIds)];
   }
 
+  function rebuildCaptureMap(map, order, messages) {
+    map.clear();
+    order.length = 0;
+
+    for (let index = 0; index < (messages || []).length; index++) {
+      const message = messages[index];
+      if (!message?.id) continue;
+
+      let id = String(message.id);
+      if (map.has(id)) {
+        if (messageStrongId(message)) {
+          // A duplicate strong ID is the same logical message; keep the richer
+          // snapshot instead of inventing a second occurrence.
+          map.set(id, mergeRicherCapture(message, map.get(id)));
+          continue;
+        }
+
+        const contextKey = weakIdentityContextKey(message) ||
+          hashText([messageTextSignature(message), String(index)].join('|'));
+        let candidate = id + ':ctx:' + contextKey;
+        let collision = 1;
+        while (map.has(candidate)) {
+          candidate = id + ':ctx:' + contextKey + ':' + collision++;
+        }
+        id = candidate;
+        message.id = id;
+      }
+
+      map.set(id, message);
+      order.push(id);
+    }
+  }
+
   function capturedImageStats(messages) {
     const images = (messages || []).flatMap(item => item?.images || []);
     return {
@@ -1479,15 +1641,38 @@
     };
   }
 
-  function messageMatchesBoundary(message, boundary) {
+  function messageBoundaryContextMatches(rows, index, boundary) {
+    const expected = (boundary?.contextBefore || []).filter(Boolean);
+    if (!expected.length) return true;
+    if (index < expected.length) return false;
+    const actual = rows
+      .slice(index - expected.length, index)
+      .map(message => messageTextSignature(message))
+      .filter(Boolean);
+    return actual.length === expected.length &&
+      actual.every((signature, offset) => signature === expected[offset]);
+  }
+
+  function messageMatchesBoundary(message, boundary, rows = [], index = -1) {
     if (!message || !boundary) return false;
-    if (boundary.kind === 'stable') return message.id === boundary.key;
-    return messageTextSignature(message) === boundary.key;
+    const contextMatches = messageBoundaryContextMatches(rows, index, boundary);
+    if (boundary.kind === 'stable') {
+      if (message.id === boundary.key) return contextMatches;
+      if (boundary.strictStable) return false;
+      return Boolean(
+        boundary.signature &&
+        messageTextSignature(message) === boundary.signature &&
+        contextMatches
+      );
+    }
+    return messageTextSignature(message) === boundary.key && contextMatches;
   }
 
   function trimMessagesThroughBoundary(messages, boundary) {
     const rows = [...(messages || [])];
-    const index = rows.findIndex(message => messageMatchesBoundary(message, boundary));
+    const index = rows.findIndex((message, i) =>
+      messageMatchesBoundary(message, boundary, rows, i)
+    );
     if (index < 0) return { messages: rows, found: false, trimmed: 0 };
     return {
       messages: rows.slice(0, index + 1),
@@ -1496,9 +1681,16 @@
     };
   }
 
+  function messageStrongId(message) {
+    const id = String(message?.id || '');
+    return (message?.identityStrong || isStrongMessageId(id)) ? id : '';
+  }
+
   function navigationRef(message) {
+    const id = String(message?.id || '');
     return {
-      id: String(message?.id || ''),
+      id,
+      strongId: messageStrongId(message),
       signature: message ? messageTextSignature(message) : '',
       externalSignature: message
         ? externalMatchSignature(message?.role || 'unknown', message?.text || '')
@@ -1508,13 +1700,74 @@
 
   function sameNavigationRef(a, b) {
     if (!a || !b) return false;
-    if (a.id && b.id && a.id === b.id) return true;
+    return Boolean(a.strongId && b.strongId && a.strongId === b.strongId);
+  }
+
+  function sameNavigationText(a, b) {
+    if (!a || !b) return false;
     if (a.signature && b.signature && a.signature === b.signature) return true;
     return Boolean(
       a.externalSignature &&
       b.externalSignature &&
       a.externalSignature === b.externalSignature
     );
+  }
+
+  function sameNavigationSequence(left, right, minWeakLength = 2) {
+    const a = (left || []).filter(Boolean);
+    const b = (right || []).filter(Boolean);
+    if (!a.length || a.length !== b.length) return false;
+    const allStrong = a.every((ref, index) => sameNavigationRef(ref, b[index]));
+    if (allStrong) return true;
+    if (a.length < minWeakLength) return false;
+    return a.every((ref, index) =>
+      sameNavigationRef(ref, b[index]) || sameNavigationText(ref, b[index])
+    );
+  }
+
+  function findContextualRefIndex(targetRefs, ref, sourceRefs = [], sourceIndex = -1) {
+    const target = (targetRefs || []).filter(Boolean);
+    if (!ref || !target.length) return -1;
+
+    const strongMatches = target
+      .map((candidate, index) => sameNavigationRef(candidate, ref) ? index : -1)
+      .filter(index => index >= 0);
+    if (strongMatches.length === 1) return strongMatches[0];
+    if (strongMatches.length > 1) return -1;
+
+    if (sourceIndex < 0 || !sourceRefs.length) return -1;
+
+    const windows = [];
+    for (const length of [4, 3, 2]) {
+      for (let start = Math.max(0, sourceIndex - length + 1);
+           start <= Math.min(sourceIndex, sourceRefs.length - length);
+           start++) {
+        const end = start + length;
+        if (sourceIndex < start || sourceIndex >= end) continue;
+        windows.push({ start, end, length });
+      }
+    }
+
+    for (const window of windows) {
+      const needle = sourceRefs.slice(window.start, window.end);
+      const offset = sourceIndex - window.start;
+      const matches = [];
+      for (let i = 0; i <= target.length - needle.length; i++) {
+        const candidate = target.slice(i, i + needle.length);
+        if (sameNavigationSequence(needle, candidate, 2)) {
+          matches.push(i + offset);
+        }
+      }
+      if (matches.length === 1) return matches[0];
+    }
+
+    return -1;
+  }
+
+  function findContextualMessageIndex(messages, message, sourceMessages = [], sourceIndex = -1) {
+    const targetRefs = (messages || []).map(navigationRef);
+    const sourceRefs = (sourceMessages || []).map(navigationRef);
+    return findContextualRefIndex(targetRefs, navigationRef(message), sourceRefs, sourceIndex);
   }
 
   function recordNavigationWindow(windows, settings, stopBoundary = null) {
@@ -1532,7 +1785,7 @@
     const previous = windows[windows.length - 1] || [];
     if (
       previous.length === refs.length &&
-      previous.every((ref, index) => sameNavigationRef(ref, refs[index]))
+      sameNavigationSequence(previous, refs, 2)
     ) return;
 
     windows.push(refs);
@@ -1542,27 +1795,24 @@
     let sequence = [];
 
     for (const windowRefs of windows || []) {
-      const refs = (windowRefs || []).filter(ref => ref && (ref.id || ref.signature));
+      const refs = (windowRefs || []).filter(ref =>
+        ref && (ref.strongId || ref.id || ref.signature)
+      );
       if (!refs.length) continue;
       if (!sequence.length) {
         sequence = [...refs];
         continue;
       }
 
-      const allKnown = refs.every(ref => sequence.some(existing => sameNavigationRef(ref, existing)));
-      if (allKnown) continue;
-
       let overlap = 0;
       const maxOverlap = Math.min(refs.length, sequence.length);
       for (let size = maxOverlap; size >= 1; size--) {
-        let same = true;
-        for (let offset = 0; offset < size; offset++) {
-          if (!sameNavigationRef(refs[refs.length - size + offset], sequence[offset])) {
-            same = false;
-            break;
-          }
-        }
-        if (same) {
+        const left = refs.slice(refs.length - size);
+        const right = sequence.slice(0, size);
+        if (
+          (size === 1 && sameNavigationRef(left[0], right[0])) ||
+          (size >= 2 && sameNavigationSequence(left, right, 2))
+        ) {
           overlap = size;
           break;
         }
@@ -1573,6 +1823,9 @@
         continue;
       }
 
+      // A single weak text match is never enough to pivot or deduplicate an
+      // upward navigation window. Only a strong message ID may anchor a
+      // one-message overlap; otherwise preserve the whole window as evidence.
       let pivot = null;
       for (let i = 0; i < refs.length && !pivot; i++) {
         const j = sequence.findIndex(existing => sameNavigationRef(refs[i], existing));
@@ -1584,16 +1837,16 @@
         continue;
       }
 
-      // Upward traversal only moves toward older turns. If virtualization gives
-      // us a non-overlapping window, its visible messages are still older than
-      // the sequence already observed below it.
-      const unseen = refs.filter(ref => !sequence.some(existing => sameNavigationRef(ref, existing)));
-      sequence = unseen.concat(sequence);
+      sequence = refs.concat(sequence);
     }
 
     const deduped = [];
     for (const ref of sequence) {
-      if (!deduped.some(existing => sameNavigationRef(ref, existing))) deduped.push(ref);
+      if (
+        ref.strongId &&
+        deduped.some(existing => sameNavigationRef(ref, existing))
+      ) continue;
+      deduped.push(ref);
     }
     return deduped;
   }
@@ -1622,23 +1875,39 @@
   function reconcileNavigationCoverage(capturedMessages, navigationMessages, navigationSequence) {
     const result = [...(capturedMessages || [])];
     const navMessages = [...(navigationMessages || [])];
+    const navRefs = (navigationSequence || []).filter(Boolean);
 
-    const matchesRef = (message, ref) => sameNavigationRef(navigationRef(message), ref);
-    const findResultIndex = ref => result.findIndex(message => matchesRef(message, ref));
-    const findNavigationMessage = ref => navMessages.find(message => matchesRef(message, ref)) || null;
+    const resultRefs = () => result.map(navigationRef);
+    const navMessageRefs = navMessages.map(navigationRef);
 
-    // First use the upward pass as a richness fallback for messages that are
-    // already present in the chronological pass.
+    const findResultIndex = ref => {
+      const sourceIndex = navRefs.indexOf(ref);
+      return findContextualRefIndex(resultRefs(), ref, navRefs, sourceIndex);
+    };
+
+    const findNavigationMessage = ref => {
+      const sourceIndex = navRefs.indexOf(ref);
+      const index = findContextualRefIndex(navMessageRefs, ref, navRefs, sourceIndex);
+      return index >= 0 ? navMessages[index] : null;
+    };
+
+    // Enrich only when the correspondence is strong or uniquely contextual.
+    // Repeated standalone text is never enough to merge two messages.
     for (let i = 0; i < result.length; i++) {
-      const fallback = navMessages.find(message =>
-        sameNavigationRef(navigationRef(result[i]), navigationRef(message))
+      const index = findContextualMessageIndex(
+        navMessages,
+        result[i],
+        result,
+        i
       );
-      if (fallback) result[i] = mergeRicherCapture(result[i], fallback);
+      if (index >= 0) {
+        result[i] = mergeRicherCapture(result[i], navMessages[index]);
+      }
     }
 
     const missingGroups = [];
     let current = [];
-    for (const ref of navigationSequence || []) {
+    for (const ref of navRefs) {
       if (findResultIndex(ref) >= 0) {
         if (current.length) {
           missingGroups.push(current);
@@ -1656,27 +1925,21 @@
     for (const group of missingGroups) {
       const firstRef = group[0];
       const lastRef = group[group.length - 1];
-      const firstNavIndex = (navigationSequence || []).findIndex(ref => sameNavigationRef(ref, firstRef));
-      let lastNavIndex = firstNavIndex;
-      for (let i = firstNavIndex; i < (navigationSequence || []).length; i++) {
-        if (sameNavigationRef(navigationSequence[i], lastRef)) {
-          lastNavIndex = i;
-          break;
-        }
-      }
+      const firstNavIndex = navRefs.indexOf(firstRef);
+      const lastNavIndex = navRefs.indexOf(lastRef);
 
       let previousRef = null;
       for (let i = firstNavIndex - 1; i >= 0; i--) {
-        if (findResultIndex(navigationSequence[i]) >= 0) {
-          previousRef = navigationSequence[i];
+        if (findResultIndex(navRefs[i]) >= 0) {
+          previousRef = navRefs[i];
           break;
         }
       }
 
       let nextRef = null;
-      for (let i = lastNavIndex + 1; i < (navigationSequence || []).length; i++) {
-        if (findResultIndex(navigationSequence[i]) >= 0) {
-          nextRef = navigationSequence[i];
+      for (let i = lastNavIndex + 1; i < navRefs.length; i++) {
+        if (findResultIndex(navRefs[i]) >= 0) {
+          nextRef = navRefs[i];
           break;
         }
       }
@@ -1708,17 +1971,8 @@
       insertedCount += messages.length;
     }
 
-    const unresolvedRefs = (navigationSequence || []).filter(ref => findResultIndex(ref) < 0);
-    const unsequencedNavigation = navMessages.filter(message =>
-      !(navigationSequence || []).some(ref => matchesRef(message, ref)) &&
-      !result.some(existing =>
-        sameNavigationRef(navigationRef(existing), navigationRef(message))
-      )
-    );
-    unresolvedCount = Math.max(
-      unresolvedCount,
-      unresolvedRefs.length + unsequencedNavigation.length
-    );
+    const unresolvedRefs = navRefs.filter(ref => findResultIndex(ref) < 0);
+    unresolvedCount = Math.max(unresolvedCount, unresolvedRefs.length);
 
     return {
       messages: result,
@@ -1807,13 +2061,15 @@
 
     for (let oldIndex = 0; oldIndex < existing.length; oldIndex++) {
       const oldMessage = existing[oldIndex];
-      let found = -1;
-      for (let i = searchFrom; i < captured.length; i++) {
-        if (sameNavigationRef(navigationRef(oldMessage), navigationRef(captured[i]))) {
-          found = i;
-          break;
-        }
-      }
+      const candidateSlice = captured.slice(searchFrom);
+      const localIndex = findContextualMessageIndex(
+        candidateSlice,
+        oldMessage,
+        existing,
+        oldIndex
+      );
+      const found = localIndex >= 0 ? searchFrom + localIndex : -1;
+
       if (found < 0) {
         return {
           ok: false,
@@ -1823,6 +2079,7 @@
           addedCount: 0
         };
       }
+
       matchedCapturedIndexes.push(found);
       searchFrom = found + 1;
     }
@@ -1843,18 +2100,64 @@
     };
   }
 
+  function weakIdentityContextKey(message) {
+    const context = message?.identityContext || {};
+    if (!context.previous && !context.next) return '';
+    return hashText([
+      context.previous || '',
+      messageTextSignature(message),
+      context.next || ''
+    ].join('|'));
+  }
+
+  function buildImageScanPool(candidates) {
+    const pooled = [];
+    const byKey = new Map();
+
+    for (const candidate of candidates || []) {
+      if (!candidate) continue;
+      const strongId = messageStrongId(candidate);
+      const weakContext = weakIdentityContextKey(candidate);
+      const key = strongId
+        ? 'strong:' + strongId
+        : weakContext
+          ? 'weak:' + String(candidate.id || '') + ':' + weakContext
+          : '';
+
+      if (!key) {
+        pooled.push({ ...candidate, images: [...(candidate.images || [])] });
+        continue;
+      }
+
+      const previous = byKey.get(key);
+      if (!previous) {
+        const copy = { ...candidate, images: [...(candidate.images || [])] };
+        byKey.set(key, copy);
+        pooled.push(copy);
+        continue;
+      }
+
+      const merged = mergeImageRecords(previous.images || [], candidate.images || []);
+      previous.images = merged.images;
+    }
+
+    return pooled;
+  }
+
   function mergeRecoveredImagesIntoArchive(existingMessages, scannedMessages) {
     const scanned = scannedMessages || [];
     const result = (existingMessages || []).map(message => ({ ...message }));
     const recovered = [];
 
-    const findScanned = message => scanned.find(candidate =>
-      sameNavigationRef(navigationRef(message), navigationRef(candidate))
-    ) || null;
-
     for (let i = 0; i < result.length; i++) {
       const target = result[i];
-      const source = findScanned(target);
+      const sourceIndex = findContextualMessageIndex(
+        scanned,
+        target,
+        result,
+        i
+      );
+      const source = sourceIndex >= 0 ? scanned[sourceIndex] : null;
       if (!source?.images?.length) continue;
 
       const beforeImages = target.images || [];
@@ -1922,45 +2225,57 @@
 
   function visibleTurnSignature() {
     const keys = orderedTurns().map(turn => turnStableKey(turn) || turnTextSignature(turn));
-    return keys.slice(0, 3).concat(keys.slice(-3)).join('|') + '::' + keys.length;
+    return keys.join('|') + '::' + keys.length;
+  }
+
+  function visibleTopTextSignature(limit = 6) {
+    const signatures = orderedTurns()
+      .slice(0, Math.max(2, Number(limit) || 6))
+      .map(turn => turnTextSignature(turn))
+      .filter(Boolean);
+    return signatures.join('|') + '::' + signatures.length;
+  }
+
+  function scrollObservation(capturedCount = 0) {
+    const turns = orderedTurns();
+    return scrollRuntime().observeWindow({
+      turns,
+      getTurnKey: turn => turnStableKey(turn) || turnTextSignature(turn),
+      signature: visibleTurnSignature(),
+      capturedCount
+    });
   }
 
   async function waitForTurnSettle(timeout = 8000, quietWindow = 1400) {
-    const started = Date.now();
-    let previous = visibleTurnSignature();
-    let quietSince = Date.now();
-
-    while (Date.now() - started < timeout) {
-      await sleep(220);
-      const next = visibleTurnSignature();
-
-      if (next && next === previous) {
-        if (Date.now() - quietSince >= quietWindow) return next;
-      } else {
-        previous = next;
-        quietSince = Date.now();
-      }
-    }
-
-    return previous;
+    return scrollRuntime().waitForTurnSettle(visibleTurnSignature, {
+      timeout,
+      quietWindow
+    });
   }
 
   async function physicalScroll(
     direction,
     bursts = 7,
-    { settleTimeout = 8000, quietWindow = 1400 } = {}
+    { settleTimeout = 8000, quietWindow = 1400, wheelDelta = 860 } = {}
   ) {
-    const normalizedDirection = direction === 'down' ? 'down' : 'up';
-    const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_PHYSICAL_SCROLL',
+    const result = await scrollRuntime().physicalScroll({
       jobId: state.jobId,
-      direction: normalizedDirection,
-      bursts
+      direction,
+      bursts,
+      getSignature: visibleTurnSignature,
+      settleTimeout,
+      quietWindow,
+      turns: orderedTurns(),
+      wheelDelta
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
-    state.lastScrollDirection = normalizedDirection;
-    await waitForTurnSettle(settleTimeout, quietWindow);
+    state.lastScrollDirection = result.direction;
     return result;
+  }
+
+  function hasStableResumeAnchor(id) {
+    const strongId = String(id || '');
+    if (!isStrongMessageId(strongId)) return false;
+    return orderedTurns().some(turn => turnStableKey(turn) === strongId);
   }
 
   function hasResumeAnchor(id, signature) {
@@ -2139,7 +2454,7 @@
             boundarySearchIteration: i + 1
           }
         );
-        await physicalScroll(direction, direction === 'up' ? 6 : 4, {
+        await physicalScroll(direction, 1, {
           settleTimeout: 2600,
           quietWindow: 350
         });
@@ -2180,9 +2495,7 @@
 
   async function reachTop(map, order, settings, navigationWindows = null, startAnchor = null, checkpointBoundary = null) {
     let confirmedIdle = 0;
-    let previousSignature = '';
-    let previousSize = -1;
-    let firstVisibleKey = '';
+    const stability = scrollRuntime().createStabilityState();
 
     for (let i = 0; i < 320; i++) {
       await waitIfPaused();
@@ -2200,9 +2513,7 @@
 
       if (await recoverVisibleLoadError('top', map.size)) {
         confirmedIdle = 0;
-        previousSignature = '';
-        previousSize = -1;
-        firstVisibleKey = '';
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -2217,11 +2528,7 @@
           text: turnMessageText(turn)
         }, startAnchor))) return;
 
-      const turnsBefore = orderedTurns();
-      const signature = visibleTurnSignature();
-      const firstBefore = turnsBefore.length
-        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
-        : '';
+      const before = scrollObservation(map.size);
 
       await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
         phase: 'top',
@@ -2260,26 +2567,16 @@
           text: turnMessageText(turn)
         }, startAnchor))) return;
 
-      let nextSignature = visibleTurnSignature();
-      let turnsAfter = orderedTurns();
-      let firstAfter = turnsAfter.length
-        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-        : '';
-      let nextSize = map.size;
+      const after = scrollObservation(map.size);
+      const candidate = scrollRuntime().updateStabilityState(stability, before, after, {
+        requireFirstKey: true
+      });
 
-      const unchanged =
-        Boolean(nextSignature) &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        nextSize === previousSize &&
-        firstAfter === firstBefore &&
-        firstAfter === firstVisibleKey;
-
-      if (unchanged) {
+      if (candidate.unchanged) {
         await progress('Этап 1/3: проверяю, не догружается ли начало…', map.size, {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: confirmedIdle + 1
+          topIdleConfirmations: candidate.stable
         });
 
         await sleep(700);
@@ -2288,33 +2585,18 @@
         collect(map, order, settings, checkpointBoundary);
         recordNavigationWindow(navigationWindows, settings, checkpointBoundary);
 
-        const afterWaitSignature = visibleTurnSignature();
-        turnsAfter = orderedTurns();
-        const afterWaitFirst = turnsAfter.length
-          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-          : '';
-
-        if (
-          afterWaitSignature === nextSignature &&
-          map.size === nextSize &&
-          afterWaitFirst === firstAfter
-        ) {
-          confirmedIdle++;
+        const afterWait = scrollObservation(map.size);
+        if (scrollRuntime().sameWindow(after, afterWait, { requireFirstKey: true })) {
+          confirmedIdle = candidate.stable;
         } else {
           confirmedIdle = 0;
-          nextSignature = afterWaitSignature;
-          firstAfter = afterWaitFirst;
-          nextSize = map.size;
+          scrollRuntime().primeStabilityState(stability, afterWait);
         }
       } else {
         confirmedIdle = 0;
       }
 
-      previousSignature = nextSignature;
-      previousSize = nextSize;
-      firstVisibleKey = firstAfter;
-
-      if (confirmedIdle >= 2 && !visibleRetryButton()) {
+      if (confirmedIdle >= 2) {
         if (startAnchor) {
           throw new Error('Не удалось найти отмеченное начало: достигнуто начало переписки.');
         }
@@ -2342,16 +2624,32 @@
       /Пожаловаться на разговор/i.test(intro);
   }
 
+  function explicitConversationStartVisible() {
+    const selectors = [
+      '[data-testid="conversation-turn-0"]',
+      '[data-chatgpt-search-unit-key^="fallback-turn-0:"]',
+      '[data-chatgpt-search-unit-key="fallback-turn-0:user"]',
+      '[data-chatgpt-search-unit-key="fallback-turn-0:assistant"]'
+    ];
+
+    return selectors.some(selector =>
+      [...document.querySelectorAll(selector)].some(node => isVisible(node))
+    );
+  }
+
+  function firstVisibleTurnSignature() {
+    const first = orderedTurns()[0] || null;
+    return first ? turnTextSignature(first) : '';
+  }
+
   async function reachTopWithoutCapture(
     existingCount = 0,
     {
       fullCapture = false,
-      timeoutMs = 2 * 60 * 60 * 1000
+      timeoutMs = 30 * 60 * 1000
     } = {}
   ) {
-    let confirmedIdle = 0;
-    let previousSignature = '';
-    let firstVisibleKey = '';
+    let topConfirmations = 0;
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2374,45 +2672,37 @@
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
-        confirmedIdle = 0;
-        previousSignature = '';
-        firstVisibleKey = '';
+        topConfirmations = 0;
       }
 
-      if (sharedConversationStartVisible()) {
-        await progress('Начало опубликованной переписки подтверждено.', existingCount, {
+      if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
+        await progress('Этап 1/3: начало переписки найдено.', existingCount, {
           phase: 'walk',
           force: true,
-          sharedStartDetected: true
+          explicitStartDetected: true
         });
         return;
       }
 
-      const turnsBefore = orderedTurns();
-      const signature = visibleTurnSignature();
-      const firstBefore = turnsBefore.length
-        ? (turnStableKey(turnsBefore[0]) || turnTextSignature(turnsBefore[0]))
-        : '';
+      const beforeFirst = firstVisibleTurnSignature();
 
       await progress(
         fullCapture
-          ? 'Этап 1/3: быстро иду к началу · можно помочь вручную'
+          ? 'Этап 1/3: быстро иду к началу · без разбора сообщений на пути вверх'
           : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений…',
         existingCount,
         {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: confirmedIdle,
+          topIdleConfirmations: topConfirmations,
           retryWalkOnly: !fullCapture,
           manualAssistAllowed: true
         }
       );
 
-      // This phase is navigation only. Give ChatGPT enough time to replace the
-      // virtualized message window before deciding that upward motion is over.
-      await physicalScroll('up', 24, {
-        settleTimeout: 4500,
-        quietWindow: 450
+      await physicalScroll('up', 16, {
+        settleTimeout: 2600,
+        quietWindow: 360
       });
 
       if (state.manualTopConfirmed) {
@@ -2431,85 +2721,64 @@
         return;
       }
 
-      if (sharedConversationStartVisible()) {
-        await progress('Начало опубликованной переписки найдено.', existingCount, {
+      if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
+        await progress('Этап 1/3: начало переписки найдено.', existingCount, {
           phase: 'walk',
+          iteration: i + 1,
           force: true,
-          sharedStartDetected: true
+          explicitStartDetected: true
         });
         return;
       }
 
-      let nextSignature = visibleTurnSignature();
-      let turnsAfter = orderedTurns();
-      let firstAfter = turnsAfter.length
-        ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-        : '';
+      const afterFirst = firstVisibleTurnSignature();
+      const atPhysicalTop = physicalScrollStartVisible();
+      const retryVisible = Boolean(visibleRetryButton());
 
-      const unchanged =
-        Boolean(nextSignature) &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        firstAfter === firstBefore &&
-        firstAfter === firstVisibleKey;
-
-      if (unchanged) {
-        await progress(
-          'Этап 1/3: проверяю, не догружается ли ещё более ранняя часть…',
-          existingCount,
-          {
-            phase: 'top',
-            iteration: i + 1,
-            topIdleConfirmations: confirmedIdle + 1,
-            retryWalkOnly: !fullCapture,
-            manualAssistAllowed: true
-          }
-        );
-
-        await sleep(700);
-        const afterWaitSignature = visibleTurnSignature();
-        turnsAfter = orderedTurns();
-        const afterWaitFirst = turnsAfter.length
-          ? (turnStableKey(turnsAfter[0]) || turnTextSignature(turnsAfter[0]))
-          : '';
-
-        if (afterWaitSignature === nextSignature && afterWaitFirst === firstAfter) {
-          confirmedIdle++;
-        } else {
-          confirmedIdle = 0;
-          nextSignature = afterWaitSignature;
-          firstAfter = afterWaitFirst;
-        }
+      if (
+        !retryVisible &&
+        atPhysicalTop &&
+        beforeFirst &&
+        afterFirst &&
+        beforeFirst === afterFirst
+      ) {
+        topConfirmations++;
       } else {
-        confirmedIdle = 0;
+        topConfirmations = 0;
       }
 
-      previousSignature = nextSignature;
-      firstVisibleKey = firstAfter;
+      if (topConfirmations >= 2) {
+        await sleep(500);
 
-      if (confirmedIdle >= 2 && !visibleRetryButton()) {
-        await progress(
-          fullCapture
-            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-          existingCount,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            topIdleConfirmations: confirmedIdle,
-            retryWalkOnly: !fullCapture,
-            manualAssistAllowed: true,
-            force: true
-          }
-        );
-        return;
+        if (
+          !visibleRetryButton() &&
+          physicalScrollStartVisible() &&
+          firstVisibleTurnSignature() === afterFirst
+        ) {
+          await progress(
+            fullCapture
+              ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+              : 'Начало подтверждено. Запускаю хронологический проход вниз…',
+            existingCount,
+            {
+              phase: 'walk',
+              iteration: i + 1,
+              topIdleConfirmations: topConfirmations,
+              retryWalkOnly: !fullCapture,
+              force: true
+            }
+          );
+          return;
+        }
+
+        topConfirmations = 0;
       }
     }
 
     throw new Error(
       fullCapture
-        ? 'Не удалось подтвердить начало переписки за два часа непрерывной навигации.'
-        : 'Не удалось надежно вернуть рабочую вкладку к началу за два часа.'
+        ? 'Не удалось подтвердить начало переписки в пределах времени навигации.'
+        : 'Не удалось надежно вернуть рабочую вкладку к началу в пределах времени навигации.'
     );
   }
 
@@ -2518,16 +2787,13 @@
       throw new Error('У сохраненного архива нет якоря продолжения.');
     }
 
+    const upwardStability = scrollRuntime().createStabilityState();
+
     for (let i = 0; i < 72; i++) {
       await waitIfPaused();
 
-      if (physicalScrollStartVisible() && i > 0) {
-        throw new Error(
-          'Сохранённый стык не найден локально. Продолжение остановлено, чтобы не превращать его в полный проход к началу.'
-        );
-      }
-
       if (await recoverVisibleLoadError('top', map.size)) {
+        scrollRuntime().resetStabilityState(upwardStability);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings);
@@ -2577,15 +2843,34 @@
         return { id: '', signature: anchorSignature, matchLength: 1 };
       }
 
+      const before = scrollObservation(map.size);
       await progress('Этап 1/3: ищу последний сохраненный стык · ' + map.size + ' сообщений', map.size, {
         phase: 'top',
         iteration: i + 1
       });
 
-      await physicalScroll('up');
+      await physicalScroll('up', 1);
+
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(upwardStability, before, after, {
+        requireFirstKey: true
+      });
+      if (stall.stable >= 2 && after.atStart) {
+        if (allowDownwardFallback) break;
+        throw new Error(
+          'Сохранённый стык не найден после подтверждённого прохода до начала переписки.'
+        );
+      }
+      if (stall.stable >= 5) {
+        if (allowDownwardFallback) break;
+        throw new Error(
+          'Поиск сохранённого стыка остановился на неизменном участке до подтверждённого начала.'
+        );
+      }
     }
 
     if (allowDownwardFallback) {
+      const downwardStability = scrollRuntime().createStabilityState();
       await progress('Стык не найден выше; проверяю участок ниже текущей позиции…', map.size, {
         phase: 'top',
         force: true
@@ -2632,7 +2917,14 @@
           return { id: '', signature: anchorSignature, matchLength: 1 };
         }
 
-        await physicalScroll('down', 3);
+        const before = scrollObservation(map.size);
+        await physicalScroll('down', 1);
+        const after = scrollObservation(map.size);
+        const stall = scrollRuntime().updateStabilityState(downwardStability, before, after, {
+          requireLastKey: true
+        });
+        if (stall.stable >= 3 && after.atEnd) break;
+        if (stall.stable >= 6) break;
       }
     }
 
@@ -2893,11 +3185,7 @@
         }
 
         const before = visibleTurnSignature();
-        const bursts = crossedFrontier
-          ? 1
-          : direction === 'down'
-            ? 2
-            : (enteredSavedPrefix ? 2 : 5);
+        const bursts = 1;
 
         await physicalScroll(direction, bursts, {
           settleTimeout: 2600,
@@ -3020,7 +3308,7 @@
       );
 
       const before = visibleTurnSignature();
-      await physicalScroll(direction, direction === 'down' ? 3 : 5);
+      await physicalScroll(direction, 1);
       const after = visibleTurnSignature();
 
       if (after && after === before && after === previousSignature) unchanged++;
@@ -3146,34 +3434,52 @@
 
   function visibleNavigationRefsLightweight() {
     return orderedTurns()
-      .map(turn => ({
-        id: String(turnStableKey(turn) || ''),
-        signature: String(turnTextSignature(turn) || '')
-      }))
-      .filter(ref => ref.id || ref.signature);
+      .map(turn => {
+        const id = String(turnStableKey(turn) || '');
+        return {
+          id,
+          strongId: isStrongMessageId(id) ? id : '',
+          signature: String(turnTextSignature(turn) || '')
+        };
+      })
+      .filter(ref => ref.strongId || ref.signature);
   }
 
   function navigationWindowsOverlap(a, b) {
-    const left = (a || []).filter(ref => ref && (ref.id || ref.signature));
-    const right = (b || []).filter(ref => ref && (ref.id || ref.signature));
+    const left = (a || []).filter(ref => ref && (ref.strongId || ref.signature));
+    const right = (b || []).filter(ref => ref && (ref.strongId || ref.signature));
     if (!left.length || !right.length) return false;
 
-    // A stable message ID is strong evidence on its own.
+    // One real ChatGPT message ID is sufficient evidence that the two
+    // virtualized windows overlap.
     for (const x of left) {
-      if (!x.id) continue;
-      if (right.some(y => y.id && y.id === x.id)) return true;
+      if (!x.strongId) continue;
+      if (right.some(y => y.strongId && y.strongId === x.strongId)) return true;
     }
 
-    // Text signatures can repeat, so require at least two adjacent messages in
-    // the same order before treating two virtualized windows as continuous.
-    const maxLength = Math.min(4, left.length, right.length);
+    // Virtualized viewports do not necessarily align tail-to-head after a
+    // wheel step. Preserve the proven 0.3.87 rule: any ordered run of at least
+    // two adjacent messages shared by both windows proves continuity.
+    // Standalone text is never enough.
+    const maxLength = Math.min(6, left.length, right.length);
     for (let length = maxLength; length >= 2; length--) {
       for (let i = 0; i <= left.length - length; i++) {
         for (let j = 0; j <= right.length - length; j++) {
           let same = true;
           for (let offset = 0; offset < length; offset++) {
-            if (!left[i + offset].signature ||
-                left[i + offset].signature !== right[j + offset].signature) {
+            const l = left[i + offset];
+            const r = right[j + offset];
+            const strongSame = Boolean(
+              l.strongId &&
+              r.strongId &&
+              l.strongId === r.strongId
+            );
+            const textSame = Boolean(
+              l.signature &&
+              r.signature &&
+              l.signature === r.signature
+            );
+            if (!strongSame && !textSame) {
               same = false;
               break;
             }
@@ -3187,7 +3493,7 @@
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
-    for (let attempt = 0; attempt < 14; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
@@ -3205,7 +3511,7 @@
       await physicalScroll(
         'up',
         1,
-        { settleTimeout: 2400, quietWindow: 400 }
+        { settleTimeout: 1800, quietWindow: 300, wheelDelta: 180 }
       );
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -3215,104 +3521,16 @@
     return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
   }
 
-  async function reachTopFullLegacy(map, order, settings) {
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
 
-    for (let i = 0; i < 260; i++) {
-      await waitIfPaused();
-
-      if (await recoverVisibleLoadError('top', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
-      }
-
-      if (state.manualTopConfirmed) {
-        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          manualTopConfirmed: true,
-          force: true
-        });
-        return;
-      }
-
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-
-      const signature = visibleTurnSignature();
-      await progress('Этап 1/3: физически иду к началу · найдено ' + map.size + ' сообщений', map.size, {
-        phase: 'top',
-        iteration: i + 1
-      });
-
-      // Historical working cadence from 0.3.14.
-      await physicalScroll('up', 7, {
-        settleTimeout: 1600,
-        quietWindow: 360
-      });
-
-      if (state.manualTopConfirmed) {
-        await progress('Этап 1/3: начало подтверждено вручную.', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          manualTopConfirmed: true,
-          force: true
-        });
-        return;
-      }
-
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings);
-
-      const nextSignature = visibleTurnSignature();
-      const retryVisible = Boolean(visibleRetryButton());
-      if (
-        !retryVisible &&
-        nextSignature &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        map.size === previousSize
-      ) {
-        stable++;
-      } else {
-        stable = 0;
-      }
-
-      previousSignature = nextSignature;
-      previousSize = map.size;
-
-      // This is intentionally the old conservative stop rule. If ChatGPT is
-      // slow at the top, the user can press "I'm at the beginning".
-      if (stable >= 4 && !visibleRetryButton()) {
-        await progress('Этап 1/3: начало достигнуто · найдено ' + map.size + ' сообщений', map.size, {
-          phase: 'top',
-          iteration: i + 1,
-          force: true
-        });
-        return;
-      }
-    }
-
-    throw new Error('Не удалось надёжно дойти до начала переписки. Можно повторить и использовать «Я в начале».');
-  }
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
+    const stability = scrollRuntime().createStabilityState();
 
     for (let i = 0; i < 520; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -3330,30 +3548,61 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const signature = visibleTurnSignature();
+      const before = scrollObservation(map.size);
+      const beforeRefs = visibleNavigationRefsLightweight();
       await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
         phase: 'walk',
         iteration: i + 1,
         chronologicalCount: map.size
       });
 
-      // Stable pre-recovery path: one physical scroll request, then wait for the
-      // virtualized window to settle. No checkpoint/storage/network/recovery work here.
-      await physicalScroll('down');
+      // Chronological capture must stay granular. A request without an explicit
+      // burst count means seven wheel events, which can skip whole virtualized
+      // windows. Use one wheel event and prove overlap before accepting movement.
+      await physicalScroll('down', 1, {
+        settleTimeout: 1800,
+        quietWindow: 300,
+        wheelDelta: 320
+      });
 
-      const nextSignature = visibleTurnSignature();
-      const retryVisible = Boolean(visibleRetryButton());
-      if (!retryVisible && nextSignature && nextSignature === signature &&
-          signature === previousSignature && map.size === previousSize) {
-        stable++;
-      } else {
-        stable = 0;
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+
+      if (boundaryIsVisible(boundary)) {
+        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
+        return { boundaryReached: true, physicalEndReached: false };
       }
 
-      previousSignature = nextSignature;
-      previousSize = map.size;
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (beforeRefs.length && afterRefs.length &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Полный хронологический проход потерял перекрытие между соседними участками. ' +
+            'Сбор остановлен, чтобы не сохранить архив с пропуском.'
+          );
+        }
+        scrollRuntime().resetStabilityState(stability);
+        continue;
+      }
 
-      if (stable >= 4 && !visibleRetryButton()) break;
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(stability, before, after);
+      if (stall.stable >= 4) break;
     }
 
     if (!boundaryIsVisible(boundary)) {
@@ -3368,15 +3617,13 @@
     settings,
     boundary,
     {
-      bursts = 3,
+      bursts = 1,
       requireBoundary = false,
       hydrateImages = false,
       attemptedImageSources = new Set()
     } = {}
   ) {
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
+    const stability = scrollRuntime().createStabilityState();
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -3384,9 +3631,7 @@
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -3425,7 +3670,7 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const signature = visibleTurnSignature();
+      const before = scrollObservation(map.size);
       const walkImageStats = capturedImageStats([...map.values()]);
       await progress(
         'Этап 2/3: физически прохожу вниз · ' +
@@ -3446,7 +3691,11 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', bursts, { settleTimeout: 2200, quietWindow: 380 });
+      await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
+        settleTimeout: 1800,
+        quietWindow: 300,
+        wheelDelta: 320
+      });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -3497,24 +3746,17 @@
           );
         }
 
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
+        scrollRuntime().resetStabilityState(stability);
         await saveRecoveryCheckpoint(map, order, boundary);
         continue;
       }
 
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      const nextSignature = visibleTurnSignature();
-      if (nextSignature && nextSignature === signature &&
-          signature === previousSignature && map.size === previousSize) stable++;
-      else stable = 0;
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(stability, before, after);
 
-      previousSignature = nextSignature;
-      previousSize = map.size;
-
-      if (stable >= 3 && physicalScrollEndVisible()) {
+      if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
           throw new Error(
             'Достигнут физический конец, но отмеченная нижняя граница не найдена. ' +
@@ -3543,7 +3785,7 @@
         return { boundaryReached: false, physicalEndReached: true };
       }
 
-      if (stable >= 6) {
+      if (stall.stable >= 6) {
         throw new Error(
           'Хронологический проход остановился до зафиксированного конца снимка.'
         );
@@ -3708,11 +3950,16 @@
         }
 
         if (mode === 'full') {
-          // Historical 0.3.14/0.4.17 behavior: the upward pass is navigation
-          // only. The canonical archive is built once, chronologically, on the
-          // top-to-bottom pass. Do not compare two virtualized snapshots as if
-          // they were two independent canonical captures.
-          await reachTopFullLegacy(map, order, settings);
+          // Restore the 0.3.87 fast path: full capture must not parse/store the
+          // conversation while travelling upward. The upward phase is navigation
+          // only; the canonical archive is built once, chronologically, after
+          // the real top is confirmed.
+          map.clear();
+          order.length = 0;
+          await reachTopWithoutCapture(0, {
+            fullCapture: true,
+            timeoutMs: 20 * 60 * 1000
+          });
         } else {
           // Rich upward scans normally begin at the fixed lower boundary. Manual
           // full-range capture is different: the user already chose an explicit
@@ -3829,7 +4076,7 @@
       const walkResult = mode === 'full'
         ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
-            bursts: 3,
+            bursts: 1,
             requireBoundary: false,
             hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
@@ -3887,13 +4134,7 @@
 
         // Keep the best first-pass result as the unfinished-pass source too. The old
         // coverage retry cleared map/order and could destroy a usable capture.
-        map.clear();
-        order.length = 0;
-        for (const message of capturedMessages) {
-          if (!message?.id || map.has(message.id)) continue;
-          map.set(message.id, message);
-          order.push(message.id);
-        }
+        rebuildCaptureMap(map, order, capturedMessages);
 
         await progress(
           mode === 'full'
@@ -4035,9 +4276,9 @@
           // proven resume anchor. Text equality is not evidence of duplication:
           // users and ChatGPT can legitimately repeat the same message later.
           // Only a stable ID can prove that a captured turn is already present.
-          const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+          const existingIds = new Set(existing.messages.map(messageStrongId).filter(Boolean));
           const delta = capturedMessages.filter(item =>
-            !(item.id && existingIds.has(item.id))
+            !(messageStrongId(item) && existingIds.has(messageStrongId(item)))
           );
 
           addedCount = delta.length;
@@ -4052,21 +4293,10 @@
         }
 
         previousCount = existing.messages.length;
-        const scanPool = [];
-        const scanByRef = new Map();
-        for (const candidate of [...navigationMessages, ...capturedMessages]) {
-          const ref = navigationRef(candidate);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          if (!key) continue;
-          const previous = scanByRef.get(key);
-          if (!previous) {
-            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
-            continue;
-          }
-          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
-          previous.images = merged.images;
-        }
-        scanPool.push(...scanByRef.values());
+        const scanPool = buildImageScanPool([
+          ...navigationMessages,
+          ...capturedMessages
+        ]);
 
         const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
         messages = merged.messages;
@@ -4095,16 +4325,17 @@
         // One reconcile pass owns both text and images. Track images that are
         // newly discovered relative to the saved archive so the same result can
         // later be patched into a linked Google Doc without a second scan.
-        const existingByRef = new Map();
-        for (const message of existing.messages || []) {
-          const ref = navigationRef(message);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          if (key) existingByRef.set(key, message);
-        }
-        for (const message of messages) {
-          const ref = navigationRef(message);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          const previous = key ? existingByRef.get(key) : null;
+        for (let messageIndex = 0; messageIndex < messages.length; messageIndex++) {
+          const message = messages[messageIndex];
+          const previousIndex = findContextualMessageIndex(
+            existing.messages || [],
+            message,
+            messages,
+            messageIndex
+          );
+          const previous = previousIndex >= 0
+            ? existing.messages[previousIndex]
+            : null;
           const previousImages = new Map(
             (previous?.images || []).map(image => [String(image?.src || ''), image])
           );
@@ -4131,21 +4362,10 @@
 
         // The upward and downward scans can each expose a different subset of
         // lazy-loaded images. Union them before merging into the saved archive.
-        const scanPool = [];
-        const scanByRef = new Map();
-        for (const candidate of [...navigationMessages, ...capturedMessages]) {
-          const ref = navigationRef(candidate);
-          const key = ref.id || ref.signature || ref.externalSignature;
-          if (!key) continue;
-          const previous = scanByRef.get(key);
-          if (!previous) {
-            scanByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
-            continue;
-          }
-          const merged = mergeImageRecords(previous.images || [], candidate.images || []);
-          previous.images = merged.images;
-        }
-        scanPool.push(...scanByRef.values());
+        const scanPool = buildImageScanPool([
+          ...navigationMessages,
+          ...capturedMessages
+        ]);
 
         const merged = mergeRecoveredImagesIntoArchive(existing.messages, scanPool);
         messages = merged.messages;
@@ -4161,9 +4381,9 @@
         // the saved anchor. Do not deduplicate by text signature: a later turn
         // may intentionally repeat an earlier one. Stable IDs are the only
         // safe cross-boundary duplicate filter here.
-        const existingIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
+        const existingIds = new Set(existing.messages.map(messageStrongId).filter(Boolean));
         const delta = capturedMessages.filter(item =>
-          !(item.id && existingIds.has(item.id))
+          !(messageStrongId(item) && existingIds.has(messageStrongId(item)))
         );
 
         addedCount = delta.length;
@@ -4351,21 +4571,10 @@
           const storedArchive = await chrome.storage.local.get('archive:' + existingArchiveId);
           const existingArchive = storedArchive['archive:' + existingArchiveId];
           if (existingArchive?.messages?.length) {
-            const partialScan = [];
-            const partialByRef = new Map();
-            for (const candidate of [...navigationMessages, ...order.map(id => map.get(id)).filter(Boolean)]) {
-              const ref = navigationRef(candidate);
-              const key = ref.id || ref.signature || ref.externalSignature;
-              if (!key) continue;
-              const previous = partialByRef.get(key);
-              if (!previous) {
-                partialByRef.set(key, { ...candidate, images: [...(candidate.images || [])] });
-                continue;
-              }
-              const union = mergeImageRecords(previous.images || [], candidate.images || []);
-              previous.images = union.images;
-            }
-            partialScan.push(...partialByRef.values());
+            const partialScan = buildImageScanPool([
+              ...navigationMessages,
+              ...order.map(id => map.get(id)).filter(Boolean)
+            ]);
 
             const salvaged = mergeRecoveredImagesIntoArchive(existingArchive.messages, partialScan);
             if (salvaged.recovered.length) {
@@ -4441,14 +4650,19 @@
               // resume-draft starts after a proven anchor. Repeated text is valid
               // new content; only stable IDs may prove an overlap with the old
               // saved prefix.
-              const seenIds = new Set(existing.messages.map(item => item.id).filter(Boolean));
-              const delta = draftMessages.filter(item =>
-                !(item.id && seenIds.has(item.id))
-              );
-              const refreshed = existing.messages.map(previous => {
-                const newer = draftMessages.find(item =>
-                  previous.id && item.id === previous.id
+              const seenIds = new Set(existing.messages.map(messageStrongId).filter(Boolean));
+              const delta = draftMessages.filter(item => {
+                const strongId = messageStrongId(item);
+                return !(strongId && seenIds.has(strongId));
+              });
+              const refreshed = existing.messages.map((previous, previousIndex) => {
+                const newerIndex = findContextualMessageIndex(
+                  draftMessages,
+                  previous,
+                  existing.messages,
+                  previousIndex
                 );
+                const newer = newerIndex >= 0 ? draftMessages[newerIndex] : null;
                 return newer ? mergeRicherCapture(newer, previous) : previous;
               });
               draftMessages = refreshed.concat(delta);

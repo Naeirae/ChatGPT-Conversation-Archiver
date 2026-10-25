@@ -163,7 +163,7 @@ try {
   }
 
   $managedFiles = @(
-    'manifest.json','service-worker.js','content-chatgpt.js',
+    'manifest.json','service-worker.js','content-chatgpt-scroll.js','content-chatgpt.js',
     'popup.html','popup.css','popup.js',
     'help.html','help.css',
     'updater.html','updater.css','updater.js',

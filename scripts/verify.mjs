@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 
 const jsFiles = [
   'service-worker.js',
+  'content-chatgpt-scroll.js',
   'content-chatgpt.js',
   'popup.js',
   'updater.js',
@@ -57,11 +58,121 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_COMPARE_CURRENT'")) {
     fail('service-worker.js: missing compare-current route');
   }
+  const scrollSource = await readFile('content-chatgpt-scroll.js', 'utf8');
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
+  if (!scrollSource.includes("globalThis[KEY] = Object.freeze") ||
+      !scrollSource.includes('findScrollContainer') ||
+      !scrollSource.includes('physicalScrollStartVisible') ||
+      !scrollSource.includes('physicalScrollEndVisible') ||
+      !scrollSource.includes('findVisibleLoadRetry') ||
+      !scrollSource.includes('observeWindow') ||
+      !scrollSource.includes('createStabilityState') ||
+      !scrollSource.includes('updateStabilityState') ||
+      !scrollSource.includes('sameWindow') ||
+      !scrollSource.includes('waitForTurnSettle') ||
+      !scrollSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
+    fail('scroll runtime: missing shared container/edge/retry/settle/transport primitives');
+  }
+  if (!contentSource.includes('function scrollRuntime()') ||
+      !contentSource.includes('scrollRuntime().findScrollContainer') ||
+      !contentSource.includes('scrollRuntime().findVisibleLoadRetry') ||
+      !contentSource.includes('scrollRuntime().physicalScroll') ||
+      contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
+    fail('content-chatgpt.js: traversal must use the shared scroll runtime instead of reimplementing transport');
+  }
+  if (!scrollSource.includes('scrollTargetPoint') ||
+      !scrollSource.includes('point = scrollTargetPoint(turns)') ||
+      !contentSource.includes('turns: orderedTurns()') ||
+      !serviceWorkerSource.includes('message.point || null') ||
+      !serviceWorkerSource.includes('Number(point?.x)')) {
+    fail('scroll transport: wheel events must target the detected conversation scroller');
+  }
+  const retryStart = contentSource.indexOf('async function recoverVisibleLoadError');
+  const retryEnd = contentSource.indexOf('async function getSettings', retryStart);
+  const retryBlock = retryStart >= 0 && retryEnd > retryStart
+    ? contentSource.slice(retryStart, retryEnd)
+    : '';
+  if (!retryBlock ||
+      !retryBlock.includes('physicalClickElement(retry)') ||
+      !retryBlock.includes('attempt <= 2') ||
+      !retryBlock.includes('ChatGPT дважды не смог догрузить этот участок') ||
+      retryBlock.includes("physicalScroll(direction, 2")) {
+    fail('load-error recovery: verified Retry must be clicked and persistent failures must abort instead of looping');
+  }
+
+  if (!scrollSource.includes('wheelDelta = 860') ||
+      !scrollSource.includes('wheelDelta') ||
+      !contentSource.includes('wheelDelta: 320') ||
+      !contentSource.includes("wheelDelta: phase === 'walk' ? 220 : 640") ||
+      !contentSource.includes('wheelDelta: 180') ||
+      !contentSource.includes('for (let attempt = 0; attempt < 6; attempt++)')) {
+    fail('chronological transport: capture/retry/recovery must use bounded small wheel distances distinct from fast top navigation');
+  }
+
+  if (!contentSource.includes('function explicitConversationStartVisible()') ||
+      !contentSource.includes('function firstVisibleTurnSignature()') ||
+      !contentSource.includes('const beforeFirst = firstVisibleTurnSignature()') ||
+      !contentSource.includes('const afterFirst = firstVisibleTurnSignature()') ||
+      !contentSource.includes('physicalScrollStartVisible()') ||
+      !contentSource.includes('topConfirmations >= 2')) {
+    fail('top navigation: real-top confirmation must use explicit first-turn markers or a stable first turn at physical top');
+  }
+  if (!contentSource.includes('function elementLogicalRoles') ||
+      !contentSource.includes('function unambiguousTurnContainer') ||
+      !contentSource.includes('Ambiguous outer shells may contain both a user and assistant message') ||
+      !contentSource.includes('getRoleNodes().forEach(node => add(getTurn(node)))')) {
+    fail('turn discovery: ambiguous/mixed ChatGPT DOM shells must not collapse multiple logical messages');
+  }
   if (!contentSource.includes("return 'turn:' + wrapperKey + ':' + role + ':'") ||
       !contentSource.includes('hashText(normalizeMatchText(turnMessageText(turn)))')) {
     fail('long-chat identity: virtual data-turn-key wrappers must remain message-qualified; wrapper keys are recyclable');
   }
+  const identityStart = contentSource.indexOf('function isStrongMessageId');
+  const identityEnd = contentSource.indexOf('function recordNavigationWindow', identityStart);
+  const identityBlock = identityStart >= 0 && identityEnd > identityStart
+    ? contentSource.slice(identityStart, identityEnd)
+    : '';
+  const sameRefStart = contentSource.indexOf('function sameNavigationRef');
+  const sameRefEnd = contentSource.indexOf('function sameNavigationText', sameRefStart);
+  const sameRefBlock = sameRefStart >= 0 && sameRefEnd > sameRefStart
+    ? contentSource.slice(sameRefStart, sameRefEnd)
+    : '';
+  if (!identityBlock ||
+      !identityBlock.includes('isStrongMessageId') ||
+      !identityBlock.includes('identityContextsCompatible') ||
+      !identityBlock.includes('sameNavigationSequence') ||
+      !identityBlock.includes('findContextualRefIndex') ||
+      !sameRefBlock.includes('a.strongId && b.strongId') ||
+      sameRefBlock.includes('a.signature') ||
+      sameRefBlock.includes('externalSignature')) {
+    fail('message identity: standalone text must never prove message identity; weak matches require sequence context');
+  }
+  if (!contentSource.includes('rebuildCaptureMap(map, order, capturedMessages)') ||
+      !contentSource.includes('weakIdentityContextKey') ||
+      !contentSource.includes('buildImageScanPool') ||
+      contentSource.includes('const key = ref.id || ref.signature || ref.externalSignature')) {
+    fail('message identity: weak-ID collisions must survive map rebuild and image recovery');
+  }
+  if (!contentSource.includes('existing.messages.map(messageStrongId).filter(Boolean)') ||
+      contentSource.includes('existing.messages.map(item => item.id).filter(Boolean)')) {
+    fail('continuation identity: cross-boundary duplicate filtering must use strong IDs only');
+  }
+  if (!contentSource.includes('contextBefore: boundaryContextBefore(turns, i)') ||
+      !contentSource.includes('boundaryContextMatchesTurns') ||
+      !contentSource.includes('messageBoundaryContextMatches')) {
+    fail('snapshot boundary: text fallback must be disambiguated by neighbouring message context');
+  }
+  const visibleSignatureStart = contentSource.indexOf('function visibleTurnSignature');
+  const visibleSignatureEnd = contentSource.indexOf('function scrollObservation', visibleSignatureStart);
+  const visibleSignatureBlock = visibleSignatureStart >= 0 && visibleSignatureEnd > visibleSignatureStart
+    ? contentSource.slice(visibleSignatureStart, visibleSignatureEnd)
+    : '';
+  if (!visibleSignatureBlock.includes("return keys.join('|')") ||
+      visibleSignatureBlock.includes('slice(0, 3)') ||
+      visibleSignatureBlock.includes('slice(-3)')) {
+    fail('scroll settle: signature must cover the whole visible virtualized window');
+  }
+
   if (/activeCaptureJob\s*:/.test(contentSource)) {
     fail('content-chatgpt.js: capture page must never overwrite worker-owned activeCaptureJob');
   }
@@ -144,35 +255,75 @@ try {
     ? contentSource.slice(fullCaptureStart, fullCaptureStart + 12000)
     : '';
   if (!fullCaptureWindow ||
-      !contentSource.includes('Historical 0.3.14/0.4.17 behavior') ||
-      !contentSource.includes('await reachTopFullLegacy(map, order, settings);') ||
+      !fullCaptureWindow.includes('await reachTopWithoutCapture(0') ||
+      !fullCaptureWindow.includes('fullCapture: true') ||
+      contentSource.includes('async function reachTopFullLegacy') ||
       !contentSource.includes('navigationHighWater = 0;') ||
       !contentSource.includes('navigationMessages = [];') ||
       !contentSource.includes('navigationSequence = [];') ||
       !contentSource.includes("if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment')")) {
-    fail('full capture: preserve 0.4.17 navigation-only upward pass and single canonical chronological save');
+    fail('full capture: upward travel must be navigation-only; canonical messages are saved only on the chronological pass');
   }
-  const fullTopStart = contentSource.indexOf('async function reachTopFullLegacy');
-  const fullDownStart = contentSource.indexOf('async function walkDownFullLegacy', fullTopStart);
+  const fullDownStart = contentSource.indexOf('async function walkDownFullLegacy');
   const fullDownEnd = contentSource.indexOf('async function walkDown(', fullDownStart);
-  const fullTopBlock = fullTopStart >= 0 && fullDownStart > fullTopStart
-    ? contentSource.slice(fullTopStart, fullDownStart)
-    : '';
   const fullDownBlock = fullDownStart >= 0 && fullDownEnd > fullDownStart
     ? contentSource.slice(fullDownStart, fullDownEnd)
     : '';
-  if (!fullTopBlock ||
-      !fullDownBlock ||
-      !fullTopBlock.includes("await physicalScroll('up', 7") ||
-      !fullTopBlock.includes("recoverVisibleLoadError('top'") ||
-      !fullTopBlock.includes('stable >= 4 && !visibleRetryButton()') ||
-      fullTopBlock.includes('recordNavigationWindow(') ||
-      !fullDownBlock.includes("await physicalScroll('down');") ||
+  if (!fullDownBlock ||
+      !fullDownBlock.includes("await physicalScroll('down', 1") ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
-      !fullDownBlock.includes('stable >= 4 && !visibleRetryButton()') ||
+      !fullDownBlock.includes('visibleNavigationRefsLightweight()') ||
+      !fullDownBlock.includes('navigationWindowsOverlap(beforeRefs, afterRefs)') ||
+      !fullDownBlock.includes('recoverDownwardContinuity(') ||
+      !fullDownBlock.includes('scrollObservation(map.size)') ||
+      !fullDownBlock.includes('updateStabilityState(stability, before, after)') ||
+      !fullDownBlock.includes('stall.stable >= 4') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: preserve 0.4.17 traversal cadence while keeping verified load-error recovery in both directions');
+    fail('full capture: chronological pass must stay one-burst and overlap-verified');
+  }
+
+  if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
+      !contentSource.includes('if (!isStrongMessageId(strongId)) return false') ||
+      !contentSource.includes('strongId: isStrongMessageId(id) ? id :') ||
+      !contentSource.includes('for (let i = 0; i <= left.length - length; i++)') ||
+      !contentSource.includes('for (let j = 0; j <= right.length - length; j++)') ||
+      !contentSource.includes('if (!x.strongId) continue')) {
+    fail('scroll/continuation identity: overlap must preserve the proven 0.3.87 contiguous-window rule while using strong IDs for one-message evidence');
+  }
+
+  const topOnlyStart = contentSource.indexOf('async function reachTopWithoutCapture');
+  const topOnlyEnd = contentSource.indexOf('async function reachResumeAnchor', topOnlyStart);
+  const topOnlyBlock = topOnlyStart >= 0 && topOnlyEnd > topOnlyStart
+    ? contentSource.slice(topOnlyStart, topOnlyEnd)
+    : '';
+  if (!topOnlyBlock ||
+      !topOnlyBlock.includes('explicitConversationStartVisible()') ||
+      !topOnlyBlock.includes('firstVisibleTurnSignature()') ||
+      !topOnlyBlock.includes("await physicalScroll('up', 16") ||
+      !topOnlyBlock.includes('physicalScrollStartVisible()') ||
+      !topOnlyBlock.includes('topConfirmations >= 2')) {
+    fail('continuation navigation: top-only traversal must recognize explicit first-turn markers or a stable first turn at physical top');
+  }
+
+  if (!contentSource.includes('function explicitConversationStartVisible()') ||
+      !contentSource.includes('[data-testid="conversation-turn-0"]') ||
+      !contentSource.includes('[data-chatgpt-search-unit-key^="fallback-turn-0:"]')) {
+    fail('top detection: normal ChatGPT chats need an explicit first-turn marker path');
+  }
+
+  const resumeAnchorStart = contentSource.indexOf('async function reachResumeAnchor');
+  const resumeAnchorEnd = contentSource.indexOf('function visibleHasKnownSignatures', resumeAnchorStart);
+  const resumeAnchorBlock = resumeAnchorStart >= 0 && resumeAnchorEnd > resumeAnchorStart
+    ? contentSource.slice(resumeAnchorStart, resumeAnchorEnd)
+    : '';
+  if (!resumeAnchorBlock ||
+      resumeAnchorBlock.includes('if (physicalScrollStartVisible() && i > 0)') ||
+      !resumeAnchorBlock.includes('createStabilityState()') ||
+      !resumeAnchorBlock.includes('updateStabilityState(upwardStability, before, after') ||
+      !resumeAnchorBlock.includes('after.atStart') ||
+      !resumeAnchorBlock.includes('allowDownwardFallback) break')) {
+    fail('continuation anchor search: virtualized physical-start alone must not terminate the search');
   }
 
   const pauseResumeBlock = contentSource.slice(
@@ -206,7 +357,8 @@ try {
       !contentSource.includes("collect(map, order, settings, boundary)") ||
       !contentSource.includes('locateBoundaryForUpwardScan') ||
       !contentSource.includes('recordNavigationWindow(navigationWindows, settings, checkpointBoundary)') ||
-      !contentSource.includes('reachLiveBottomForSnapshot') ||
+      !contentSource.includes('fixedCaptureBoundary') ||
+      !contentSource.includes('trimMessagesThroughBoundary(capturedMessages, boundary)') ||
       !contentSource.includes("['compare', 'images'].includes(mode)")) {
     fail('content-chatgpt.js: missing proven live-bottom snapshot boundary or bounded rich traversal');
   }
@@ -423,8 +575,9 @@ try {
       !contentSource.includes("(mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length")) {
     fail('unified reconcile: one pass must reconcile text and recover/hydrate images');
   }
-  if (!contentSource.includes('map.set(message.id, mergeRicherCapture(message, existing))')) {
-    fail('image capture: virtualized recapture must preserve richer prepared image binaries');
+  if (!contentSource.includes('map.set(messageId, mergeRicherCapture(message, existing))') ||
+      !contentSource.includes('map.set(id, mergeRicherCapture(message, map.get(id)))')) {
+    fail('image capture: virtualized recapture must preserve richer prepared image binaries across collision-aware IDs');
   }
   if (!offscreenSource.includes('async function writeImageWithExecCommand') ||
       !offscreenSource.includes("message?.type === 'ARCHIVER_OFFSCREEN_WRITE_IMAGE'") ||
@@ -467,18 +620,21 @@ try {
     fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
   }
 
-  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null, wheelDelta = 860)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
   if (!physicalScrollBlock ||
       !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
-      !physicalScrollBlock.includes("deltaY: sign * 860") ||
+      !physicalScrollBlock.includes("deltaY: sign * delta") ||
+      !physicalScrollBlock.includes("Math.abs(Number(wheelDelta) || 860)") ||
       !physicalScrollBlock.includes("await sleep(70)") ||
+      !physicalScrollBlock.includes('Number(point?.x)') ||
+      !physicalScrollBlock.includes('Number(point?.y)') ||
       physicalScrollBlock.includes('timedOut') ||
       physicalScrollBlock.includes('}, 3000)')) {
-    fail('full capture: preserve the pre-timeout 0.4.17 debugger-wheel transport without silent partial bursts');
+    fail('full capture: debugger-wheel transport must preserve complete bursts and honor the detected chat scroller point');
   }
 
 
@@ -566,6 +722,12 @@ try {
 
 try {
   const manifest = JSON.parse(await readFile('manifest.json', 'utf8'));
+  const chatScripts = manifest.content_scripts?.find(item =>
+    (item.matches || []).some(match => String(match).includes('chatgpt.com'))
+  )?.js || [];
+  if (chatScripts[0] !== 'content-chatgpt-scroll.js' || chatScripts[1] !== 'content-chatgpt.js') {
+    fail('manifest.json: shared scroll runtime must load immediately before content-chatgpt.js');
+  }
   if (manifest.manifest_version !== 3) {
     fail('manifest.json: manifest_version must be 3');
   }
