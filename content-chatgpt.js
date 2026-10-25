@@ -200,39 +200,81 @@
   }
 
   async function recoverVisibleLoadError(phase = 'top', count = 0) {
-    // Retry physical scrolling, not ChatGPT's generic button, and only after
-    // visibleRetryButton() has verified a real nearby load error.
-    if (!visibleRetryButton()) return false;
+    const firstRetry = visibleRetryButton();
+    if (!firstRetry) return false;
 
-    const direction = phase === 'walk' ? 'down' : 'up';
     const originalUrl = location.href;
-    const before = visibleTurnSignature();
+    let previousSignature = visibleTurnSignature();
 
     for (let attempt = 1; attempt <= 2; attempt++) {
       await waitIfPaused();
+
+      const retry = visibleRetryButton();
+      if (!retry) return true;
+
       await progress(
-        'ChatGPT не догрузил участок · повторяю прокрутку (' + attempt + '/2)…',
+        'ChatGPT не догрузил участок · нажимаю «Попробовать снова» (' + attempt + '/2)…',
         count,
         { phase, retryVisible: true, force: true }
       );
 
-      await physicalScroll(direction, 1, {
-        settleTimeout: 1800,
-        quietWindow: 320,
-        wheelDelta: phase === 'walk' ? 220 : 640
-      });
-
-      if (location.href !== originalUrl) {
-        throw new Error('Переписка сменилась во время повторной прокрутки. Сбор остановлен.');
+      const clicked = await physicalClickElement(retry);
+      if (!clicked) {
+        throw new Error(
+          'ChatGPT показал «Попробовать снова», но Архиватор не смог нажать кнопку загрузки.'
+        );
       }
 
-      await sleep(350);
-      const after = visibleTurnSignature();
-      if (after && after !== before) return true;
-      if (!visibleRetryButton()) return true;
+      const waitStarted = Date.now();
+      let changed = false;
+      while (Date.now() - waitStarted < 4500) {
+        await sleep(250);
+
+        if (location.href !== originalUrl) {
+          throw new Error('Переписка сменилась во время повторной загрузки. Сбор остановлен.');
+        }
+
+        const currentSignature = visibleTurnSignature();
+        if (!visibleRetryButton()) {
+          changed = true;
+          break;
+        }
+        if (
+          currentSignature &&
+          previousSignature &&
+          currentSignature !== previousSignature
+        ) {
+          changed = true;
+          break;
+        }
+      }
+
+      if (changed) return true;
+      previousSignature = visibleTurnSignature();
+
+      // One small nudge is allowed between two verified Retry clicks. Never
+      // push the chronological walk farther past the failed region.
+      if (attempt === 1) {
+        await physicalScroll(
+          phase === 'walk' ? 'up' : 'up',
+          1,
+          {
+            settleTimeout: 1200,
+            quietWindow: 260,
+            wheelDelta: phase === 'walk' ? 120 : 320
+          }
+        );
+      }
     }
 
-    return false;
+    if (visibleRetryButton()) {
+      throw new Error(
+        'ChatGPT дважды не смог догрузить этот участок после «Попробовать снова». ' +
+        'Сбор остановлен, чтобы не зациклиться и не сохранить архив с пропуском.'
+      );
+    }
+
+    return true;
   }
 
   async function getSettings() {
