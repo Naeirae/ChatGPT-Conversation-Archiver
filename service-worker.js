@@ -4001,10 +4001,11 @@ async function cdp(tabId, method, params = {}, timeoutMs = 15000) {
   );
 }
 
-async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null) {
+async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null, wheelDelta = 860) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
+  const delta = Math.max(80, Math.min(1200, Math.abs(Number(wheelDelta) || 860)));
   const send = (method, params = {}) =>
     chrome.debugger.sendCommand({ tabId }, method, params);
 
@@ -4047,7 +4048,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = 
         x,
         y,
         deltaX: 0,
-        deltaY: sign * 860
+        deltaY: sign * delta
       });
       await sleep(70);
     }
@@ -6006,7 +6007,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           job.captureTabId,
           message.direction,
           message.bursts,
-          message.point || null
+          message.point || null,
+          message.wheelDelta
         );
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
