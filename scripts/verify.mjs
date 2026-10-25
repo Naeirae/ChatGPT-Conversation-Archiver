@@ -87,11 +87,13 @@ try {
       !serviceWorkerSource.includes('Number(point?.x)')) {
     fail('scroll transport: wheel events must target the detected conversation scroller');
   }
-  if (!contentSource.includes('function visibleTopTextSignature') ||
-      !contentSource.includes('const beforeText = visibleTopTextSignature()') ||
-      !contentSource.includes('const afterText = visibleTopTextSignature()') ||
-      !contentSource.includes('confirmedIdle >= 3')) {
-    fail('top navigation: real-top confirmation must ignore recyclable wrapper IDs and use stable text windows');
+  if (!contentSource.includes('function explicitConversationStartVisible()') ||
+      !contentSource.includes('function firstVisibleTurnSignature()') ||
+      !contentSource.includes('const beforeFirst = firstVisibleTurnSignature()') ||
+      !contentSource.includes('const afterFirst = firstVisibleTurnSignature()') ||
+      !contentSource.includes('physicalScrollStartVisible()') ||
+      !contentSource.includes('topConfirmations >= 2')) {
+    fail('top navigation: real-top confirmation must use explicit first-turn markers or a stable first turn at physical top');
   }
   if (!contentSource.includes('function elementLogicalRoles') ||
       !contentSource.includes('function unambiguousTurnContainer') ||
