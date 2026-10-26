@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.51
+
+- Исправлен verifier после возврата self-contained scroll-архитектуры.
+- Manifest проверяется как один `content-chatgpt.js`, без обязательного отдельного scroll runtime.
+- Убраны противоречащие старые guards, из-за которых 0.4.50 была опубликована с красной статической проверкой.
+- Runtime-логика 0.4.50 не расширялась новыми обходными путями: основной scroll остаётся прямым `scrollBy` по найденному контейнеру, CDP wheel — только fallback.
+
 ## 0.4.50
 
 - Возвращён ранний self-contained scroll-контур: `content-chatgpt.js` снова сам находит scroll-container и двигает его через `scrollBy`.
