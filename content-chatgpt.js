@@ -217,59 +217,23 @@
       wheelDelta = 860
     } = {}) {
       const normalizedDirection = direction === 'down' ? 'down' : 'up';
-      const sign = normalizedDirection === 'down' ? 1 : -1;
-      const scroller = findScrollContainer(
-        normalizedDirection === 'down'
-          ? (turns[turns.length - 1] || turns[0] || null)
-          : (turns[0] || turns[turns.length - 1] || null)
-      );
-      if (!scroller) throw new Error('Не найден контейнер переписки для прокрутки.');
-
-      const count = Math.max(1, Math.min(24, Number(bursts) || 1));
-      const delta = Math.max(80, Math.min(1200, Math.abs(Number(wheelDelta) || 860)));
-      const beforeTop = Number(scroller.scrollTop || 0);
-
-      for (let i = 0; i < count; i++) {
-        scroller.scrollBy({ top: sign * delta, left: 0, behavior: 'auto' });
-        await sleep(70);
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_PHYSICAL_SCROLL',
+        jobId,
+        direction: normalizedDirection,
+        bursts
+      });
+      if (!result?.ok) {
+        throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
       }
-
       await waitForTurnSettle(getSignature, {
         timeout: settleTimeout,
         quietWindow
       });
-
-      const afterTop = Number(scroller.scrollTop || 0);
-      const moved = Math.abs(afterTop - beforeTop) >= 2;
-      const atRequestedEdge = normalizedDirection === 'up'
-        ? physicalScrollStartVisible(turns)
-        : physicalScrollEndVisible(turns);
-
-      if (!moved && !atRequestedEdge) {
-        const fallback = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_PHYSICAL_SCROLL',
-          jobId,
-          direction: normalizedDirection,
-          bursts: count,
-          wheelDelta: delta
-        });
-        if (!fallback?.ok) {
-          throw new Error(fallback?.error || 'Не удалось прокрутить вкладку.');
-        }
-        await waitForTurnSettle(getSignature, {
-          timeout: settleTimeout,
-          quietWindow
-        });
-        return { ...fallback, direction: normalizedDirection, transport: 'cdp-fallback' };
-      }
-
       return {
-        ok: true,
+        ...result,
         direction: normalizedDirection,
-        bursts: count,
-        transport: 'direct-scroll',
-        beforeTop,
-        afterTop
+        transport: 'cdp-wheel'
       };
     }
 
@@ -2900,24 +2864,10 @@
       timeoutMs = 30 * 60 * 1000
     } = {}
   ) {
-    const firstTurn = orderedTurns()[0] || null;
-    if (!firstTurn) {
-      throw new Error('Не найдено ни одной реплики для определения контейнера переписки.');
-    }
-
-    const scroller = scrollRuntime().findScrollContainer(firstTurn);
-    if (!scroller) {
-      throw new Error('Не найден контейнер переписки для прокрутки к началу.');
-    }
-
-    let stable = 0;
-    let previousHeight = -1;
-    let previousCount = -1;
-    let previousTop = -1;
-    let previousFirst = '';
+    let topConfirmations = 0;
     const startedAt = Date.now();
 
-    for (let i = 0; Date.now() - startedAt < timeoutMs && i < 420; i++) {
+    for (let i = 0; Date.now() - startedAt < timeoutMs && i < 520; i++) {
       await waitIfPaused();
 
       if (state.manualTopConfirmed) {
@@ -2937,14 +2887,8 @@
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
-        stable = 0;
+        topConfirmations = 0;
       }
-
-      // Exact pre-CDP loading mechanism: force the real scroll container to
-      // local top, let ChatGPT prepend older turns, then nudge and return to
-      // top so virtualization/load observers fire again.
-      scroller.scrollTo({ top: 0, behavior: 'instant' });
-      await sleep(280);
 
       if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
         await progress('Этап 1/3: начало переписки найдено.', existingCount, {
@@ -2955,80 +2899,80 @@
         return;
       }
 
-      const top = Math.round(Number(scroller.scrollTop || 0));
-      const height = Number(scroller.scrollHeight || 0);
-      const count = orderedTurns().length;
-      const first = firstVisibleTurnSignature();
+      const beforeFirst = firstVisibleTurnSignature();
 
       await progress(
         fullCapture
-          ? 'Этап 1/3: загружаю начало прямой прокруткой контейнера…'
-          : 'Возвращаю рабочую вкладку к началу прямой прокруткой…',
+          ? 'Этап 1/3: физически иду к началу через debugger…'
+          : 'Возвращаю рабочую вкладку к началу через debugger…',
         existingCount,
         {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: stable,
+          topIdleConfirmations: topConfirmations,
           retryWalkOnly: !fullCapture,
-          directScrollTop: top,
-          directScrollHeight: height
+          manualAssistAllowed: true
         }
       );
 
-      if (
-        top <= 2 &&
-        previousTop <= 2 &&
-        height === previousHeight &&
-        count === previousCount &&
-        first &&
-        first === previousFirst &&
-        !visibleRetryButton()
-      ) {
-        stable++;
-      } else {
-        stable = 0;
-      }
+      await physicalScroll('up', 7, {
+        settleTimeout: 2200,
+        quietWindow: 360
+      });
 
-      previousTop = top;
-      previousHeight = height;
-      previousCount = count;
-      previousFirst = first;
-
-      if (stable >= 4) {
-        await progress(
-          fullCapture
-            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-          existingCount,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            topIdleConfirmations: stable,
-            retryWalkOnly: !fullCapture,
-            force: true
-          }
-        );
+      if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
+        await progress('Этап 1/3: начало переписки найдено.', existingCount, {
+          phase: 'walk',
+          iteration: i + 1,
+          force: true,
+          explicitStartDetected: true
+        });
         return;
       }
 
-      scroller.scrollBy(0, 140);
-      await sleep(130);
-      scroller.scrollTo({ top: 0, behavior: 'instant' });
+      const afterFirst = firstVisibleTurnSignature();
+      const retryVisible = Boolean(visibleRetryButton());
 
-      const quietStarted = Date.now();
-      let lastProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
-      while (Date.now() - quietStarted < 1100) {
-        await sleep(180);
-        const nextProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
-        if (nextProbe === lastProbe) break;
-        lastProbe = nextProbe;
+      if (
+        !retryVisible &&
+        beforeFirst &&
+        afterFirst &&
+        beforeFirst === afterFirst
+      ) {
+        topConfirmations++;
+      } else {
+        topConfirmations = 0;
+      }
+
+      if (topConfirmations >= 3) {
+        await sleep(500);
+        if (
+          !visibleRetryButton() &&
+          firstVisibleTurnSignature() === afterFirst
+        ) {
+          await progress(
+            fullCapture
+              ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+              : 'Начало подтверждено. Запускаю хронологический проход вниз…',
+            existingCount,
+            {
+              phase: 'walk',
+              iteration: i + 1,
+              topIdleConfirmations: topConfirmations,
+              retryWalkOnly: !fullCapture,
+              force: true
+            }
+          );
+          return;
+        }
+        topConfirmations = 0;
       }
     }
 
     throw new Error(
       fullCapture
-        ? 'Не удалось подтвердить начало переписки прямой прокруткой контейнера.'
-        : 'Не удалось вернуть рабочую вкладку к началу прямой прокруткой контейнера.'
+        ? 'Не удалось подтвердить начало переписки через debugger-прокрутку.'
+        : 'Не удалось вернуть рабочую вкладку к началу через debugger-прокрутку.'
     );
   }
 
@@ -3774,26 +3718,13 @@
 
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
-    const firstTurn = orderedTurns()[0] || null;
-    if (!firstTurn) {
-      throw new Error('Не найдена первая видимая реплика для прямого прохода вниз.');
-    }
+    const stability = scrollRuntime().createStabilityState();
 
-    const scroller = scrollRuntime().findScrollContainer(firstTurn);
-    if (!scroller) {
-      throw new Error('Не найден контейнер переписки для прямого прохода вниз.');
-    }
-
-    let stable = 0;
-    let previousHeight = -1;
-    let previousCount = -1;
-    let previousTop = -1;
-
-    for (let i = 0; i < 1800 && stable < 5; i++) {
+    for (let i = 0; i < 1200; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
-        stable = 0;
+        scrollRuntime().resetStabilityState(stability);
       }
 
       await expandVisible();
@@ -3811,111 +3742,70 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
+      const before = scrollObservation(map.size);
       const beforeRefs = visibleNavigationRefsLightweight();
-      const viewport = Number(scroller.clientHeight || innerHeight || 0);
-      const max = Math.max(0, Number(scroller.scrollHeight || 0) - viewport);
-      const current = Math.max(0, Math.round(Number(scroller.scrollTop || 0)));
-      const step = Math.max(320, Math.floor(viewport * 0.55));
-      const next = Math.min(max, current + step);
 
-      await progress(
-        'Этап 2/3: прохожу вниз по контейнеру · ' + map.size + ' сообщений',
-        map.size,
-        {
+      await progress('Этап 2/3: физически прохожу вниз через debugger · ' + map.size + ' сообщений', map.size, {
+        phase: 'walk',
+        iteration: i + 1,
+        chronologicalCount: map.size
+      });
+
+      // Keep debugger wheel as the primary transport, but use one burst per
+      // chronological step and verify overlap before accepting the move.
+      await physicalScroll('down', 1, {
+        settleTimeout: 1800,
+        quietWindow: 300
+      });
+
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+
+      if (boundaryIsVisible(boundary)) {
+        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
           phase: 'walk',
           iteration: i + 1,
+          boundaryReached: true,
           chronologicalCount: map.size,
-          directScrollTop: current,
-          directScrollNext: next,
-          directScrollMax: max
-        }
-      );
-
-      if (next >= max - 4) {
-        scroller.scrollTo({ top: max, behavior: 'instant' });
-        await sleep(520);
-        await expandVisible();
-        if (settings.includeReasoning) await expandReasoningVisible();
-        collect(map, order, settings, boundary);
-
-        if (boundaryIsVisible(boundary)) {
-          await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
-            phase: 'walk',
-            iteration: i + 1,
-            boundaryReached: true,
-            chronologicalCount: map.size,
-            force: true
-          });
-          return { boundaryReached: true, physicalEndReached: false };
-        }
-
-        const height = Number(scroller.scrollHeight || 0);
-        const count = orderedTurns().length;
-        const top = Math.round(Number(scroller.scrollTop || 0));
-
-        if (
-          height === previousHeight &&
-          count === previousCount &&
-          top === previousTop &&
-          !visibleRetryButton()
-        ) {
-          stable++;
-        } else {
-          stable = 0;
-        }
-
-        previousHeight = height;
-        previousCount = count;
-        previousTop = top;
-      } else {
-        stable = 0;
-        scroller.scrollTo({ top: next, behavior: 'instant' });
-        await sleep(240);
-
-        const quietStarted = Date.now();
-        let lastProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
-        while (Date.now() - quietStarted < 1000) {
-          await sleep(180);
-          const nextProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
-          if (nextProbe === lastProbe) break;
-          lastProbe = nextProbe;
-        }
-
-        await expandVisible();
-        if (settings.includeReasoning) await expandReasoningVisible();
-        collect(map, order, settings, boundary);
-
-        const afterRefs = visibleNavigationRefsLightweight();
-        if (
-          beforeRefs.length &&
-          afterRefs.length &&
-          !navigationWindowsOverlap(beforeRefs, afterRefs)
-        ) {
-          // Direct absolute scrolling should normally preserve overlap. If it
-          // does not, back up within the same scroller instead of invoking the
-          // CDP/wheel recovery loop.
-          const back = Math.max(0, current + Math.floor(step * 0.35));
-          scroller.scrollTo({ top: back, behavior: 'instant' });
-          await sleep(240);
-          collect(map, order, settings, boundary);
-
-          if (!navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight())) {
-            throw new Error(
-              'Прямой проход вниз потерял перекрытие между соседними участками. ' +
-              'Сбор остановлен, чтобы не сохранить архив с пропуском.'
-            );
-          }
-        }
+          force: true
+        });
+        return { boundaryReached: true, physicalEndReached: false };
       }
+
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (
+        beforeRefs.length &&
+        afterRefs.length &&
+        !navigationWindowsOverlap(beforeRefs, afterRefs)
+      ) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Debugger-проход потерял перекрытие между соседними участками. ' +
+            'Сбор остановлен, чтобы не сохранить архив с пропуском.'
+          );
+        }
+        scrollRuntime().resetStabilityState(stability);
+        continue;
+      }
+
+      const after = scrollObservation(map.size);
+      const stall = scrollRuntime().updateStabilityState(stability, before, after);
+
+      if (stall.stable >= 4) break;
     }
 
-    if (boundaryIsVisible(boundary)) {
-      return { boundaryReached: true, physicalEndReached: false };
+    if (!boundaryIsVisible(boundary)) {
+      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
     }
-
-    throw new Error(
-      'Прямой проход вниз достиг физического конца, но зафиксированная метка конца снимка не найдена.'
-    );
+    return { boundaryReached: true, physicalEndReached: false };
   }
 
   async function walkDown(
