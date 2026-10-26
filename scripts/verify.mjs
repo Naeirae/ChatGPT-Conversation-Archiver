@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 
 const jsFiles = [
   'service-worker.js',
-  'lib/content-chatgpt-scroll.js',
+  'content-chatgpt.js',
   'content-chatgpt.js',
   'popup.js',
   'updater.js',
@@ -58,7 +58,7 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_COMPARE_CURRENT'")) {
     fail('service-worker.js: missing compare-current route');
   }
-  const scrollSource = await readFile('lib/content-chatgpt-scroll.js', 'utf8');
+  const scrollSource = contentSource;
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
   if (!scrollSource.includes("globalThis[KEY] = Object.freeze") ||
       !scrollSource.includes('findScrollContainer') ||
@@ -80,10 +80,9 @@ try {
       contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
     fail('content-chatgpt.js: traversal must use the shared scroll runtime instead of reimplementing transport');
   }
-  if (scrollSource.includes('scrollTargetPoint(') ||
-      !serviceWorkerSource.includes('Math.round(width * 0.68)') ||
-      !serviceWorkerSource.includes('Math.round(height * 0.48)')) {
-    fail('scroll transport: preserve the stable fixed viewport wheel point; DOM container targeting regressed physical scrolling');
+  if (!contentSource.includes('const INLINE_SCROLL_RUNTIME = createInlineScrollRuntime()') ||
+      !contentSource.includes('return INLINE_SCROLL_RUNTIME;')) {
+    fail('scroll transport: content script must remain self-contained and must not require a separately loaded runtime');
   }
   const retryStart = contentSource.indexOf('async function recoverVisibleLoadError');
   const retryEnd = contentSource.indexOf('async function getSettings', retryStart);
@@ -98,8 +97,11 @@ try {
     fail('load-error recovery: verified Retry must be clicked and persistent failures must abort instead of looping');
   }
 
-  if (!scrollSource.includes('wheelDelta = 860') ||
-      !scrollSource.includes('wheelDelta') ||
+  if (!contentSource.includes('function createInlineScrollRuntime()') ||
+      !contentSource.includes("transport: 'direct-scroll'") ||
+      !contentSource.includes("transport: 'cdp-fallback'") ||
+      !contentSource.includes("scroller.scrollBy({ top: sign * delta") ||
+      !contentSource.includes('wheelDelta = 860') ||
       !contentSource.includes('wheelDelta: 320') ||
       !contentSource.includes("wheelDelta: phase === 'walk' ? 220 : 640") ||
       !contentSource.includes('wheelDelta: 180') ||
@@ -624,7 +626,7 @@ try {
   if (bgCreateStart < 0 ||
       bgStartCollector < 0 ||
       bgRestoreSource < bgStartCollector ||
-      !serviceWorkerSource.includes("files: ['lib/content-chatgpt-scroll.js', 'content-chatgpt.js']")) {
+      !serviceWorkerSource.includes("files: ['content-chatgpt.js']")) {
     fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
   }
 
@@ -733,7 +735,7 @@ try {
   const chatScripts = manifest.content_scripts?.find(item =>
     (item.matches || []).some(match => String(match).includes('chatgpt.com'))
   )?.js || [];
-  if (chatScripts[0] !== 'lib/content-chatgpt-scroll.js' || chatScripts[1] !== 'content-chatgpt.js') {
+  if (chatScripts[0] !== 'content-chatgpt.js' || chatScripts[1] !== 'content-chatgpt.js') {
     fail('manifest.json: shared scroll runtime must load immediately before content-chatgpt.js');
   }
   if (manifest.manifest_version !== 3) {
