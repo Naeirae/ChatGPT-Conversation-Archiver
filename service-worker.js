@@ -1529,9 +1529,58 @@ async function probeChatDom(tabId) {
         ].join(',');
         const bodyText = String(document.body?.innerText || '');
         const loadError = /Не удалось загрузить этот разговор ChatGPT|Failed to load this conversation/i.test(bodyText);
-        const retryAvailable = [...document.querySelectorAll('button, [role="button"]')].some(el =>
-          /^(Попробовать снова|Try again|Retry)$/i.test(String(el.innerText || el.textContent || '').trim())
-        );
+        const retryPattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
+        const errorPattern = /(?:something went wrong|there was an error|network error|failed to load|не удалось загрузить|произошла ошибка|ошибка сети|возникла ошибка)/i;
+        const viewportWidth = Math.max(1, innerWidth || document.documentElement.clientWidth || 1);
+        const viewportHeight = Math.max(1, innerHeight || document.documentElement.clientHeight || 1);
+
+        const retryAvailable = [...document.querySelectorAll('button, [role="button"]')].some(el => {
+          if (!(el instanceof Element) || !el.isConnected || el.disabled) return false;
+          if (el.closest('[aria-hidden="true"], [inert]')) return false;
+
+          const style = getComputedStyle(el);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.pointerEvents === 'none' ||
+            Number.parseFloat(style.opacity || '1') <= 0.01
+          ) return false;
+
+          const rect = el.getBoundingClientRect();
+          if (
+            rect.width < 2 ||
+            rect.height < 2 ||
+            rect.bottom <= 0 ||
+            rect.right <= 0 ||
+            rect.top >= viewportHeight ||
+            rect.left >= viewportWidth
+          ) return false;
+
+          const label = String(
+            el.innerText ||
+            el.textContent ||
+            el.getAttribute?.('aria-label') ||
+            el.getAttribute?.('title') ||
+            ''
+          ).replace(/\s+/g, ' ').trim();
+          if (!retryPattern.test(label)) return false;
+
+          const x = Math.max(1, Math.min(viewportWidth - 1, rect.left + rect.width / 2));
+          const y = Math.max(1, Math.min(viewportHeight - 1, rect.top + rect.height / 2));
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !(hit === el || el.contains(hit))) return false;
+
+          let node = el.parentElement;
+          for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+            const localRect = node.getBoundingClientRect();
+            if (localRect.height > Math.max(520, viewportHeight * 0.8)) continue;
+            const text = String(node.innerText || node.textContent || '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (text && text.length <= 1800 && errorPattern.test(text)) return true;
+          }
+          return false;
+        });
         return {
           href: location.href,
           readyState: document.readyState,
@@ -1554,18 +1603,68 @@ async function clickChatRetry(tabId) {
     const [result] = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        const button = [...document.querySelectorAll('button, [role="button"]')].find(el =>
-          /^(Попробовать снова|Повторить|Try again|Retry)$/i.test(String(el.innerText || el.textContent || '').trim())
-        );
+        const retryPattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
+        const errorPattern = /(?:something went wrong|there was an error|network error|failed to load|не удалось загрузить|произошла ошибка|ошибка сети|возникла ошибка)/i;
+        const viewportWidth = Math.max(1, innerWidth || document.documentElement.clientWidth || 1);
+        const viewportHeight = Math.max(1, innerHeight || document.documentElement.clientHeight || 1);
+
+        const button = [...document.querySelectorAll('button, [role="button"]')].find(el => {
+          if (!(el instanceof Element) || !el.isConnected || el.disabled) return false;
+          if (el.closest('[aria-hidden="true"], [inert]')) return false;
+
+          const style = getComputedStyle(el);
+          if (
+            style.display === 'none' ||
+            style.visibility === 'hidden' ||
+            style.pointerEvents === 'none' ||
+            Number.parseFloat(style.opacity || '1') <= 0.01
+          ) return false;
+
+          const rect = el.getBoundingClientRect();
+          if (
+            rect.width < 2 ||
+            rect.height < 2 ||
+            rect.bottom <= 0 ||
+            rect.right <= 0 ||
+            rect.top >= viewportHeight ||
+            rect.left >= viewportWidth
+          ) return false;
+
+          const label = String(
+            el.innerText ||
+            el.textContent ||
+            el.getAttribute?.('aria-label') ||
+            el.getAttribute?.('title') ||
+            ''
+          ).replace(/\s+/g, ' ').trim();
+          if (!retryPattern.test(label)) return false;
+
+          const x = Math.max(1, Math.min(viewportWidth - 1, rect.left + rect.width / 2));
+          const y = Math.max(1, Math.min(viewportHeight - 1, rect.top + rect.height / 2));
+          const hit = document.elementFromPoint(x, y);
+          if (!hit || !(hit === el || el.contains(hit))) return false;
+
+          let node = el.parentElement;
+          for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
+            const localRect = node.getBoundingClientRect();
+            if (localRect.height > Math.max(520, viewportHeight * 0.8)) continue;
+            const text = String(node.innerText || node.textContent || '')
+              .replace(/\s+/g, ' ')
+              .trim();
+            if (text && text.length <= 1800 && errorPattern.test(text)) return true;
+          }
+          return false;
+        });
+
         if (!button) return null;
         const rect = button.getBoundingClientRect();
-        if (!rect.width || !rect.height) return null;
         return {
           x: rect.left + rect.width / 2,
           y: rect.top + rect.height / 2
         };
       }
     });
+
     const point = result?.result;
     if (!point) return false;
     const clicked = await physicalClickChatTab(tabId, point);
