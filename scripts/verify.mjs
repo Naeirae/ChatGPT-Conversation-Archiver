@@ -651,6 +651,16 @@ try {
     fail('background load recovery: worker must reject offscreen/occluded Retry controls and require local error evidence');
   }
 
+  if (!contentSource.includes('function findVisibleLoadRetry()') ||
+      !contentSource.includes("visibleElement(el, { interactive: true })") ||
+      !contentSource.includes('document.elementFromPoint') ||
+      !contentSource.includes('await sleep(120);') ||
+      !serviceWorkerSource.includes('last?.retryAvailable') ||
+      !serviceWorkerSource.includes('if (clicked) {') ||
+      !serviceWorkerSource.includes('retryAvailable')) {
+    fail('Retry recovery: only a real visible clickable local error Retry control may trigger click/backoff');
+  }
+
   const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
