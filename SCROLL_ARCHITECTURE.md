@@ -1,10 +1,21 @@
-# Scroll architecture cleanup
+# Scroll traversal forensic recovery
 
-Status: in progress. Branch: `scroll-architecture-cleanup-2026-10-24`. Draft PR: #33.
+Status: forensic candidate, not production. Branch: `forensics/debugger-traversal-candidate`.
 
 ## Current stop point
 
-The current production source is 0.4.45. Full capture was patched so a verified load error / `Retry` window cannot be mistaken for the real conversation start. The cleanup now starts by extracting shared scroll primitives without changing the proven 0.4.17 full-capture cadence.
+The investigation no longer treats debugger/CDP wheel as the regression. Historical evidence shows that debugger wheel was already the working transport while traversal regressions accumulated around top detection, recovery, reconciliation and later restore cycles.
+
+Current candidate commit restores the **0.3.87 full-capture traversal policy** on top of modern DOM/identity protections:
+
+- full ascent is navigation-only and uses debugger wheel;
+- ascent uses 16 bursts, `5000/550ms` settle parameters and five unchanged-window confirmations;
+- the 0.3.98 `physicalScrollStartVisible()` shortcut is explicitly excluded from full top confirmation;
+- full chronological descent captures before and after each debugger movement;
+- descent uses the 0.3.87 three-burst cadence plus neighbouring-window overlap verification;
+- modern strong-ID/context-aware identity logic remains in place.
+
+Nothing on this forensic branch is claimed live-verified yet. Do not merge to `main` until a long-chat browser run proves upward motion, automatic top completion, downward motion and no message gaps.
 
 ## Requirements
 
@@ -17,6 +28,43 @@ The current production source is 0.4.45. Full capture was patched so a verified 
 | R005 | Image hydration/export must not run inside the scroll transport layer. | Architecture cleanup request | Active constraint |
 | R006 | Scroll behavior must be distinguishable from capture policy: transport moves; traversal policy decides what boundary is being sought. | Architecture cleanup request | In progress |
 | R007 | Source fixes, packaged extension and live Chrome behavior remain separate verification layers. | Project discipline | Active constraint |
+
+## Forensic findings
+
+| Finding | Evidence | Status |
+| --- | --- | --- |
+| Debugger/CDP wheel is not itself the early regression. | It is already present from commit `175867fa` and remains the transport through later working/restore states. | Confirmed |
+| First explicit top-detection slowdown appears in `7ba0ae0` (`Harden top detection against delayed ChatGPT loading`). | Settle grows to 8s/1.4s quiet, upward bursts increase, an extra 2.6s wait is added, and five idle confirmations are required. | Confirmed |
+| Full capture becomes fast again in 0.3.87 by bypassing rich upward capture. | Commit `6a09d0a3` introduces navigation-only full ascent, 16-burst debugger movement and overlap-verified chronological descent. | Confirmed |
+| 0.3.98 introduces a known traversal regression. | Code commit `0010e832` adds `physicalScrollStartVisible()` as a top shortcut; later commit `3203f82d` explicitly says “Restore conservative full-chat traversal after 0.3.98 regression”. | Confirmed |
+| 0.3.87 is not safe as a whole-file rollback. | Its navigation/reconciliation layer still allows standalone text equality in `sameNavigationRef()`; modern identity hardening must be retained. | Confirmed |
+| Earlier `5f4f7d8` virtualized-unit change is not currently identified as the source of gaps. | Its diff primarily prevents a `data-turn-key` wrapper containing user+assistant from being treated as one message. | Not established as regression |
+
+## Active requirements
+
+| ID | Requirement | Status |
+| --- | --- | --- |
+| R001 | Preserve debugger/CDP wheel as the primary full-capture movement transport. | Active |
+| R002 | Full ascent must be navigation-only; no canonical message accumulation while moving upward. | Implemented, not live-verified |
+| R003 | Do not use `physicalScrollStartVisible()` as proof of global conversation top. | Implemented, not live-verified |
+| R004 | Capture the visible viewport before and after every chronological downward movement. | Implemented, not live-verified |
+| R005 | Do not accept a downward jump unless neighbouring virtualized windows overlap. | Implemented, not live-verified |
+| R006 | Standalone repeated text or weak wrapper identity must not merge/deduplicate distinct messages. | Implemented, statically guarded |
+| R007 | Do not publish more `main` releases from this investigation until a browser run validates the candidate. | Active constraint |
+
+## Candidate verification checklist
+
+- [ ] Debugger scroll starts in current-tab mode.
+- [ ] Debugger scroll starts in background-copy mode.
+- [ ] Long chat moves upward at practical speed.
+- [ ] Real top is recognized automatically without the 0.3.98 physical-top heuristic.
+- [ ] Downward chronological traversal physically moves from the top.
+- [ ] Repeated short messages survive identity/deduplication.
+- [ ] No viewport gap is silently accepted.
+- [ ] Retry/load-error UI does not cause an endless traversal loop.
+- [ ] Snapshot lower boundary is reached without adding messages created after run start.
+
+Confirmed progress: 0/9 live-behavior checks. Static/history analysis does not count as browser verification.
 
 ## Target layers
 
