@@ -618,6 +618,16 @@ try {
     fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
   }
 
+  const bgCreateStart = serviceWorkerSource.indexOf("captureTab = await chrome.tabs.create({ url: inspection.href, active: true })");
+  const bgStartCollector = serviceWorkerSource.indexOf("await ensureChatGptContentScript(captureTab.id, jobId");
+  const bgRestoreSource = serviceWorkerSource.indexOf("await chrome.tabs.update(sourceTab.id, { active: true })", bgStartCollector);
+  if (bgCreateStart < 0 ||
+      bgStartCollector < 0 ||
+      bgRestoreSource < bgStartCollector ||
+      !serviceWorkerSource.includes("files: ['lib/content-chatgpt-scroll.js', 'content-chatgpt.js']")) {
+    fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
+  }
+
   const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null, wheelDelta = 860)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
