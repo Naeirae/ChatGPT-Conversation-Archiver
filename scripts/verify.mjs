@@ -629,7 +629,7 @@ try {
   if (!retryRuntimeBlock ||
       !retryRuntimeBlock.includes("visibleElement(el, { interactive: true })") ||
       !retryRuntimeBlock.includes('document.elementFromPoint') ||
-      !retryRuntimeBlock.includes("el.closest('[aria-hidden=\"true\"], [inert]')") ||
+      !contentSource.includes("el.closest('[aria-hidden=\"true\"], [inert]')") ||
       !retryRuntimeBlock.includes('rect.top >= viewportHeight') ||
       !retryRuntimeBlock.includes('rect.left >= viewportWidth') ||
       !retryRuntimeBlock.includes('rect.height > Math.max(520, viewportHeight * 0.8)') ||
