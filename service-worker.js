@@ -1961,7 +1961,12 @@ async function startCapture({
     collectorStarted = true;
 
     if (captureTarget === 'copy') {
-      // The capture tab was created inactive; do not steal the user's focus.
+      // Live-proven background path: hydrate and start the collector while the
+      // working copy is foregrounded, then restore the user's source chat.
+      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
+      if (sourceTab.windowId != null) {
+        await chrome.windows.update(sourceTab.windowId, { focused: true }).catch(() => {});
+      }
       await appendRunLog({
         status: 'running',
         message: mode === 'full'
