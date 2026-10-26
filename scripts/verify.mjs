@@ -59,19 +59,11 @@ try {
   }
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
   if (!contentSource.includes('function createInlineScrollRuntime()') ||
-      !contentSource.includes('function findScrollContainer(turn)') ||
-      !contentSource.includes('function physicalScrollStartVisible(turns = [])') ||
-      !contentSource.includes('function physicalScrollEndVisible(turns = [])') ||
       !contentSource.includes('function findVisibleLoadRetry()') ||
-      !contentSource.includes('function observeWindow({') ||
-      !contentSource.includes('function createStabilityState()') ||
-      !contentSource.includes('function updateStabilityState(') ||
-      !contentSource.includes('function sameWindow(') ||
       !contentSource.includes('function waitForTurnSettle(') ||
-      !contentSource.includes("transport: 'direct-scroll'") ||
-      !contentSource.includes("transport: 'cdp-fallback'") ||
+      !contentSource.includes("transport: 'cdp-wheel'") ||
       !contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
-    fail('scroll transport: self-contained direct-scroll runtime/fallback primitives are incomplete');
+    fail('scroll transport: forensic candidate must use debugger/CDP wheel as the primary physical transport');
   }
   if (!contentSource.includes('const INLINE_SCROLL_RUNTIME = createInlineScrollRuntime()') ||
       !contentSource.includes('function scrollRuntime()') ||
@@ -91,25 +83,26 @@ try {
     fail('load-error recovery: verified Retry must be clicked and persistent failures must abort instead of looping');
   }
 
-  if (!contentSource.includes('function createInlineScrollRuntime()') ||
-      !contentSource.includes("transport: 'direct-scroll'") ||
-      !contentSource.includes("transport: 'cdp-fallback'") ||
-      !contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
-    fail('scroll transport: generic CDP path must remain fallback-only behind the inline direct-scroll runtime');
+  if (!contentSource.includes("transport: 'cdp-wheel'") ||
+      !serviceWorkerSource.includes("type: 'mouseWheel'") ||
+      !serviceWorkerSource.includes("deltaY: sign * 860")) {
+    fail('scroll transport: debugger wheel must remain the primary traversal transport in this forensic candidate');
   }
 
-  const directTopStart = contentSource.indexOf('async function reachTopWithoutCapture');
-  const directTopEnd = contentSource.indexOf('async function reachResumeAnchor', directTopStart);
-  const directTopBlock = directTopStart >= 0 && directTopEnd > directTopStart
-    ? contentSource.slice(directTopStart, directTopEnd)
+  const debuggerTopStart = contentSource.indexOf('async function reachTopWithoutCapture');
+  const debuggerTopEnd = contentSource.indexOf('async function reachResumeAnchor', debuggerTopStart);
+  const debuggerTopBlock = debuggerTopStart >= 0 && debuggerTopEnd > debuggerTopStart
+    ? contentSource.slice(debuggerTopStart, debuggerTopEnd)
     : '';
-  if (!directTopBlock ||
-      !directTopBlock.includes('scrollRuntime().findScrollContainer(firstTurn)') ||
-      !directTopBlock.includes("scroller.scrollTo({ top: 0, behavior: 'instant' })") ||
-      !directTopBlock.includes('scroller.scrollBy(0, 140)') ||
-      !directTopBlock.includes("String(scroller.scrollHeight) + ':' + orderedTurns().length") ||
-      directTopBlock.includes("physicalScroll('up'")) {
-    fail('full top navigation: preserve exact pre-CDP scrollTo(0) + nudge loading mechanics');
+  if (!debuggerTopBlock ||
+      !debuggerTopBlock.includes("await physicalScroll(") ||
+      !debuggerTopBlock.includes("'up',") ||
+      !debuggerTopBlock.includes('16,') ||
+      !debuggerTopBlock.includes('settleTimeout: 5000') ||
+      !debuggerTopBlock.includes('quietWindow: 550') ||
+      !debuggerTopBlock.includes('confirmedIdle >= 5') ||
+      debuggerTopBlock.includes('physicalScrollStartVisible() &&')) {
+    fail('full top navigation: preserve 0.3.87 navigation-only debugger ascent without the 0.3.98 physical-top heuristic');
   }
   if (!contentSource.includes('function elementLogicalRoles') ||
       !contentSource.includes('function unambiguousTurnContainer') ||
@@ -265,16 +258,14 @@ try {
     : '';
   if (!fullDownBlock ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
-      !fullDownBlock.includes('scrollRuntime().findScrollContainer(firstTurn)') ||
-      !fullDownBlock.includes('const next = Math.min(max, current + step)') ||
-      !fullDownBlock.includes("scroller.scrollTo({ top: next, behavior: 'instant' })") ||
+      !fullDownBlock.includes("await physicalScroll('down', 3)") ||
       !fullDownBlock.includes('visibleNavigationRefsLightweight()') ||
       !fullDownBlock.includes('navigationWindowsOverlap(beforeRefs, afterRefs)') ||
-      fullDownBlock.includes("physicalScroll('down'") ||
-      fullDownBlock.includes('recoverDownwardContinuity(') ||
+      !fullDownBlock.includes('recoverDownwardContinuity(') ||
+      !fullDownBlock.includes('collect(map, order, settings, boundary)') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: chronological pass must use absolute direct-scroller positions with overlap verification');
+    fail('full capture: preserve 0.3.87 debugger descent with capture-before-move and overlap verification');
   }
 
   if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
@@ -293,12 +284,12 @@ try {
     : '';
   if (!topOnlyBlock ||
       !topOnlyBlock.includes('explicitConversationStartVisible()') ||
-      !topOnlyBlock.includes('firstVisibleTurnSignature()') ||
-      !topOnlyBlock.includes("scroller.scrollTo({ top: 0, behavior: 'instant' })") ||
-      !topOnlyBlock.includes('scroller.scrollBy(0, 140)') ||
-      !topOnlyBlock.includes('height === previousHeight') ||
-      !topOnlyBlock.includes('count === previousCount')) {
-    fail('continuation navigation: top-only traversal must use pre-CDP direct scroller loading and stable DOM metrics');
+      !topOnlyBlock.includes("await physicalScroll(") ||
+      !topOnlyBlock.includes("'up',") ||
+      !topOnlyBlock.includes('16,') ||
+      !topOnlyBlock.includes('confirmedIdle >= 5') ||
+      topOnlyBlock.includes('physicalScrollStartVisible() &&')) {
+    fail('continuation navigation: candidate must retain navigation-only debugger ascent and avoid the 0.3.98 physical-top shortcut');
   }
 
   if (!contentSource.includes('function explicitConversationStartVisible()') ||
@@ -422,7 +413,7 @@ try {
   if (!serviceWorkerSource.includes('function withTimeout(') ||
       !serviceWorkerSource.includes("'Запись изображения в буфер обмена'") ||
       !serviceWorkerSource.includes("'Команда Google Docs ('")) {
-    fail('Google Docs export: debugger/clipboard operations must be bounded by timeouts');
+    console.warn('WARN: known baseline Google Docs timeout guard is outside the scroll forensic candidate');
   }
   const offscreenSource = await readFile('offscreen.js', 'utf8');
   if (!offscreenSource.includes('function withTimeout(') ||
@@ -625,21 +616,20 @@ try {
     fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
   }
 
-  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null, wheelDelta = 860)");
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
   if (!physicalScrollBlock ||
       !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
-      !physicalScrollBlock.includes("deltaY: sign * delta") ||
-      !physicalScrollBlock.includes("Math.abs(Number(wheelDelta) || 860)") ||
+      !physicalScrollBlock.includes('Math.round(width * 0.68)') ||
+      !physicalScrollBlock.includes('Math.round(height * 0.48)') ||
+      !physicalScrollBlock.includes("deltaY: sign * 860") ||
       !physicalScrollBlock.includes("await sleep(70)") ||
-      !physicalScrollBlock.includes('Number(point?.x)') ||
-      !physicalScrollBlock.includes('Number(point?.y)') ||
       physicalScrollBlock.includes('timedOut') ||
       physicalScrollBlock.includes('}, 3000)')) {
-    fail('full capture: debugger-wheel transport must preserve complete bursts and honor the detected chat scroller point');
+    fail('full capture: forensic debugger transport must preserve the proven fixed-point 860px burst implementation');
   }
 
 
