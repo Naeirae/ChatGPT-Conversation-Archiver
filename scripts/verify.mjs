@@ -4,7 +4,6 @@ import { spawnSync } from 'node:child_process';
 const jsFiles = [
   'service-worker.js',
   'content-chatgpt.js',
-  'content-chatgpt.js',
   'popup.js',
   'updater.js',
   'planner.js',
@@ -58,31 +57,26 @@ try {
   if (!serviceWorkerSource.includes("case 'ARCHIVER_COMPARE_CURRENT'")) {
     fail('service-worker.js: missing compare-current route');
   }
-  const scrollSource = contentSource;
   const contentSource = await readFile('content-chatgpt.js', 'utf8');
-  if (!scrollSource.includes("globalThis[KEY] = Object.freeze") ||
-      !scrollSource.includes('findScrollContainer') ||
-      !scrollSource.includes('physicalScrollStartVisible') ||
-      !scrollSource.includes('physicalScrollEndVisible') ||
-      !scrollSource.includes('findVisibleLoadRetry') ||
-      !scrollSource.includes('observeWindow') ||
-      !scrollSource.includes('createStabilityState') ||
-      !scrollSource.includes('updateStabilityState') ||
-      !scrollSource.includes('sameWindow') ||
-      !scrollSource.includes('waitForTurnSettle') ||
-      !scrollSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
-    fail('scroll runtime: missing shared container/edge/retry/settle/transport primitives');
-  }
-  if (!contentSource.includes('function scrollRuntime()') ||
-      !contentSource.includes('scrollRuntime().findScrollContainer') ||
-      !contentSource.includes('scrollRuntime().findVisibleLoadRetry') ||
-      !contentSource.includes('scrollRuntime().physicalScroll') ||
-      contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
-    fail('content-chatgpt.js: traversal must use the shared scroll runtime instead of reimplementing transport');
+  if (!contentSource.includes('function createInlineScrollRuntime()') ||
+      !contentSource.includes('function findScrollContainer(turn)') ||
+      !contentSource.includes('function physicalScrollStartVisible(turns = [])') ||
+      !contentSource.includes('function physicalScrollEndVisible(turns = [])') ||
+      !contentSource.includes('function findVisibleLoadRetry()') ||
+      !contentSource.includes('function observeWindow({') ||
+      !contentSource.includes('function createStabilityState()') ||
+      !contentSource.includes('function updateStabilityState(') ||
+      !contentSource.includes('function sameWindow(') ||
+      !contentSource.includes('function waitForTurnSettle(') ||
+      !contentSource.includes("transport: 'direct-scroll'") ||
+      !contentSource.includes("transport: 'cdp-fallback'") ||
+      !contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
+    fail('scroll transport: self-contained direct-scroll runtime/fallback primitives are incomplete');
   }
   if (!contentSource.includes('const INLINE_SCROLL_RUNTIME = createInlineScrollRuntime()') ||
+      !contentSource.includes('function scrollRuntime()') ||
       !contentSource.includes('return INLINE_SCROLL_RUNTIME;')) {
-    fail('scroll transport: content script must remain self-contained and must not require a separately loaded runtime');
+    fail('scroll transport: content script must use its inline runtime and must not require a separate runtime file');
   }
   const retryStart = contentSource.indexOf('async function recoverVisibleLoadError');
   const retryEnd = contentSource.indexOf('async function getSettings', retryStart);
@@ -735,8 +729,8 @@ try {
   const chatScripts = manifest.content_scripts?.find(item =>
     (item.matches || []).some(match => String(match).includes('chatgpt.com'))
   )?.js || [];
-  if (chatScripts[0] !== 'content-chatgpt.js' || chatScripts[1] !== 'content-chatgpt.js') {
-    fail('manifest.json: shared scroll runtime must load immediately before content-chatgpt.js');
+  if (chatScripts.length !== 1 || chatScripts[0] !== 'content-chatgpt.js') {
+    fail('manifest.json: ChatGPT capture must load the single self-contained content-chatgpt.js runtime');
   }
   if (manifest.manifest_version !== 3) {
     fail('manifest.json: manifest_version must be 3');
