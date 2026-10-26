@@ -1330,7 +1330,7 @@ async function ensureBoundaryMarkingScript(tabId, { enable = true } = {}) {
   if (!ping?.ok || ping.version !== expectedVersion) {
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ['lib/content-chatgpt-scroll.js', 'content-chatgpt.js']
+      files: ['content-chatgpt.js']
     });
     await sleep(80);
     ping = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_PING' }).catch(() => null);
