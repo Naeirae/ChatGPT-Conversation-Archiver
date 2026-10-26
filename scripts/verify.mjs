@@ -94,22 +94,22 @@ try {
   if (!contentSource.includes('function createInlineScrollRuntime()') ||
       !contentSource.includes("transport: 'direct-scroll'") ||
       !contentSource.includes("transport: 'cdp-fallback'") ||
-      !contentSource.includes("scroller.scrollBy({ top: sign * delta") ||
-      !contentSource.includes('wheelDelta = 860') ||
-      !contentSource.includes('wheelDelta: 320') ||
-      !contentSource.includes("wheelDelta: phase === 'walk' ? 220 : 640") ||
-      !contentSource.includes('wheelDelta: 180') ||
-      !contentSource.includes('for (let attempt = 0; attempt < 6; attempt++)')) {
-    fail('chronological transport: capture/retry/recovery must use bounded small wheel distances distinct from fast top navigation');
+      !contentSource.includes("type: 'ARCHIVER_PHYSICAL_SCROLL'")) {
+    fail('scroll transport: generic CDP path must remain fallback-only behind the inline direct-scroll runtime');
   }
 
-  if (!contentSource.includes('function explicitConversationStartVisible()') ||
-      !contentSource.includes('function firstVisibleTurnSignature()') ||
-      !contentSource.includes('const beforeFirst = firstVisibleTurnSignature()') ||
-      !contentSource.includes('const afterFirst = firstVisibleTurnSignature()') ||
-      !contentSource.includes('physicalScrollStartVisible()') ||
-      !contentSource.includes('topConfirmations >= 2')) {
-    fail('top navigation: real-top confirmation must use explicit first-turn markers or a stable first turn at physical top');
+  const directTopStart = contentSource.indexOf('async function reachTopWithoutCapture');
+  const directTopEnd = contentSource.indexOf('async function reachResumeAnchor', directTopStart);
+  const directTopBlock = directTopStart >= 0 && directTopEnd > directTopStart
+    ? contentSource.slice(directTopStart, directTopEnd)
+    : '';
+  if (!directTopBlock ||
+      !directTopBlock.includes('scrollRuntime().findScrollContainer(firstTurn)') ||
+      !directTopBlock.includes("scroller.scrollTo({ top: 0, behavior: 'instant' })") ||
+      !directTopBlock.includes('scroller.scrollBy(0, 140)') ||
+      !directTopBlock.includes("String(scroller.scrollHeight) + ':' + orderedTurns().length") ||
+      directTopBlock.includes("physicalScroll('up'")) {
+    fail('full top navigation: preserve exact pre-CDP scrollTo(0) + nudge loading mechanics');
   }
   if (!contentSource.includes('function elementLogicalRoles') ||
       !contentSource.includes('function unambiguousTurnContainer') ||
@@ -264,17 +264,17 @@ try {
     ? contentSource.slice(fullDownStart, fullDownEnd)
     : '';
   if (!fullDownBlock ||
-      !fullDownBlock.includes("await physicalScroll('down', 1") ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
+      !fullDownBlock.includes('scrollRuntime().findScrollContainer(firstTurn)') ||
+      !fullDownBlock.includes('const next = Math.min(max, current + step)') ||
+      !fullDownBlock.includes("scroller.scrollTo({ top: next, behavior: 'instant' })") ||
       !fullDownBlock.includes('visibleNavigationRefsLightweight()') ||
       !fullDownBlock.includes('navigationWindowsOverlap(beforeRefs, afterRefs)') ||
-      !fullDownBlock.includes('recoverDownwardContinuity(') ||
-      !fullDownBlock.includes('scrollObservation(map.size)') ||
-      !fullDownBlock.includes('updateStabilityState(stability, before, after)') ||
-      !fullDownBlock.includes('stall.stable >= 4') ||
+      fullDownBlock.includes("physicalScroll('down'") ||
+      fullDownBlock.includes('recoverDownwardContinuity(') ||
       fullDownBlock.includes('hydrateSequentialImages(') ||
       fullDownBlock.includes('firstPassCount')) {
-    fail('full capture: chronological pass must stay one-burst and overlap-verified');
+    fail('full capture: chronological pass must use absolute direct-scroller positions with overlap verification');
   }
 
   if (!contentSource.includes('function hasStableResumeAnchor(id)') ||
@@ -294,10 +294,11 @@ try {
   if (!topOnlyBlock ||
       !topOnlyBlock.includes('explicitConversationStartVisible()') ||
       !topOnlyBlock.includes('firstVisibleTurnSignature()') ||
-      !topOnlyBlock.includes("await physicalScroll('up', 16") ||
-      !topOnlyBlock.includes('physicalScrollStartVisible()') ||
-      !topOnlyBlock.includes('topConfirmations >= 2')) {
-    fail('continuation navigation: top-only traversal must recognize explicit first-turn markers or a stable first turn at physical top');
+      !topOnlyBlock.includes("scroller.scrollTo({ top: 0, behavior: 'instant' })") ||
+      !topOnlyBlock.includes('scroller.scrollBy(0, 140)') ||
+      !topOnlyBlock.includes('height === previousHeight') ||
+      !topOnlyBlock.includes('count === previousCount')) {
+    fail('continuation navigation: top-only traversal must use pre-CDP direct scroller loading and stable DOM metrics');
   }
 
   if (!contentSource.includes('function explicitConversationStartVisible()') ||
