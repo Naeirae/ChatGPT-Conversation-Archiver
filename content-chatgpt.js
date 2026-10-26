@@ -38,10 +38,277 @@
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
   const DEFAULT_SETTINGS = { userName: '', assistantName: '', palette: 'ocean', alignUserRight: true, includeReasoning: false };
+  function createInlineScrollRuntime() {
+    function visibleElement(el) {
+      if (!(el instanceof Element)) return false;
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = el.getBoundingClientRect();
+      return rect.width >= 2 && rect.height >= 2 && rect.bottom > 0 && rect.right > 0;
+    }
+
+    function findScrollContainer(turn) {
+      let el = turn?.parentElement || null;
+      while (el && el !== document.body && el !== document.documentElement) {
+        const style = getComputedStyle(el);
+        if (
+          /(auto|scroll|overlay)/.test(style.overflowY) &&
+          el.scrollHeight > el.clientHeight + 80
+        ) return el;
+        el = el.parentElement;
+      }
+
+      const root = document.scrollingElement || document.documentElement;
+      if (root && root.scrollHeight > root.clientHeight + 80) return root;
+
+      const candidates = [...document.querySelectorAll(
+        'main, [class*="overflow-y-auto"], [class*="overflow-auto"]'
+      )].filter(candidate => {
+        if (!(candidate instanceof Element)) return false;
+        const style = getComputedStyle(candidate);
+        return /(auto|scroll|overlay)/.test(style.overflowY) &&
+          candidate.scrollHeight > candidate.clientHeight + 80;
+      });
+
+      const containing = turn
+        ? candidates.filter(candidate => candidate.contains(turn))
+        : [];
+      return containing[0] || candidates[0] || root || document.documentElement;
+    }
+
+    function physicalScrollStartVisible(turns = []) {
+      const scroller = findScrollContainer(turns[0] || null);
+      if (!scroller) return false;
+      const height = Number(scroller.clientHeight || 0);
+      if (!height) return false;
+      return Number(scroller.scrollTop || 0) <= Math.max(24, Math.round(height * 0.04));
+    }
+
+    function physicalScrollEndVisible(turns = []) {
+      const scroller = findScrollContainer(turns[turns.length - 1] || null);
+      if (!scroller) return false;
+      const top = Number(scroller.scrollTop || 0);
+      const height = Number(scroller.clientHeight || 0);
+      const total = Number(scroller.scrollHeight || 0);
+      if (!height || !total) return false;
+      return top + height >= total - Math.max(24, Math.round(height * 0.04));
+    }
+
+    function findVisibleLoadRetry() {
+      const buttonPattern = /^(?:Попробовать снова|Повторить|Try again|Retry)$/i;
+      const errorPattern = /(?:something went wrong|there was an error|network error|failed to load|не удалось загрузить|произошла ошибка|ошибка сети|возникла ошибка)/i;
+      return [...document.querySelectorAll('button, [role="button"]')].find(el => {
+        if (!visibleElement(el) || el.disabled) return false;
+        const label = String(
+          el.innerText ||
+          el.textContent ||
+          el.getAttribute?.('aria-label') ||
+          el.getAttribute?.('title') ||
+          ''
+        ).replace(/\s+/g, ' ').trim();
+        if (!buttonPattern.test(label)) return false;
+
+        let node = el;
+        for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+          const text = String(node.innerText || node.textContent || '')
+            .replace(/\s+/g, ' ')
+            .trim();
+          if (text && errorPattern.test(text)) return true;
+        }
+        return false;
+      }) || null;
+    }
+
+    async function waitForTurnSettle(
+      getSignature,
+      { timeout = 2200, quietWindow = 320, pollMs = 120 } = {}
+    ) {
+      if (typeof getSignature !== 'function') return '';
+      const started = Date.now();
+      let previous = String(getSignature() || '');
+      let quietSince = Date.now();
+
+      while (Date.now() - started < timeout) {
+        await sleep(pollMs);
+        const next = String(getSignature() || '');
+        if (next && next === previous) {
+          if (Date.now() - quietSince >= quietWindow) return next;
+        } else {
+          previous = next;
+          quietSince = Date.now();
+        }
+      }
+      return previous;
+    }
+
+    function createStabilityState() {
+      return {
+        stable: 0,
+        previousSignature: '',
+        previousCapturedCount: -1,
+        previousFirstKey: '',
+        previousLastKey: ''
+      };
+    }
+
+    function resetStabilityState(target) {
+      const state = target || createStabilityState();
+      state.stable = 0;
+      state.previousSignature = '';
+      state.previousCapturedCount = -1;
+      state.previousFirstKey = '';
+      state.previousLastKey = '';
+      return state;
+    }
+
+    function primeStabilityState(target, observation) {
+      const state = resetStabilityState(target);
+      state.previousSignature = String(observation?.signature || '');
+      state.previousCapturedCount = Number(observation?.capturedCount) || 0;
+      state.previousFirstKey = String(observation?.firstKey || '');
+      state.previousLastKey = String(observation?.lastKey || '');
+      return state;
+    }
+
+    function observeWindow({
+      turns = [],
+      getTurnKey,
+      signature = '',
+      capturedCount = 0
+    } = {}) {
+      const keyOf = typeof getTurnKey === 'function' ? getTurnKey : () => '';
+      const first = turns[0] || null;
+      const last = turns[turns.length - 1] || null;
+      return Object.freeze({
+        signature: String(signature || ''),
+        firstKey: first ? String(keyOf(first) || '') : '',
+        lastKey: last ? String(keyOf(last) || '') : '',
+        visibleCount: turns.length,
+        capturedCount: Number(capturedCount) || 0,
+        retryVisible: Boolean(findVisibleLoadRetry()),
+        atStart: physicalScrollStartVisible(turns),
+        atEnd: physicalScrollEndVisible(turns)
+      });
+    }
+
+    function sameWindow(left, right, {
+      requireCapturedCount = true,
+      requireFirstKey = false,
+      requireLastKey = false
+    } = {}) {
+      if (!left || !right || right.retryVisible) return false;
+      if (!right.signature || right.signature !== left.signature) return false;
+      if (requireCapturedCount && right.capturedCount !== left.capturedCount) return false;
+      if (requireFirstKey && right.firstKey !== left.firstKey) return false;
+      if (requireLastKey && right.lastKey !== left.lastKey) return false;
+      return true;
+    }
+
+    function updateStabilityState(target, before, after, options = {}) {
+      const state = target || createStabilityState();
+      const repeatedPrevious = Boolean(
+        after?.signature &&
+        before?.signature === state.previousSignature &&
+        (!options.requireCapturedCount || after.capturedCount === state.previousCapturedCount) &&
+        (!options.requireFirstKey || after.firstKey === state.previousFirstKey) &&
+        (!options.requireLastKey || after.lastKey === state.previousLastKey)
+      );
+      const unchanged = sameWindow(before, after, options) && repeatedPrevious;
+      state.stable = unchanged ? state.stable + 1 : 0;
+      state.previousSignature = String(after?.signature || '');
+      state.previousCapturedCount = Number(after?.capturedCount) || 0;
+      state.previousFirstKey = String(after?.firstKey || '');
+      state.previousLastKey = String(after?.lastKey || '');
+      return { unchanged, stable: state.stable, observation: after };
+    }
+
+    async function physicalScroll({
+      jobId,
+      direction = 'up',
+      bursts = 7,
+      getSignature,
+      settleTimeout = 2200,
+      quietWindow = 320,
+      turns = [],
+      wheelDelta = 860
+    } = {}) {
+      const normalizedDirection = direction === 'down' ? 'down' : 'up';
+      const sign = normalizedDirection === 'down' ? 1 : -1;
+      const scroller = findScrollContainer(
+        normalizedDirection === 'down'
+          ? (turns[turns.length - 1] || turns[0] || null)
+          : (turns[0] || turns[turns.length - 1] || null)
+      );
+      if (!scroller) throw new Error('Не найден контейнер переписки для прокрутки.');
+
+      const count = Math.max(1, Math.min(24, Number(bursts) || 1));
+      const delta = Math.max(80, Math.min(1200, Math.abs(Number(wheelDelta) || 860)));
+      const beforeTop = Number(scroller.scrollTop || 0);
+
+      for (let i = 0; i < count; i++) {
+        scroller.scrollBy({ top: sign * delta, left: 0, behavior: 'auto' });
+        await sleep(70);
+      }
+
+      await waitForTurnSettle(getSignature, {
+        timeout: settleTimeout,
+        quietWindow
+      });
+
+      const afterTop = Number(scroller.scrollTop || 0);
+      const moved = Math.abs(afterTop - beforeTop) >= 2;
+      const atRequestedEdge = normalizedDirection === 'up'
+        ? physicalScrollStartVisible(turns)
+        : physicalScrollEndVisible(turns);
+
+      if (!moved && !atRequestedEdge) {
+        const fallback = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_PHYSICAL_SCROLL',
+          jobId,
+          direction: normalizedDirection,
+          bursts: count,
+          wheelDelta: delta
+        });
+        if (!fallback?.ok) {
+          throw new Error(fallback?.error || 'Не удалось прокрутить вкладку.');
+        }
+        await waitForTurnSettle(getSignature, {
+          timeout: settleTimeout,
+          quietWindow
+        });
+        return { ...fallback, direction: normalizedDirection, transport: 'cdp-fallback' };
+      }
+
+      return {
+        ok: true,
+        direction: normalizedDirection,
+        bursts: count,
+        transport: 'direct-scroll',
+        beforeTop,
+        afterTop
+      };
+    }
+
+    return Object.freeze({
+      findScrollContainer,
+      physicalScrollStartVisible,
+      physicalScrollEndVisible,
+      findVisibleLoadRetry,
+      observeWindow,
+      createStabilityState,
+      resetStabilityState,
+      primeStabilityState,
+      sameWindow,
+      updateStabilityState,
+      waitForTurnSettle,
+      physicalScroll
+    });
+  }
+
+  const INLINE_SCROLL_RUNTIME = createInlineScrollRuntime();
+
   function scrollRuntime() {
-    const runtime = globalThis.__CHATGPT_ARCHIVER_SCROLL__;
-    if (!runtime) throw new Error('Scroll runtime не загружен. Перезагрузите расширение.');
-    return runtime;
+    return INLINE_SCROLL_RUNTIME;
   }
   const REASONING_ACTION_EXCLUDE_RE = /copy|share|regenerate|retry|edit|like|dislike|feedback|citation|source|download|listen|read aloud|stop|поделиться|скопировать|повторить|изменить|источник|скачать|озвучить/i;
   const REASONING_STATUS_RE = /^(?:обработка заняла|размышление заняло|размышления заняли|thought for|thinking for|reasoned for|processing took)\b/i;
