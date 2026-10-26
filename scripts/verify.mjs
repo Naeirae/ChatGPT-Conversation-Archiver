@@ -621,15 +621,17 @@ try {
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
-  if (!physicalScrollBlock ||
-      !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
+  if (!serviceWorkerSource.includes('async function chatScrollMetrics') ||
+      !serviceWorkerSource.includes('async function scriptedScrollChatTab') ||
+      !physicalScrollBlock ||
+      !physicalScrollBlock.includes('beforeMetrics = await chatScrollMetrics') ||
+      !physicalScrollBlock.includes('afterMetrics = await chatScrollMetrics') ||
       !physicalScrollBlock.includes('Math.round(width * 0.68)') ||
       !physicalScrollBlock.includes('Math.round(height * 0.48)') ||
       !physicalScrollBlock.includes("deltaY: sign * 860") ||
-      !physicalScrollBlock.includes("await sleep(70)") ||
-      physicalScrollBlock.includes('timedOut') ||
-      physicalScrollBlock.includes('}, 3000)')) {
-    fail('full capture: forensic debugger transport must preserve the proven fixed-point 860px burst implementation');
+      !physicalScrollBlock.includes('scriptedScrollChatTab(tabId, direction, count)') ||
+      !physicalScrollBlock.includes("method: moved ? 'debugger-wheel' : 'debugger-wheel-edge'")) {
+    fail('full capture: debugger wheel must verify real movement and fall back to the live ChatGPT scroller on acknowledged no-op input');
   }
 
 
