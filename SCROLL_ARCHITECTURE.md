@@ -154,3 +154,16 @@ The branch now separates wheel distance by traversal purpose:
 - rich chronological traversal defaults to one small burst instead of three large bursts.
 
 This makes "fast navigation" and "safe capture" physically different transports rather than only different burst counts.
+
+
+## Exact pre-CDP restoration
+
+The previous "direct scroll" reconstruction was not behaviorally equivalent to the early working implementation. The actual pre-`175867fa` mechanics were recovered from commit history and restored for full capture:
+
+- scroller selection is ancestor-only, with `overflow-y` and `scrollHeight > clientHeight + 20`;
+- top loading uses `scrollTo(0)`, then a small `140px` nudge down, then `scrollTo(0)` again while watching `scrollHeight + turn count`;
+- chronological traversal uses absolute `scrollTo(next)` positions within the same scroller;
+- full capture no longer relies on generic `physicalScroll()` for either ascent or chronological descent;
+- CDP wheel remains available only as fallback/other-mode infrastructure.
+
+This distinction matters because `scrollBy(-delta)` at a virtualized local top can be a no-op and may fail to trigger older-message loading, even though the old `scrollTo(0) + nudge` sequence did.
