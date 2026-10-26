@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.54
+
+- Возвращена историческая проверка реального движения ChatGPT после debugger-wheel из commit `23d1f2ab`.
+- Успешный `Input.dispatchMouseEvent` больше не считается успешной прокруткой сам по себе: worker сравнивает `scrollTop` до и после wheel.
+- Если Chrome подтверждает wheel, но чат не сдвинулся и это не реальная граница, включается резервная прокрутка живого ChatGPT scroll-container через `chrome.scripting.executeScript`.
+- Full traversal/top detection не менялись относительно 0.4.53; исправлен именно транспорт no-op wheel, который мог заставлять UI долго ждать settle без физического движения.
+
 ## 0.4.53
 
 - Возвращён debugger/CDP wheel как основной транспорт полного сбора.
