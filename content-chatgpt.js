@@ -48,32 +48,16 @@
     }
 
     function findScrollContainer(turn) {
-      let el = turn?.parentElement || null;
+      let el = turn && turn.parentElement;
       while (el && el !== document.body && el !== document.documentElement) {
         const style = getComputedStyle(el);
         if (
           /(auto|scroll|overlay)/.test(style.overflowY) &&
-          el.scrollHeight > el.clientHeight + 80
+          el.scrollHeight > el.clientHeight + 20
         ) return el;
         el = el.parentElement;
       }
-
-      const root = document.scrollingElement || document.documentElement;
-      if (root && root.scrollHeight > root.clientHeight + 80) return root;
-
-      const candidates = [...document.querySelectorAll(
-        'main, [class*="overflow-y-auto"], [class*="overflow-auto"]'
-      )].filter(candidate => {
-        if (!(candidate instanceof Element)) return false;
-        const style = getComputedStyle(candidate);
-        return /(auto|scroll|overlay)/.test(style.overflowY) &&
-          candidate.scrollHeight > candidate.clientHeight + 80;
-      });
-
-      const containing = turn
-        ? candidates.filter(candidate => candidate.contains(turn))
-        : [];
-      return containing[0] || candidates[0] || root || document.documentElement;
+      return document.scrollingElement || document.documentElement;
     }
 
     function physicalScrollStartVisible(turns = []) {
@@ -2916,10 +2900,24 @@
       timeoutMs = 30 * 60 * 1000
     } = {}
   ) {
-    let topConfirmations = 0;
+    const firstTurn = orderedTurns()[0] || null;
+    if (!firstTurn) {
+      throw new Error('Не найдено ни одной реплики для определения контейнера переписки.');
+    }
+
+    const scroller = scrollRuntime().findScrollContainer(firstTurn);
+    if (!scroller) {
+      throw new Error('Не найден контейнер переписки для прокрутки к началу.');
+    }
+
+    let stable = 0;
+    let previousHeight = -1;
+    let previousCount = -1;
+    let previousTop = -1;
+    let previousFirst = '';
     const startedAt = Date.now();
 
-    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
+    for (let i = 0; Date.now() - startedAt < timeoutMs && i < 420; i++) {
       await waitIfPaused();
 
       if (state.manualTopConfirmed) {
@@ -2939,8 +2937,14 @@
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
-        topConfirmations = 0;
+        stable = 0;
       }
+
+      // Exact pre-CDP loading mechanism: force the real scroll container to
+      // local top, let ChatGPT prepend older turns, then nudge and return to
+      // top so virtualization/load observers fire again.
+      scroller.scrollTo({ top: 0, behavior: 'instant' });
+      await sleep(280);
 
       if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
         await progress('Этап 1/3: начало переписки найдено.', existingCount, {
@@ -2951,36 +2955,55 @@
         return;
       }
 
-      const beforeFirst = firstVisibleTurnSignature();
+      const top = Math.round(Number(scroller.scrollTop || 0));
+      const height = Number(scroller.scrollHeight || 0);
+      const count = orderedTurns().length;
+      const first = firstVisibleTurnSignature();
 
       await progress(
         fullCapture
-          ? 'Этап 1/3: быстро иду к началу · без разбора сообщений на пути вверх'
-          : 'Возвращаю рабочую вкладку к началу без пересчёта сообщений…',
+          ? 'Этап 1/3: загружаю начало прямой прокруткой контейнера…'
+          : 'Возвращаю рабочую вкладку к началу прямой прокруткой…',
         existingCount,
         {
           phase: 'top',
           iteration: i + 1,
-          topIdleConfirmations: topConfirmations,
+          topIdleConfirmations: stable,
           retryWalkOnly: !fullCapture,
-          manualAssistAllowed: true
+          directScrollTop: top,
+          directScrollHeight: height
         }
       );
 
-      await physicalScroll('up', 16, {
-        settleTimeout: 2600,
-        quietWindow: 360
-      });
+      if (
+        top <= 2 &&
+        previousTop <= 2 &&
+        height === previousHeight &&
+        count === previousCount &&
+        first &&
+        first === previousFirst &&
+        !visibleRetryButton()
+      ) {
+        stable++;
+      } else {
+        stable = 0;
+      }
 
-      if (state.manualTopConfirmed) {
+      previousTop = top;
+      previousHeight = height;
+      previousCount = count;
+      previousFirst = first;
+
+      if (stable >= 4) {
         await progress(
           fullCapture
-            ? 'Этап 1/3: начало подтверждено вручную. Начинаю сохранять сверху вниз…'
-            : 'Начало подтверждено вручную. Запускаю хронологический проход вниз…',
+            ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
+            : 'Начало подтверждено. Запускаю хронологический проход вниз…',
           existingCount,
           {
             phase: 'walk',
-            manualTopConfirmed: true,
+            iteration: i + 1,
+            topIdleConfirmations: stable,
             retryWalkOnly: !fullCapture,
             force: true
           }
@@ -2988,64 +3011,24 @@
         return;
       }
 
-      if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
-        await progress('Этап 1/3: начало переписки найдено.', existingCount, {
-          phase: 'walk',
-          iteration: i + 1,
-          force: true,
-          explicitStartDetected: true
-        });
-        return;
-      }
+      scroller.scrollBy(0, 140);
+      await sleep(130);
+      scroller.scrollTo({ top: 0, behavior: 'instant' });
 
-      const afterFirst = firstVisibleTurnSignature();
-      const atPhysicalTop = physicalScrollStartVisible();
-      const retryVisible = Boolean(visibleRetryButton());
-
-      if (
-        !retryVisible &&
-        atPhysicalTop &&
-        beforeFirst &&
-        afterFirst &&
-        beforeFirst === afterFirst
-      ) {
-        topConfirmations++;
-      } else {
-        topConfirmations = 0;
-      }
-
-      if (topConfirmations >= 2) {
-        await sleep(500);
-
-        if (
-          !visibleRetryButton() &&
-          physicalScrollStartVisible() &&
-          firstVisibleTurnSignature() === afterFirst
-        ) {
-          await progress(
-            fullCapture
-              ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
-              : 'Начало подтверждено. Запускаю хронологический проход вниз…',
-            existingCount,
-            {
-              phase: 'walk',
-              iteration: i + 1,
-              topIdleConfirmations: topConfirmations,
-              retryWalkOnly: !fullCapture,
-              force: true
-            }
-          );
-          return;
-        }
-
-        topConfirmations = 0;
+      const quietStarted = Date.now();
+      let lastProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
+      while (Date.now() - quietStarted < 1100) {
+        await sleep(180);
+        const nextProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
+        if (nextProbe === lastProbe) break;
+        lastProbe = nextProbe;
       }
     }
 
     throw new Error(
       fullCapture
-        ? 'Не удалось подтвердить начало переписки в пределах времени навигации.'
-        : 'Не удалось надежно вернуть рабочую вкладку к началу в пределах времени навигации.'
+        ? 'Не удалось подтвердить начало переписки прямой прокруткой контейнера.'
+        : 'Не удалось вернуть рабочую вкладку к началу прямой прокруткой контейнера.'
     );
   }
 
