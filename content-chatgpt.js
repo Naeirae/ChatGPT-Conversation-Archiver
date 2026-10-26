@@ -3774,13 +3774,26 @@
 
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
-    const stability = scrollRuntime().createStabilityState();
+    const firstTurn = orderedTurns()[0] || null;
+    if (!firstTurn) {
+      throw new Error('Не найдена первая видимая реплика для прямого прохода вниз.');
+    }
 
-    for (let i = 0; i < 520; i++) {
+    const scroller = scrollRuntime().findScrollContainer(firstTurn);
+    if (!scroller) {
+      throw new Error('Не найден контейнер переписки для прямого прохода вниз.');
+    }
+
+    let stable = 0;
+    let previousHeight = -1;
+    let previousCount = -1;
+    let previousTop = -1;
+
+    for (let i = 0; i < 1800 && stable < 5; i++) {
       await waitIfPaused();
 
       if (await recoverVisibleLoadError('walk', map.size)) {
-        scrollRuntime().resetStabilityState(stability);
+        stable = 0;
       }
 
       await expandVisible();
@@ -3798,67 +3811,111 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const before = scrollObservation(map.size);
       const beforeRefs = visibleNavigationRefsLightweight();
-      await progress('Этап 2/3: физически прохожу вниз · ' + map.size + ' сообщений', map.size, {
-        phase: 'walk',
-        iteration: i + 1,
-        chronologicalCount: map.size
-      });
+      const viewport = Number(scroller.clientHeight || innerHeight || 0);
+      const max = Math.max(0, Number(scroller.scrollHeight || 0) - viewport);
+      const current = Math.max(0, Math.round(Number(scroller.scrollTop || 0)));
+      const step = Math.max(320, Math.floor(viewport * 0.55));
+      const next = Math.min(max, current + step);
 
-      // Chronological capture must stay granular. A request without an explicit
-      // burst count means seven wheel events, which can skip whole virtualized
-      // windows. Use one wheel event and prove overlap before accepting movement.
-      await physicalScroll('down', 1, {
-        settleTimeout: 1800,
-        quietWindow: 300,
-        wheelDelta: 320
-      });
-
-      await expandVisible();
-      if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
-
-      if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+      await progress(
+        'Этап 2/3: прохожу вниз по контейнеру · ' + map.size + ' сообщений',
+        map.size,
+        {
           phase: 'walk',
           iteration: i + 1,
-          boundaryReached: true,
           chronologicalCount: map.size,
-          force: true
-        });
-        return { boundaryReached: true, physicalEndReached: false };
-      }
-
-      const afterRefs = visibleNavigationRefsLightweight();
-      if (beforeRefs.length && afterRefs.length &&
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
-        const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
-        );
-        if (!recovered) {
-          throw new Error(
-            'Полный хронологический проход потерял перекрытие между соседними участками. ' +
-            'Сбор остановлен, чтобы не сохранить архив с пропуском.'
-          );
+          directScrollTop: current,
+          directScrollNext: next,
+          directScrollMax: max
         }
-        scrollRuntime().resetStabilityState(stability);
-        continue;
+      );
+
+      if (next >= max - 4) {
+        scroller.scrollTo({ top: max, behavior: 'instant' });
+        await sleep(520);
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings, boundary);
+
+        if (boundaryIsVisible(boundary)) {
+          await progress('Этап 2/3: достигнут конец снимка · ' + map.size + ' сообщений', map.size, {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            force: true
+          });
+          return { boundaryReached: true, physicalEndReached: false };
+        }
+
+        const height = Number(scroller.scrollHeight || 0);
+        const count = orderedTurns().length;
+        const top = Math.round(Number(scroller.scrollTop || 0));
+
+        if (
+          height === previousHeight &&
+          count === previousCount &&
+          top === previousTop &&
+          !visibleRetryButton()
+        ) {
+          stable++;
+        } else {
+          stable = 0;
+        }
+
+        previousHeight = height;
+        previousCount = count;
+        previousTop = top;
+      } else {
+        stable = 0;
+        scroller.scrollTo({ top: next, behavior: 'instant' });
+        await sleep(240);
+
+        const quietStarted = Date.now();
+        let lastProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
+        while (Date.now() - quietStarted < 1000) {
+          await sleep(180);
+          const nextProbe = String(scroller.scrollHeight) + ':' + orderedTurns().length;
+          if (nextProbe === lastProbe) break;
+          lastProbe = nextProbe;
+        }
+
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings, boundary);
+
+        const afterRefs = visibleNavigationRefsLightweight();
+        if (
+          beforeRefs.length &&
+          afterRefs.length &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs)
+        ) {
+          // Direct absolute scrolling should normally preserve overlap. If it
+          // does not, back up within the same scroller instead of invoking the
+          // CDP/wheel recovery loop.
+          const back = Math.max(0, current + Math.floor(step * 0.35));
+          scroller.scrollTo({ top: back, behavior: 'instant' });
+          await sleep(240);
+          collect(map, order, settings, boundary);
+
+          if (!navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight())) {
+            throw new Error(
+              'Прямой проход вниз потерял перекрытие между соседними участками. ' +
+              'Сбор остановлен, чтобы не сохранить архив с пропуском.'
+            );
+          }
+        }
       }
-
-      const after = scrollObservation(map.size);
-      const stall = scrollRuntime().updateStabilityState(stability, before, after);
-      if (stall.stable >= 4) break;
     }
 
-    if (!boundaryIsVisible(boundary)) {
-      throw new Error('Не удалось дойти до зафиксированного конца снимка переписки.');
+    if (boundaryIsVisible(boundary)) {
+      return { boundaryReached: true, physicalEndReached: false };
     }
-    return { boundaryReached: true, physicalEndReached: false };
+
+    throw new Error(
+      'Прямой проход вниз достиг физического конца, но зафиксированная метка конца снимка не найдена.'
+    );
   }
 
   async function walkDown(
