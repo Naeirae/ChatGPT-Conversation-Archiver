@@ -7,7 +7,6 @@ const out = path.join(root, 'dist', 'extension');
 const files = [
   'manifest.json',
   'service-worker.js',
-  'lib/content-chatgpt-scroll.js',
   'content-chatgpt.js',
   'popup.html',
   'popup.css',
