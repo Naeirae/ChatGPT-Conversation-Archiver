@@ -66,6 +66,8 @@ Nothing on this forensic branch is claimed live-verified yet. Do not merge to `m
 
 Confirmed progress: 0/9 live-behavior checks. Static/history analysis does not count as browser verification.
 
+Static candidate verification: GitHub Actions run 792 passed both jobs. The extension source verifier, package step, artifact upload and updater smoke tests all succeeded. Artifact: `chatgpt-conversation-archiver`, run `40252397356`, head `06d9999b8e2f09d4b7c50127beb4153dfb79b09d`. The known unrelated Google Docs timeout guard is downgraded to a warning only on this forensic branch so it cannot block packaging; Google Docs runtime code was not changed for that purpose.
+
 ## Target layers
 
 1. **Scroll runtime (page-side)** — scroll container discovery, physical edge metrics, verified load-error detection, settle detection and worker scroll request.
