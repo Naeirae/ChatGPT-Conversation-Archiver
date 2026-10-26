@@ -1328,7 +1328,10 @@ async function ensureBoundaryMarkingScript(tabId, { enable = true } = {}) {
   } catch (_) {}
 
   if (!ping?.ok || ping.version !== expectedVersion) {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['lib/content-chatgpt-scroll.js', 'content-chatgpt.js']
+    });
     await sleep(80);
     ping = await chrome.tabs.sendMessage(tabId, { type: 'ARCHIVER_PING' }).catch(() => null);
   }
@@ -1837,10 +1840,13 @@ async function startCapture({
       // open a dedicated ChatGPT tab in the foreground long enough to hydrate
       // the virtualized conversation DOM, then return focus to the source chat
       // after the collector has started.
-      captureTab = await chrome.tabs.create({ url: inspection.href, active: false });
+      captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
       if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для фонового сбора.');
 
-      await chrome.tabs.update(captureTab.id, { autoDiscardable: false }).catch(() => {});
+      await chrome.tabs.update(captureTab.id, {
+        active: true,
+        autoDiscardable: false
+      }).catch(() => {});
       captureTab = await waitForChatTabComplete(captureTab.id);
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
