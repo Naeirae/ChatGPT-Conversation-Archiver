@@ -628,10 +628,10 @@ try {
     : '';
   if (!retryRuntimeBlock ||
       !retryRuntimeBlock.includes("visibleElement(el, { interactive: true })") ||
-      !retryRuntimeBlock.includes('document.elementFromPoint') ||
+      !contentSource.includes('document.elementFromPoint') ||
       !contentSource.includes("el.closest('[aria-hidden=\"true\"], [inert]')") ||
-      !retryRuntimeBlock.includes('rect.top >= viewportHeight') ||
-      !retryRuntimeBlock.includes('rect.left >= viewportWidth') ||
+      !contentSource.includes('rect.top >= viewportHeight') ||
+      !contentSource.includes('rect.left >= viewportWidth') ||
       !retryRuntimeBlock.includes('rect.height > Math.max(520, viewportHeight * 0.8)') ||
       !retryRecoveryBlock.includes('await sleep(120)') ||
       !retryRecoveryBlock.includes('retry = visibleRetryButton()')) {
