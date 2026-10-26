@@ -616,6 +616,41 @@ try {
     fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
   }
 
+  const retryRuntimeStart = contentSource.indexOf('function findVisibleLoadRetry()');
+  const retryRuntimeEnd = contentSource.indexOf('async function waitForTurnSettle', retryRuntimeStart);
+  const retryRuntimeBlock = retryRuntimeStart >= 0 && retryRuntimeEnd > retryRuntimeStart
+    ? contentSource.slice(retryRuntimeStart, retryRuntimeEnd)
+    : '';
+  const retryRecoveryStart = contentSource.indexOf('async function recoverVisibleLoadError');
+  const retryRecoveryEnd = contentSource.indexOf('async function getSettings', retryRecoveryStart);
+  const retryRecoveryBlock = retryRecoveryStart >= 0 && retryRecoveryEnd > retryRecoveryStart
+    ? contentSource.slice(retryRecoveryStart, retryRecoveryEnd)
+    : '';
+  if (!retryRuntimeBlock ||
+      !retryRuntimeBlock.includes("visibleElement(el, { interactive: true })") ||
+      !retryRuntimeBlock.includes('document.elementFromPoint') ||
+      !retryRuntimeBlock.includes("el.closest('[aria-hidden=\"true\"], [inert]')") ||
+      !retryRuntimeBlock.includes('rect.top >= viewportHeight') ||
+      !retryRuntimeBlock.includes('rect.left >= viewportWidth') ||
+      !retryRuntimeBlock.includes('rect.height > Math.max(520, viewportHeight * 0.8)') ||
+      !retryRecoveryBlock.includes('await sleep(120)') ||
+      !retryRecoveryBlock.includes('retry = visibleRetryButton()')) {
+    fail('load-error recovery: Retry must be a real in-viewport hit-tested control with a local visible error context and must be revalidated before click');
+  }
+
+  const workerRetryStart = serviceWorkerSource.indexOf('async function clickChatRetry(tabId)');
+  const workerRetryEnd = serviceWorkerSource.indexOf('async function waitForChatDomReady', workerRetryStart);
+  const workerRetryBlock = workerRetryStart >= 0 && workerRetryEnd > workerRetryStart
+    ? serviceWorkerSource.slice(workerRetryStart, workerRetryEnd)
+    : '';
+  if (!workerRetryBlock ||
+      !workerRetryBlock.includes('document.elementFromPoint') ||
+      !workerRetryBlock.includes('rect.top >= viewportHeight') ||
+      !workerRetryBlock.includes('rect.left >= viewportWidth') ||
+      !workerRetryBlock.includes('errorPattern.test(text)')) {
+    fail('background load recovery: worker must reject offscreen/occluded Retry controls and require local error evidence');
+  }
+
   const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
