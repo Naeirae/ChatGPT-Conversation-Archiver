@@ -1684,19 +1684,26 @@ async function waitForChatDomReady(tabId, timeout = 45000, onRetry = null) {
     last = await probeChatDom(tabId);
     if (last && (last.roleCount > 0 || last.shellCount > 0)) return { ...last, retries };
 
-    if (last?.loadError && retries < 3 && Date.now() >= nextRetryAt) {
+    if (
+      last?.loadError &&
+      last?.retryAvailable &&
+      retries < 3 &&
+      Date.now() >= nextRetryAt
+    ) {
       const clicked = await clickChatRetry(tabId);
-      retries += 1;
-      if (onRetry) {
-        try { await onRetry(retries, clicked, last); } catch (_) {}
+      if (clicked) {
+        retries += 1;
+        if (onRetry) {
+          try { await onRetry(retries, true, last); } catch (_) {}
+        }
+        const backoff = retries === 1 ? 1800 : retries === 2 ? 3500 : 6500;
+        nextRetryAt = Date.now() + backoff;
+        await sleep(backoff);
+        continue;
       }
-      const backoff = retries === 1 ? 1800 : retries === 2 ? 3500 : 6500;
-      nextRetryAt = Date.now() + backoff;
-      await sleep(backoff);
-      continue;
     }
 
-    if (last?.loadError && retries >= 3) {
+    if (last?.loadError && last?.retryAvailable && retries >= 3) {
       throw new Error(
         'Рабочая копия ChatGPT трижды не загрузила разговор. Попробуйте режим «Текущая вкладка».'
       );
