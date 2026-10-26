@@ -101,7 +101,7 @@ try {
       !debuggerTopBlock.includes('settleTimeout: 5000') ||
       !debuggerTopBlock.includes('quietWindow: 550') ||
       !debuggerTopBlock.includes('confirmedIdle >= 5') ||
-      debuggerTopBlock.includes('physicalScrollStartVisible()')) {
+      debuggerTopBlock.includes('physicalScrollStartVisible() &&')) {
     fail('full top navigation: preserve 0.3.87 navigation-only debugger ascent without the 0.3.98 physical-top heuristic');
   }
   if (!contentSource.includes('function elementLogicalRoles') ||
@@ -288,7 +288,7 @@ try {
       !topOnlyBlock.includes("'up',") ||
       !topOnlyBlock.includes('16,') ||
       !topOnlyBlock.includes('confirmedIdle >= 5') ||
-      topOnlyBlock.includes('physicalScrollStartVisible()')) {
+      topOnlyBlock.includes('physicalScrollStartVisible() &&')) {
     fail('continuation navigation: candidate must retain navigation-only debugger ascent and avoid the 0.3.98 physical-top shortcut');
   }
 
@@ -616,21 +616,20 @@ try {
     fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
   }
 
-  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, point = null, wheelDelta = 860)");
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
     : '';
   if (!physicalScrollBlock ||
       !physicalScrollBlock.includes('chrome.debugger.sendCommand({ tabId }, method, params)') ||
-      !physicalScrollBlock.includes("deltaY: sign * delta") ||
-      !physicalScrollBlock.includes("Math.abs(Number(wheelDelta) || 860)") ||
+      !physicalScrollBlock.includes('Math.round(width * 0.68)') ||
+      !physicalScrollBlock.includes('Math.round(height * 0.48)') ||
+      !physicalScrollBlock.includes("deltaY: sign * 860") ||
       !physicalScrollBlock.includes("await sleep(70)") ||
-      !physicalScrollBlock.includes('Number(point?.x)') ||
-      !physicalScrollBlock.includes('Number(point?.y)') ||
       physicalScrollBlock.includes('timedOut') ||
       physicalScrollBlock.includes('}, 3000)')) {
-    fail('full capture: debugger-wheel transport must preserve complete bursts and honor the detected chat scroller point');
+    fail('full capture: forensic debugger transport must preserve the proven fixed-point 860px burst implementation');
   }
 
 
