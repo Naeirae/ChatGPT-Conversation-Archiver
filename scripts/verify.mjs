@@ -75,6 +75,26 @@ try {
       !contentSource.includes('return INLINE_SCROLL_RUNTIME;')) {
     fail('scroll transport: content script must use its inline runtime and must not require a separate runtime file');
   }
+  // The end marker may be DOM-mounted offscreen, and after a scroll
+  // continuity must be checked before accepting its arrival.
+  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\\n          turnIntersectsCaptureViewport(turn)')) {
+    fail('capture: do not trim at an offscreen DOM-mounted end marker');
+  }
+  for (const [startToken, endToken] of [
+    ['async function walkDownFullLegacy(', 'async function walkDown('],
+    ['async function walkDown(', 'async function captureConversation(']
+  ]) {
+    const start = contentSource.indexOf(startToken);
+    const end = contentSource.indexOf(endToken, start + startToken.length);
+    const body = start >= 0 && end > start ? contentSource.slice(start, end) : '';
+    const scroll = body.indexOf("await physicalScroll('down',");
+    const continuity = body.indexOf('!navigationWindowsOverlap(beforeRefs, afterRefs)', scroll);
+    const postScrollBoundary = body.indexOf('if (boundaryIsVisible(boundary))', scroll);
+    if (scroll < 0 || continuity < scroll || postScrollBoundary < continuity) {
+      fail('traversal: check continuity before accepting a newly arrived end marker');
+    }
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
