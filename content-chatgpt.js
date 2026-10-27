@@ -4462,7 +4462,8 @@
           // marked start; collection then moves only downward to the marked end.
           const visibleStart = orderedTurns().find(turn => {
             const anchor = fragmentAnchor(turn);
-            return anchor && markerIdentityMatches(selectedFragment.start, anchor);
+            return anchor && turnIntersectsCaptureViewport(turn) &&
+              markerIdentityMatches(selectedFragment.start, anchor);
           });
           if (!visibleStart) {
             throw new Error(
@@ -5086,23 +5087,47 @@
         } : undefined
       };
 
-      // Store the finished archive independently of the job record.
+      // Image hydration can be complete while the popup still reads 2/2.
+      // Split write and worker-ack into distinct, observable stages.
+      await progress(
+        'Этап 3/3: изображения обработаны · записываю локальный архив…',
+        messages.length,
+        {
+          phase: 'finalizing',
+          finalizationStep: 'write-archive',
+          imageBinaryProcessed: binaryStats.unique,
+          imageBinaryTotal: binaryStats.unique,
+          imageBinaryReady: conversation.imageBinaryReady,
+          imageBinaryFailed: conversation.imageBinaryFailed,
+          force: true
+        }
+      );
+      // Only the worker may publish lastArchiveId after it validates the
+      // result. Keep a rejected archive under its private key for recovery.
       await chrome.storage.local.set({
-        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        lastArchiveId: archiveId
+        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId })
       });
-
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_CAPTURE_COMPLETE',
-          jobId,
-          archiveId,
-          count: messages.length,
-          addedCount,
-          imageRecoveredCount: recoveredImageRefs.length,
-          mode
-        });
-      } catch (_) {}
+      await progress(
+        'Этап 3/3: локальная запись завершена · подтверждаю архив…',
+        messages.length,
+        { phase: 'finalizing', finalizationStep: 'confirm-complete', force: true }
+      );
+      const completion = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_COMPLETE',
+        jobId,
+        archiveId,
+        count: messages.length,
+        addedCount,
+        imageRecoveredCount: recoveredImageRefs.length,
+        mode
+      });
+      if (!completion?.ok || completion.status !== 'done') {
+        throw new Error(
+          'Фоновый процесс не подтвердил завершение: ' +
+          (completion?.error || completion?.status || 'нет ответа') +
+          '. Сохранённая часть остаётся доступной для восстановления.'
+        );
+      }
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
