@@ -3137,6 +3137,12 @@
       // Do not use physicalScrollStartVisible() here. That heuristic was added
       // in 0.3.98 and was later explicitly reverted as a traversal regression.
       if (confirmedIdle >= 5 && !visibleRetryButton()) {
+        if (!observedUpwardTravel) {
+          throw new Error(
+            'Вкладка не прокручивалась вверх и первая реплика не подтверждена. ' +
+            'Нельзя считать видимое окно полным чатом. Используйте ручные отметки начала и конца.'
+          );
+        }
         await progress(
           fullCapture
             ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
@@ -3151,12 +3157,6 @@
             force: true
           }
         );
-        if (!observedUpwardTravel) {
-          throw new Error(
-            'Вкладка не прокручивалась вверх и первая реплика не подтверждена. ' +
-            'Нельзя считать видимое окно полным чатом. Используйте ручные отметки начала и конца.'
-          );
-        }
         return { verified: true, source: 'upward-traversal-and-stability', observedUpwardTravel, stableChecks: confirmedIdle };
       }
     }
