@@ -95,6 +95,13 @@ try {
     }
   }
 
+  const visibleRefsStart = contentSource.indexOf('function visibleNavigationRefsLightweight()');
+  const visibleRefsEnd = contentSource.indexOf('function navigationWindowsOverlap(', visibleRefsStart);
+  if (visibleRefsStart < 0 || visibleRefsEnd < 0 ||
+      !contentSource.slice(visibleRefsStart, visibleRefsEnd).includes('.filter(turn => turnIntersectsCaptureViewport(turn))')) {
+    fail('traversal: offscreen mounted messages must not count as window overlap');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
@@ -1109,6 +1116,7 @@ const tests = spawnSync(process.execPath, [
   'tests/draft-overlap.test.mjs',
   'tests/capture-evidence.test.mjs',
   'tests/capture-viewport.test.mjs',
+  'tests/capture-traversal.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
