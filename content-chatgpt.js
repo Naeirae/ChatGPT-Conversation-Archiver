@@ -2021,11 +2021,36 @@
     return messageTextSignature(message) === boundary.key && contextMatches;
   }
 
+  function uniqueBoundaryIndex(rows, boundary) {
+    if (!boundary) return -1;
+    const matches = rows
+      .map((message, index) =>
+        messageMatchesBoundary(message, boundary, rows, index) ? index : -1
+      )
+      .filter(index => index >= 0);
+    // A strong ID may identify exactly one message. Weak signatures must also
+    // resolve uniquely; choosing the first repeat truncates a real conversation.
+    return matches.length === 1 ? matches[0] : -1;
+  }
+
+  function trimMessagesFromMarkedStart(messages, marker) {
+    const rows = [...(messages || [])];
+    if (!marker) return { messages: rows, found: false, trimmed: 0 };
+    const boundary = isStrongMessageId(marker.id)
+      ? { kind: 'stable', key: marker.id }
+      : { kind: 'signature', key: marker.signature, contextBefore: marker.contextBefore || [] };
+    const index = uniqueBoundaryIndex(rows, boundary);
+    if (index < 0) return { messages: rows, found: false, trimmed: 0 };
+    return {
+      messages: rows.slice(index),
+      found: true,
+      trimmed: index
+    };
+  }
+
   function trimMessagesThroughBoundary(messages, boundary) {
     const rows = [...(messages || [])];
-    const index = rows.findIndex((message, i) =>
-      messageMatchesBoundary(message, boundary, rows, i)
-    );
+    const index = uniqueBoundaryIndex(rows, boundary);
     if (index < 0) return { messages: rows, found: false, trimmed: 0 };
     return {
       messages: rows.slice(0, index + 1),
@@ -4670,6 +4695,16 @@ if (boundaryIsVisible(boundary)) {
       }
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      if (mode === 'fragment') {
+        const markedStart = trimMessagesFromMarkedStart(capturedMessages, selectedFragment?.start);
+        if (!markedStart.found) {
+          throw new Error(
+            'Отмеченное начало не удалось однозначно найти в итоговой последовательности. ' +
+            'Архив не сохранён, чтобы не включить сообщения до диапазона.'
+          );
+        }
+        capturedMessages = markedStart.messages;
+      }
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
       // Text-changing operations must stop at the snapshot boundary that was
       // fixed when the run started. Reaching the live physical bottom is not
