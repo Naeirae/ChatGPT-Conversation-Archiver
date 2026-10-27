@@ -194,7 +194,6 @@ try {
       !contentSource.includes("document.addEventListener('click'") ||
       !contentSource.includes("'archiver-fragment-overlay'") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_TOGGLE_MARKING_CURRENT'") ||
-      !serviceWorkerSource.includes("case 'ARCHIVER_OPEN_MARKING_TAB'") ||
       !serviceWorkerSource.includes('ensureBoundaryMarkingScript')) {
     fail('boundary marking: missing persistent click-selection/working-tab flow');
   }
@@ -247,9 +246,24 @@ try {
       contentSource.includes('async function reachTopFullLegacy') ||
       !contentSource.includes('navigationHighWater = 0;') ||
       !contentSource.includes('navigationMessages = [];') ||
-      !contentSource.includes('navigationSequence = [];') ||
-      !contentSource.includes("if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment')")) {
-    fail('full capture: upward travel must be navigation-only; canonical messages are saved only on the chronological pass');
+      !contentSource.includes('navigationSequence = [];')) {
+    fail('legacy full capture: upward travel must remain navigation-only when that technical mode is used');
+  }
+
+  const manualRangeStart = contentSource.indexOf("} else if (mode === 'fragment') {");
+  const manualRangeEnd = contentSource.indexOf("} else {", manualRangeStart + 10);
+  const manualRangeBlock = manualRangeStart >= 0 && manualRangeEnd > manualRangeStart
+    ? contentSource.slice(manualRangeStart, manualRangeEnd)
+    : '';
+  if (!manualRangeBlock ||
+      !manualRangeBlock.includes('const visibleStart = orderedTurns().find') ||
+      !manualRangeBlock.includes('markerIdentityMatches(selectedFragment.start, anchor)') ||
+      manualRangeBlock.includes('reachTop(') ||
+      manualRangeBlock.includes('reachTopWithoutCapture(') ||
+      manualRangeBlock.includes('locateBoundaryForUpwardScan(') ||
+      !contentSource.includes("requireBoundary: mode === 'fragment'") ||
+      !contentSource.includes("recoverLoadErrors: mode !== 'fragment'")) {
+    fail('manual range: explicit start/end capture must begin from the visible start and move only downward without automatic Retry recovery');
   }
   const fullDownStart = contentSource.indexOf('async function walkDownFullLegacy');
   const fullDownEnd = contentSource.indexOf('async function walkDown(', fullDownStart);
@@ -513,17 +527,32 @@ try {
       popupJs.includes("$('patchRecoveredImages').onclick")) {
     fail('popup.js: linked Doc export must be one manual action without a separate image-patch button');
   }
-  if (!popupJs.includes("type: 'ARCHIVER_CAPTURE_CURRENT'") ||
-      popupJs.includes('ARCHIVER_CAPTURE_MANUAL_FULL') ||
-      popupHtml.includes('id="captureManualFull"') ||
-      !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
-      !popupHtml.includes('id="clearMarkers"') ||
-      !serviceWorkerSource.includes('captureRange,')) {
-    fail('fragment range UX: fragment markers must never hijack the primary full-capture button');
+  const primaryCaptureStart = popupJs.indexOf("$('capture').onclick");
+  const primaryCaptureEnd = popupJs.indexOf('async function refreshBoundaryMarkingControl', primaryCaptureStart);
+  const primaryCaptureBlock = primaryCaptureStart >= 0 && primaryCaptureEnd > primaryCaptureStart
+    ? popupJs.slice(primaryCaptureStart, primaryCaptureEnd)
+    : '';
+  const rangeCaptureStart = popupJs.indexOf("$('captureFragment').onclick");
+  const rangeCaptureEnd = popupJs.indexOf("$('copyFragment').onclick", rangeCaptureStart);
+  const rangeCaptureBlock = rangeCaptureStart >= 0 && rangeCaptureEnd > rangeCaptureStart
+    ? popupJs.slice(rangeCaptureStart, rangeCaptureEnd)
+    : '';
+  if (!primaryCaptureBlock ||
+      !primaryCaptureBlock.includes("type: 'ARCHIVER_TOGGLE_MARKING_CURRENT'") ||
+      primaryCaptureBlock.includes("type: 'ARCHIVER_CAPTURE_CURRENT'") ||
+      !rangeCaptureBlock ||
+      !rangeCaptureBlock.includes("type: 'ARCHIVER_CAPTURE_FRAGMENT'") ||
+      !rangeCaptureBlock.includes("captureTarget: 'current'") ||
+      !popupHtml.includes('>Разметить диапазон</button>') ||
+      !popupHtml.includes('>Собрать отмеченный диапазон</button>') ||
+      !popupHtml.includes('capture-location hidden') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_FRAGMENT':") ||
+      !serviceWorkerSource.includes("mode: 'fragment', captureTarget: 'current'") ||
+      !serviceWorkerSource.includes("if (mode === 'fragment' && (!markers.start || !markers.end))")) {
+    fail('manual range UX: primary capture must mark and collect an explicit current-tab range without automatic full-chat navigation');
   }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
-      !popupJs.includes('ARCHIVER_OPEN_MARKING_TAB') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_SAVED_ARCHIVE')) {
     fail('popup.js: fragment-range and unified reconcile controls are not wired');
