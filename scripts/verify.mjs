@@ -668,6 +668,33 @@ try {
       popupStateBlock.includes('savedArchives: await listLinkedArchives()')) {
     fail('popup startup performance: state read must not mutate drafts or deserialize entire archive library');
   }
+  const unsafeDraftDeletionStart = serviceWorkerSource.indexOf('async function deleteUnfinishedGroup(');
+  const unsafeDraftDeletionEnd = serviceWorkerSource.indexOf('async function refreshCaptureJobHealth(', unsafeDraftDeletionStart);
+  const deletionBlock = serviceWorkerSource.slice(unsafeDraftDeletionStart, unsafeDraftDeletionEnd);
+  const draftReconcileStart = serviceWorkerSource.indexOf('async function reconcileUnfinishedPrefix(');
+  const draftReconcileEnd = serviceWorkerSource.indexOf('async function compactCompatibleDrafts(', draftReconcileStart);
+  const reconcileBlock = serviceWorkerSource.slice(draftReconcileStart, draftReconcileEnd);
+  if (!deletionBlock.includes('const ids = new Set((passIds || []).filter(Boolean))') ||
+      deletionBlock.includes('ids.add(item.id)') ||
+      !deletionBlock.includes('selected.length !== ids.size') ||
+      !deletionBlock.includes('unfinishedGroupKey(item) !== baseKey') ||
+      reconcileBlock.includes('await removeDraft(id)') ||
+      reconcileBlock.includes('await removeDraftRecoveryTab(id)')) {
+    fail('draft safety: deletion must use exact presented IDs; reconciliation must retain source drafts');
+  }
+  const fastArchiveStart = serviceWorkerSource.indexOf('async function listLinkedArchivesFast(');
+  const fastArchiveEnd = serviceWorkerSource.indexOf('async function hydrateLegacyArchiveLibrary(', fastArchiveStart);
+  const fastArchiveBlock = serviceWorkerSource.slice(fastArchiveStart, fastArchiveEnd);
+  const hydrateStart = serviceWorkerSource.indexOf('async function hydrateLegacyArchiveLibrary(');
+  const hydrateEnd = serviceWorkerSource.indexOf('async function listLinkedArchives(', hydrateStart);
+  const hydrateBlock = serviceWorkerSource.slice(hydrateStart, hydrateEnd);
+  if (!fastArchiveBlock.includes("item?.title || 'Загружаю сведения об архиве…'") ||
+      !hydrateBlock.includes('Number.isFinite(card.messageCount)') ||
+      !hydrateBlock.includes('await registerArchive(archive)') ||
+      !serviceWorkerSource.includes('savedArchives: await hydrateLegacyArchiveLibrary()') ||
+      !popupJs.includes('state.savedArchives = detailedSavedArchives')) {
+    fail('legacy library: missing metadata must appear as placeholders and be hydrated only on demand');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||

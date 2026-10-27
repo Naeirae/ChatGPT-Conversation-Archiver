@@ -482,7 +482,10 @@ async function hydrateSavedArchiveDetails() {
   const response = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS' });
   if (!response?.ok) throw new Error(response?.error || 'Не удалось получить статистику архивов.');
   detailedSavedArchives = response.savedArchives || [];
-  renderSavedArchives(Array.isArray(state?.savedArchives) ? state.savedArchives : detailedSavedArchives);
+  // Include legacy rows whose IDs existed in index/destinations but were
+  // missing from the lightweight library registry.
+  if (state) state.savedArchives = detailedSavedArchives;
+  renderSavedArchives(detailedSavedArchives);
 }
 
 function renderSavedArchives(items = []) {

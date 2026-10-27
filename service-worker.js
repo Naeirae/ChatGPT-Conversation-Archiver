@@ -377,10 +377,11 @@ async function reconcileUnfinishedPrefix(draft) {
       if (Object.keys(patch).length) await setJob(patch);
     }
 
-    for (const id of redundantIds) {
-      await removeDraft(id).catch(() => {});
-      await removeDraftRecoveryTab(id).catch(() => {});
-    }
+    // Do not destroy original copies during reconciliation: a write succeeds
+    // before the merged result is behaviourally verified, and alternative
+    // image/source payloads may be the only recoverable copy. Keep originals
+    // available until an explicit user-confirmed cleanup operation.
+    // The merged candidate's recoveredFromDraftIds records provenance.
   }
 
   return updated;
@@ -577,12 +578,23 @@ function liveUnfinishedSummary(job) {
 }
 
 async function deleteUnfinishedGroup(logicalGroupId = '', passIds = []) {
-  const drafts = await listDrafts();
+  // The exact membership rendered to the user is authoritative. The broad
+  // group key does not encode the verified content witness and may also
+  // match a divergent draft shown as a separate card.
   const ids = new Set((passIds || []).filter(Boolean));
-  for (const item of drafts) {
-    if (logicalGroupId && unfinishedGroupKey(item) === logicalGroupId) ids.add(item.id);
-  }
   if (!ids.size) return { ok: true, removed: 0 };
+  const drafts = await listDrafts();
+  const current = new Map(drafts.map(item => [item.id, item]));
+  const selected = [...ids].map(id => current.get(id)).filter(Boolean);
+  if (selected.length !== ids.size) {
+    throw new Error('Состав группы черновиков изменился. Обновите список перед удалением.');
+  }
+  if (logicalGroupId) {
+    const baseKey = logicalGroupId.split('|diverged:')[0];
+    if (selected.some(item => unfinishedGroupKey(item) !== baseKey)) {
+      throw new Error('Найдены несовместимые черновики. Удаление остановлено.');
+    }
+  }
 
   let removed = 0;
   for (const id of ids) {
@@ -702,34 +714,66 @@ async function listLinkedArchivesFast() {
     meta.fragmentLatestId || '',
     ...Object.keys(destinations)
   ].filter(Boolean));
+  const exportsByArchive = new Map();
+  for (const entry of Object.values(docExports)) {
+    if (entry?.archiveId && !exportsByArchive.has(entry.archiveId)) {
+      exportsByArchive.set(entry.archiveId, entry);
+    }
+  }
   const rows = [];
   for (const id of ids) {
-    const item = library[id];
-    if (!item?.sourceUrl || item.complete === false) continue;
-    const sourceKey = conversationKey(item.sourceUrl);
-    const linked = sourceKey && !item.isFragment ? docLinks[sourceKey] : null;
+    const item = library[id] || null;
+    if (item?.complete === false) continue;
+    const sourceKey = conversationKey(item?.sourceUrl || '');
+    const linked = sourceKey && !item?.isFragment ? docLinks[sourceKey] : null;
     const destination = destinations[id] || null;
-    const matchingExport = Object.values(docExports).find(entry => entry?.archiveId === id);
+    const matchingExport = exportsByArchive.get(id) || null;
     const docUrl = destination?.url || matchingExport?.docUrl || '';
     rows.push({
       id,
-      title: item.title || 'Архив ChatGPT',
-      sourceUrl: item.sourceUrl,
-      capturedAt: item.capturedAt || '',
-      isFragment: Boolean(item.isFragment),
+      title: item?.title || 'Загружаю сведения об архиве…',
+      sourceUrl: item?.sourceUrl || '',
+      capturedAt: item?.capturedAt || '',
+      isFragment: Boolean(item?.isFragment),
       complete: true,
-      messageCount: Number.isFinite(item.messageCount) ? item.messageCount : null,
-      imageCount: Number.isFinite(item.imageCount) ? item.imageCount : null,
-      imageBinaryReady: Number.isFinite(item.imageBinaryReady) ? item.imageBinaryReady : null,
-      imageBinaryFailed: Number.isFinite(item.imageBinaryFailed) ? item.imageBinaryFailed : null,
+      messageCount: Number.isFinite(item?.messageCount) ? item.messageCount : null,
+      imageCount: Number.isFinite(item?.imageCount) ? item.imageCount : null,
+      imageBinaryReady: Number.isFinite(item?.imageBinaryReady) ? item.imageBinaryReady : null,
+      imageBinaryFailed: Number.isFinite(item?.imageBinaryFailed) ? item.imageBinaryFailed : null,
       docUrl,
       linkedDocUrl: linked?.url || '',
       destination,
-      updatedAt: destination?.updatedAt || item.capturedAt || ''
+      updatedAt: destination?.updatedAt || item?.capturedAt || ''
     });
   }
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
+}
+
+// Upgrade legacy registry cards incrementally: only archives with missing
+// metadata are read. Never load all complete archives for a popup refresh.
+async function hydrateLegacyArchiveLibrary() {
+  const meta = await chrome.storage.local.get([
+    STORAGE_KEYS.archiveIndex, STORAGE_KEYS.archiveLibrary,
+    STORAGE_KEYS.lastArchiveId, STORAGE_KEYS.archiveDestinations, 'fragmentLatestId'
+  ]);
+  const library = meta[STORAGE_KEYS.archiveLibrary] || {};
+  const ids = new Set([
+    ...Object.keys(library),
+    ...Object.values(meta[STORAGE_KEYS.archiveIndex] || {}),
+    meta[STORAGE_KEYS.lastArchiveId] || '',
+    meta.fragmentLatestId || '',
+    ...Object.keys(meta[STORAGE_KEYS.archiveDestinations] || {})
+  ].filter(Boolean));
+  for (const id of ids) {
+    const card = library[id];
+    if (card?.sourceUrl && Number.isFinite(card.messageCount) &&
+        Number.isFinite(card.imageCount)) continue;
+    const archive = await getArchive(id);
+    if (!archive?.id || archive.partial || archive.complete === false) continue;
+    await registerArchive(archive);
+  }
+  return listLinkedArchivesFast();
 }
 
 async function listLinkedArchives() {
@@ -6236,7 +6280,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_GET_SAVED_ARCHIVES_FAST':
         return { ok: true, savedArchives: await listLinkedArchivesFast() };
       case 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS':
-        return { ok: true, savedArchives: await listLinkedArchives() };
+        return { ok: true, savedArchives: await hydrateLegacyArchiveLibrary() };
       case 'ARCHIVER_GET_STATE': {
         let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
