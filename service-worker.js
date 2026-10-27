@@ -838,8 +838,34 @@ async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
   return captureSavedArchive(archiveId, 'continue', captureTarget);
 }
 
+// 0.4.56/0.4.57 classified the primary manual-range capture as a
+// fragment. Migrate the already collected archive without recapturing it.
+async function promoteMarkedPrimaryArchive(archive) {
+  if (!archive?.id || !archive.isFragment ||
+      !archive.fragmentMarkers?.start || !archive.fragmentMarkers?.end ||
+      !['fragment', 'resume-draft'].includes(archive.lastCaptureMode || '')) {
+    return archive;
+  }
+  const promoted = {
+    ...archive,
+    title: String(archive.title || 'Переписка ChatGPT').replace(/^Фрагмент\\s*[—–-]\\s*/i, ''),
+    isFragment: false,
+    manualRangeMarkers: archive.fragmentMarkers,
+    fragmentMarkers: undefined,
+    lastCaptureMode: 'manual-range'
+  };
+  await putArchive(promoted);
+  await indexArchive(promoted);
+  await registerArchive(promoted);
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.lastArchiveId]: promoted.id,
+    selectedArchiveId: promoted.id
+  });
+  return promoted;
+}
+
 async function selectSavedArchive(archiveId = '') {
-  const archive = await getArchive(archiveId);
+  const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));
   if (!archive?.id) throw new Error('Сохранённый чат не найден.');
   // Selection is a UI choice, not a mutation of the canonical conversation archive.
   await chrome.storage.local.set({ selectedArchiveId: archive.id });
@@ -3396,7 +3422,7 @@ async function handleCaptureComplete(message) {
   // The just-completed archive should be immediately previewable in the popup.
   await chrome.storage.local.set({ selectedArchiveId: archive.id });
 
-  if (archive.isFragment && archive.sourceUrl) {
+  if ((archive.manualRangeMarkers || archive.isFragment) && archive.sourceUrl) {
     try {
       const source = new URL(archive.sourceUrl);
       const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
@@ -5464,7 +5490,9 @@ async function appendMessagesToGoogleDocUrl(
 }
 
 async function exportConversationToLinkedDoc(archiveId = '') {
-  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
+  const conversation = await promoteMarkedPrimaryArchive(
+    archiveId ? await getArchive(archiveId) : await getLastArchive()
+  );
   if (!conversation) throw new Error('Сначала соберите переписку.');
   if (conversation.isFragment) {
     throw new Error('Для фрагмента нет канонического связанного документа.');
@@ -5578,7 +5606,9 @@ async function exportConversationToLinkedDoc(archiveId = '') {
 }
 
 async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
-  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
+  const conversation = await promoteMarkedPrimaryArchive(
+    archiveId ? await getArchive(archiveId) : await getLastArchive()
+  );
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
   if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый документ Google Docs.');
@@ -5851,7 +5881,9 @@ async function verifyGoogleDocTabCount(tabId, expectedCount) {
 }
 
 async function exportTabbedConversation(planText = '', archiveId = '') {
-  const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
+  const conversation = await promoteMarkedPrimaryArchive(
+    archiveId ? await getArchive(archiveId) : await getLastArchive()
+  );
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
   const messages = conversation.messages || [];
@@ -6111,7 +6143,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
         const selection = await chrome.storage.local.get('selectedArchiveId');
         const selectedArchive = selection.selectedArchiveId
-          ? await getArchive(selection.selectedArchiveId) : null;
+          ? await promoteMarkedPrimaryArchive(await getArchive(selection.selectedArchiveId)) : null;
         const archive = selectedArchive || (activeIsConversation
           ? currentArchive
           : (currentArchive || await getLastArchive()));
