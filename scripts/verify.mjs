@@ -603,6 +603,13 @@ try {
       !completionBlock.includes("if (archive.isFragment && archive.sourceUrl)")) {
     fail('manual range draft resume: preserve original fragment identity, current-tab frontier and separate archive index');
   }
+  if (!serviceWorkerSource.includes("await chrome.storage.local.set({ selectedArchiveId: archive.id })") ||
+      !serviceWorkerSource.includes("const selectedArchive = selection.selectedArchiveId") ||
+      !serviceWorkerSource.includes("const archive = selectedArchive ||") ||
+      !popupJs.includes("viewPlanner.textContent = 'Просмотр и вкладки'") ||
+      !popupJs.includes("'planner.html?archiveId=' + encodeURIComponent(item.id)")) {
+    fail('archive viewer regression: selected local archive must reach the popup and the tab planner without replacing canonical lastArchiveId');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
