@@ -1802,8 +1802,12 @@
       if (state.cancel) throw new Error('Сбор отменен.');
 
       try {
-        const blob = await fetchImageBinary(refs[0]);
-        const dataUrl = await blobToDataUrl(blob);
+        const blob = await withCaptureOperationTimeout(
+          fetchImageBinary(refs[0]), 45000, 'Получение изображения'
+        );
+        const dataUrl = await withCaptureOperationTimeout(
+          blobToDataUrl(blob), 15000, 'Кодирование изображения'
+        );
         for (const image of refs) {
           image.dataUrl = dataUrl;
           image.mimeType = blob.type || 'image/png';
