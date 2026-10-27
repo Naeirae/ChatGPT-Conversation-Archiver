@@ -449,14 +449,16 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
     // identity; divergent versions receive separate user-visible cards.
     let key = '';
     for (const [candidateKey, members] of groups) {
-      if (!candidateKey.startsWith(baseKey + '|prefix:')) continue;
+      if (candidateKey !== baseKey && !candidateKey.startsWith(baseKey + '|diverged:')) continue;
       const witness = members[0]?._draftWitness;
       if (verifiedDraftPrefixOverlap(item, witness)) {
         key = candidateKey;
         break;
       }
     }
-    if (!key) key = baseKey + '|prefix:' + String(item.id);
+    if (!key) key = groups.has(baseKey)
+      ? baseKey + '|diverged:' + String(item.id)
+      : baseKey;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({ ...row, _draftWitness: item });
   }
