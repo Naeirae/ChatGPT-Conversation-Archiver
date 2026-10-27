@@ -4242,6 +4242,9 @@
     const map = new Map();
     const order = [];
     let chronologicalStarted = false;
+    let verifiedSnapshotEnd = null;
+    let verifiedFullStart = null;
+    let verifiedMarkedStart = false;
     let navigationHighWater = 0;
     let navigationFirstId = '';
     let navigationFirstSignature = '';
@@ -4291,11 +4294,20 @@
         { phase: 'top', force: true, captureMode: mode }
       );
 
-      const turns = await waitForTurns(10000);
+      let turns = await waitForTurns(10000);
       if (!turns.length) {
         const roleCount = document.querySelectorAll(ROLE_SELECTOR).length;
         const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
+      }
+
+      // Auto/full mode must first navigate to the real end. The final turn
+      // of an arbitrary initial viewport is not a snapshot boundary.
+      // Manual end/start marking bypasses this navigation entirely.
+      if (mode === 'full') {
+        verifiedSnapshotEnd = await reachSnapshotEndWithoutCapture();
+        turns = await waitForTurns(10000);
+        if (!turns.length) throw new Error('Реплики исчезли при проверке конца переписки.');
       }
 
       const markerEnd = (mode === 'fragment') && selectedFragment.end
@@ -4385,7 +4397,7 @@
           // the real top is confirmed.
           map.clear();
           order.length = 0;
-          await reachTopWithoutCapture(0, {
+          verifiedFullStart = await reachTopWithoutCapture(0, {
             fullCapture: true,
             timeoutMs: 20 * 60 * 1000
           });
@@ -4402,6 +4414,7 @@
               'Отмеченное начало сейчас не видно. Прокрутите текущую вкладку к отметке «Начало» и запустите сбор снова.'
             );
           }
+          verifiedMarkedStart = true;
 
           map.clear();
           order.length = 0;
@@ -4534,6 +4547,20 @@
             hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
           });
+
+      if (mode === 'full' &&
+          (!verifiedSnapshotEnd?.verified || !verifiedFullStart?.verified ||
+           !walkResult?.boundaryReached)) {
+        throw new Error(
+          'Полный архив не сохранён: начало и конец переписки не подтверждены независимо.'
+        );
+      }
+      if (mode === 'fragment' &&
+          (!verifiedMarkedStart || !walkResult?.boundaryReached)) {
+        throw new Error(
+          'Архив по отметкам не сохранён: не удалось подтвердить обе границы диапазона.'
+        );
+      }
 
       await progress(
         mode === 'compare'
@@ -4988,7 +5015,18 @@
         captureBoundaryRole: boundary.role || '',
         captureBoundaryTrimmedNewerCount: bounded.trimmed || 0,
         captureBoundaryReached: Boolean(bounded.found),
-        captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd)
+        captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd),
+        captureProof: (mode === 'full' || mode === 'fragment') ? {
+          mode,
+          startVerified: mode === 'fragment'
+            ? verifiedMarkedStart : Boolean(verifiedFullStart?.verified),
+          endVerified: Boolean(bounded.found && walkResult?.boundaryReached &&
+            (mode === 'fragment' || verifiedSnapshotEnd?.verified)),
+          startSource: mode === 'fragment'
+            ? 'user-marked-start' : (verifiedFullStart?.source || ''),
+          endSource: mode === 'fragment'
+            ? 'user-marked-end' : (verifiedSnapshotEnd?.source || '')
+        } : undefined
       };
 
       // Store the finished archive independently of the job record.
