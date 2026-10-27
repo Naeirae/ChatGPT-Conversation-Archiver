@@ -157,8 +157,10 @@ function unfinishedRangeKey(item) {
   const startKey = String(start.id || start.signature || '');
   const endKey = String(end.id || end.signature || '');
   if (!startKey && !endKey) return 'full-range';
+  // The same manually bounded pass can move through fragment -> resume-draft.
+  // Its capture mode is transport/recovery state, not an identity boundary.
   return [
-    mode || 'range',
+    'manual-range',
     'start:' + (startKey || 'open'),
     'end:' + (endKey || 'open')
   ].join(':');
@@ -252,6 +254,16 @@ function storedMessagesMatch(a, b) {
   );
 }
 
+// A common title, a common URL alone or a single repeated utterance cannot
+// establish that two drafts are interchangeable. Require a complete prefix
+// overlap with at least two messages, preserving the original order.
+function verifiedDraftPrefixOverlap(left, right) {
+  if (!left?.messages?.length || !right?.messages?.length) return false;
+  const overlap = Math.min(left.messages.length, right.messages.length);
+  return overlap >= 2 && Array.from({ length: overlap }, (_, i) => i)
+    .every(i => storedMessagesMatch(left.messages[i], right.messages[i]));
+}
+
 // Merge only verified chronological prefixes from the same conversation,
 // snapshot boundary and manual range. Once the merged canonical draft is
 // durably written, compatible technical retry copies are redundant and may
@@ -272,12 +284,9 @@ async function reconcileUnfinishedPrefix(draft) {
     item.messages?.length
   );
   const matchingMessage = storedMessagesMatch;
-  const compatible = [draft, ...others.filter(candidate => {
-    const n = Math.min(draft.messages.length, candidate.messages.length);
-    // Require at least two matching turns and all available overlap in order.
-    return n >= 2 && Array.from({ length: n }, (_, i) => i)
-      .every(i => matchingMessage(draft.messages[i], candidate.messages[i]));
-  })];
+  const compatible = [draft, ...others.filter(candidate =>
+    verifiedDraftPrefixOverlap(draft, candidate)
+  )];
   if (compatible.length < 2) return draft;
   const longest = compatible.reduce((best, item) =>
     item.messages.length > best.messages.length ? item : best, draft);
@@ -434,13 +443,29 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       recoveryTabUpdatedAt: Number(recoveryTab.record?.updatedAt || 0),
       canExportPrefix: ['walk', 'finalizing'].includes(item.capturePhase || '')
     };
-    const key = unfinishedGroupKey(item);
+    const baseKey = unfinishedGroupKey(item);
+    // Different passages of the same conversation may share an end marker and
+    // even a title. Only join drafts whose saved chronological overlap proves
+    // identity; divergent versions receive separate user-visible cards.
+    let key = '';
+    for (const [candidateKey, members] of groups) {
+      if (candidateKey !== baseKey && !candidateKey.startsWith(baseKey + '|diverged:')) continue;
+      const witness = members[0]?._draftWitness;
+      if (verifiedDraftPrefixOverlap(item, witness)) {
+        key = candidateKey;
+        break;
+      }
+    }
+    if (!key) key = groups.has(baseKey)
+      ? baseKey + '|diverged:' + String(item.id)
+      : baseKey;
     if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+    groups.get(key).push({ ...row, _draftWitness: item });
   }
 
   const result = [];
   for (const [groupKey, members] of groups.entries()) {
+    members.forEach(item => { delete item._draftWitness; });
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
 
@@ -786,7 +811,7 @@ async function setArchiveSavedDestination(archiveId = '', { saved = true, url = 
 }
 
 async function captureSavedArchive(archiveId = '', mode = 'continue', captureTarget = 'copy') {
-  const archive = await getArchive(archiveId);
+  const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));
   if (!archive?.messages?.length || !archive?.sourceUrl) {
     throw new Error('Сохранённый архив не найден.');
   }
@@ -848,7 +873,7 @@ async function promoteMarkedPrimaryArchive(archive) {
   }
   const promoted = {
     ...archive,
-    title: String(archive.title || 'Переписка ChatGPT').replace(/^Фрагмент\\s*[—–-]\\s*/i, ''),
+    title: String(archive.title || 'Переписка ChatGPT').replace(/^Фрагмент\s*[—–-]\s*/i, ''),
     isFragment: false,
     manualRangeMarkers: archive.fragmentMarkers,
     fragmentMarkers: undefined,
@@ -872,7 +897,10 @@ async function selectSavedArchive(archiveId = '') {
   const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));
   if (!archive?.id) throw new Error('Сохранённый чат не найден.');
   // Selection is a UI choice, not a mutation of the canonical conversation archive.
-  await chrome.storage.local.set({ selectedArchiveId: archive.id });
+  await chrome.storage.local.set({
+    selectedArchiveId: archive.id,
+    selectedArchiveConversationKey: conversationKey(archive.sourceUrl || '')
+  });
   return { ok: true, archive: summarize(archive) };
 }
 
@@ -3424,7 +3452,10 @@ async function handleCaptureComplete(message) {
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
   // The just-completed archive should be immediately previewable in the popup.
-  await chrome.storage.local.set({ selectedArchiveId: archive.id });
+  await chrome.storage.local.set({
+    selectedArchiveId: partialMerge.applied ? partialMerge.archiveId : archive.id,
+    selectedArchiveConversationKey: conversationKey(archive.sourceUrl || '')
+  });
 
   if ((archive.manualRangeMarkers || archive.isFragment) && archive.sourceUrl) {
     try {
@@ -5218,6 +5249,25 @@ async function pasteArchiveIntoGoogleDoc(
     }
 
     await pasteChunk(buffer, headerPending, { stripImages: true });
+
+    // A successful CDP Ctrl+V is not evidence that Docs accepted the text.
+    // Read the current document tab back before recording an export as saved.
+    // A missing tail leaves the document open and the archive unlinked.
+    const expectedTail = [...(messages || [])].reverse()
+      .map(item => String(item?.text || '').replace(/\s+/g, ' ').trim())
+      .find(text => text.length >= 48);
+    if (expectedTail) {
+      await sleep(650);
+      const actualText = await copyCurrentGoogleDocTabText(tabId);
+      const actual = String(actualText || '').replace(/\s+/g, ' ').trim();
+      const sample = expectedTail.slice(0, 48);
+      if (!actual.includes(sample)) {
+        throw new Error(
+          'Google Docs не подтвердил вставку последнего текстового сообщения. ' +
+          'Документ оставлен открытым, экспорт не отмечен как сохранённый.'
+        );
+      }
+    }
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
@@ -6145,9 +6195,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } catch (_) {}
         }
         const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
-        const selection = await chrome.storage.local.get('selectedArchiveId');
-        const selectedArchive = selection.selectedArchiveId
-          ? await promoteMarkedPrimaryArchive(await getArchive(selection.selectedArchiveId)) : null;
+        const selection = await chrome.storage.local.get(['selectedArchiveId', 'selectedArchiveConversationKey']);
+        const selectedCandidate = selection.selectedArchiveId
+          ? await getArchive(selection.selectedArchiveId) : null;
+        const selectionMatches = !activeIsConversation || Boolean(
+          selectedCandidate?.sourceUrl &&
+          conversationKey(selectedCandidate.sourceUrl) === conversationKey(tab.url)
+        );
+        const selectedArchive = selectionMatches
+          ? await promoteMarkedPrimaryArchive(selectedCandidate) : null;
         const archive = selectedArchive || (activeIsConversation
           ? currentArchive
           : (currentArchive || await getLastArchive()));

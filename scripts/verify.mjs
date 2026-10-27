@@ -605,8 +605,8 @@ try {
       !savedResumeBlock.includes("!['walk', 'finalizing'].includes(draft.capturePhase)")) {
     fail('manual range draft resume: preserve canonical archive identity and range provenance, without legacy top traversal');
   }
-  if (!serviceWorkerSource.includes("await chrome.storage.local.set({ selectedArchiveId: archive.id })") ||
-      !serviceWorkerSource.includes("const selectedArchive = selection.selectedArchiveId") ||
+  if (!serviceWorkerSource.includes("selectedArchiveId: archive.id,") ||
+      !serviceWorkerSource.includes("const selectedArchive = selectionMatches") ||
       !serviceWorkerSource.includes("const archive = selectedArchive ||") ||
       !popupJs.includes("viewPlanner.textContent = 'Просмотр и вкладки'") ||
       !popupJs.includes("'planner.html?archiveId=' + encodeURIComponent(item.id)") ||
@@ -622,11 +622,31 @@ try {
       !serviceWorkerSource.includes("lastCaptureMode: 'manual-range'") ||
       !serviceWorkerSource.includes('await indexArchive(promoted)') ||
       !serviceWorkerSource.includes('await registerArchive(promoted)') ||
-      !serviceWorkerSource.includes('promoteMarkedPrimaryArchive(await getArchive(selection.selectedArchiveId))') ||
+      !serviceWorkerSource.includes('promoteMarkedPrimaryArchive(selectedCandidate)') ||
       !serviceWorkerSource.includes('const conversation = await promoteMarkedPrimaryArchive(') ||
       !contentResumeBlock.includes('isFragment: false') ||
       !contentResumeBlock.includes('lastArchiveId: archiveId')) {
     fail('manual full archive: bounded capture and legacy migration must allow normal Google Docs export and continuation');
+  }
+  if (!serviceWorkerSource.includes('const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));') ||
+      !serviceWorkerSource.includes("replace(/^Фрагмент\\s*[—–-]\\s*/i, '')") ||
+      !serviceWorkerSource.includes('const selectionMatches = !activeIsConversation') ||
+      !serviceWorkerSource.includes('conversationKey(selectedCandidate.sourceUrl) === conversationKey(tab.url)') ||
+      !serviceWorkerSource.includes('selectedArchiveId: partialMerge.applied ? partialMerge.archiveId : archive.id') ||
+      !serviceWorkerSource.includes('const actualText = await copyCurrentGoogleDocTabText(tabId)') ||
+      !serviceWorkerSource.includes('if (!actual.includes(sample))')) {
+    fail('post-0.4.58 regressions: legacy archive continuation, per-chat selection, partial ID and Docs paste confirmation');
+  }
+  if (!serviceWorkerSource.includes("return ['manual-range',") &&
+      !serviceWorkerSource.includes("'manual-range',\n    'start:'")) {
+    fail('draft grouping: manually bounded capture must retain the same range identity across resume modes');
+  }
+  if (!serviceWorkerSource.includes('function verifiedDraftPrefixOverlap(left, right)') ||
+      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(draft, candidate)') ||
+      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(item, witness)') ||
+      !serviceWorkerSource.includes("'|diverged:' + String(item.id)") ||
+      !serviceWorkerSource.includes('conversationKey(item.sourceUrl || \'\') === source')) {
+    fail('draft grouping: same chat title is not proof; only matching conversation ID, boundary, range and chronological prefix allow merging');
   }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
