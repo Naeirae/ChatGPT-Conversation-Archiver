@@ -999,7 +999,7 @@ function render(data) {
   const isFragmentRun = job?.captureMode === 'fragment' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
   if (captureHeading) captureHeading.textContent = isFragmentRun
-    ? 'Собирается фрагмент'
+    ? 'Собирается архив по отметкам'
     : 'Собрать чат целиком';
   $('captureFragment').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
@@ -1008,7 +1008,7 @@ function render(data) {
   $('capture').disabled = Boolean(running);
   $('capture').textContent = running
     ? (isFragmentRun
-        ? 'Собирается выбранный фрагмент…'
+        ? 'Собирается основной архив по отметкам…'
         : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
     : 'Разметить диапазон';
   $('continue').disabled = Boolean(running || !state.canContinue);
