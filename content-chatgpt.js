@@ -975,6 +975,32 @@
     return scrollRuntime().physicalScrollStartVisible(orderedTurns());
   }
 
+  function rectIntersectsCaptureViewport(
+    targetRect, viewportWidth, viewportHeight, scrollportRect = null, minPixels = 2
+  ) {
+    if (!targetRect) return false;
+    const t = targetRect;
+    const values = [t.left, t.right, t.top, t.bottom, viewportWidth, viewportHeight]
+      .map(Number);
+    if (!values.every(Number.isFinite) ||
+        values[1] <= values[0] || values[3] <= values[2] ||
+        values[4] <= 0 || values[5] <= 0) return false;
+    let left = Math.max(values[0], 0);
+    let right = Math.min(values[1], values[4]);
+    let top = Math.max(values[2], 0);
+    let bottom = Math.min(values[3], values[5]);
+    if (scrollportRect) {
+      const r = scrollportRect;
+      if (![r.left, r.right, r.top, r.bottom].map(Number).every(Number.isFinite)) return false;
+      left = Math.max(left, Number(r.left));
+      right = Math.min(right, Number(r.right));
+      top = Math.max(top, Number(r.top));
+      bottom = Math.min(bottom, Number(r.bottom));
+    }
+    const minimum = Math.max(1, Number(minPixels) || 2);
+    return right - left >= minimum && bottom - top >= minimum;
+  }
+
   function turnIntersectsCaptureViewport(turn) {
     if (!turn?.isConnected) return false;
     const root = contentRoot(turn, roleOf(turn)) || turn;
