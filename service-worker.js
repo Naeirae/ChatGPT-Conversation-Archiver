@@ -36,7 +36,9 @@ import {
   sameDraftCaptureScope,
   verifiedChronologicalOverlap,
   mergeVerifiedTurns,
-  groupVerifiedDraftWindows
+  mergeNewestCapturedTurn,
+  groupVerifiedDraftWindows,
+  groupVerifiedDraftComponents
 } from './lib/draft-overlap.mjs';
 
 import {
@@ -257,10 +259,9 @@ function storedMessagesMatch(a, b) {
   return sameStoredTurn(a, b);
 }
 
-// Merge only verified chronological prefixes from the same conversation,
-// snapshot boundary and manual range. Once the merged canonical draft is
-// durably written, compatible technical retry copies are redundant and may
-// be removed; unrelated ranges/boundaries are never collapsed.
+// Merge only uniquely verified, possibly shifted chronological windows from
+// the same conversation, snapshot boundary and manual range. Materialize a
+// new synthetic copy; source drafts are never discarded or overwritten.
 async function reconcileUnfinishedPrefix(draft) {
   if (!draft?.id || !draft.messages?.length ||
       !['walk', 'finalizing'].includes(draft.capturePhase || '')) return draft;
@@ -276,7 +277,13 @@ async function reconcileUnfinishedPrefix(draft) {
     sameDraftCaptureScope(draft, item)
   );
 
-  let messages = draft.messages;
+  // Tag revisions in memory only. A later verified checkpoint with the
+  // same image src but different bytes must replace an older payload.
+  const tagged = itemDraft => (itemDraft.messages || []).map(item => ({
+    ...item,
+    __captureTime: Date.parse(itemDraft.capturedAt || '') || 0
+  }));
+  let messages = tagged(draft);
   let frontier = draft;
   let frontierEnd = messages.length - 1;
   const compatible = [draft];
@@ -286,11 +293,14 @@ async function reconcileUnfinishedPrefix(draft) {
     progress = false;
     for (const candidate of others) {
       if (usedIds.has(candidate.id)) continue;
-      const alignment = verifiedChronologicalOverlap(messages, candidate.messages);
+      const candidateMessages = tagged(candidate);
+      const alignment = verifiedChronologicalOverlap(messages, candidateMessages);
       if (!alignment) continue;
 
       const joined = mergeVerifiedTurns(
-        messages, candidate.messages, alignment, mergeStoredMessageCapture
+        messages, candidateMessages, alignment,
+        (oldMessage, newMessage) =>
+          mergeNewestCapturedTurn(oldMessage, newMessage, mergeStoredMessageCapture)
       );
       const previousFrontierEnd = frontierEnd + joined.startShift;
       if (joined.rightEndIndex > previousFrontierEnd) {
@@ -306,6 +316,8 @@ async function reconcileUnfinishedPrefix(draft) {
     }
   }
   if (compatible.length < 2) return draft;
+  // Internal comparison timestamps must not leak into exported messages.
+  messages = messages.map(({ __captureTime, ...message }) => message);
 
   // Deterministic synthetic draft, never a destructive rewrite of a source
   // snapshot. This also makes repeated retries of the same component reusable.
@@ -361,29 +373,11 @@ async function reconcileUnfinishedPrefix(draft) {
     ])]
   };
 
-  const existing = await getDraft(mergeId);
-  const sameSourceSet = existing?.verifiedMergedFromDraftIds?.length === originalIds.length &&
-    originalIds.every((id, index) => existing.verifiedMergedFromDraftIds[index] === id);
-  const sameContent = Boolean(existing &&
-    existing.messages?.length === messages.length &&
-    existing.messages.every((item, i) =>
-      storedMessagesMatch(item, messages[i]) &&
-      (item.images?.length || 0) === (messages[i].images?.length || 0) &&
-      (item.images || []).filter(storedImageReady).length ===
-        (messages[i].images || []).filter(storedImageReady).length
-    ));
-  const sameFrontier = Boolean(existing &&
-    existing.capturePhase === 'walk' &&
-    existing.lastMessageId === updated.lastMessageId &&
-    existing.lastScrollDirection === updated.lastScrollDirection &&
-    existing.pendingDocUrl === updated.pendingDocUrl &&
-    JSON.stringify(existing.resumeWindowSignatures || []) ===
-      JSON.stringify(updated.resumeWindowSignatures || [])
-  );
-  const unchanged = sameSourceSet && sameContent && sameFrontier;
-  if (!unchanged) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
-  }
+  // Materialization occurs only through an explicit draft operation. Rewrite
+  // the synthetic copy from the latest verified sources so changes in image
+  // bytes, HTML, reasoning or metadata cannot be hidden by equal ready counts.
+  // Source drafts are never overwritten.
+  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
 
   // A positioned recovery tab is useful only with a verified frontier.
   // Prefer the last appended window; never move or close source tabs here.
@@ -403,7 +397,7 @@ async function reconcileUnfinishedPrefix(draft) {
     break;
   }
 
-  return unchanged ? existing : updated;
+  return updated;
 }
 
 async function compactCompatibleDrafts(drafts = []) {
@@ -430,6 +424,71 @@ async function compactCompatibleDrafts(drafts = []) {
         !drafts.some(item => item.id === merged.id)) changed = true;
   }
   return changed ? await listDrafts() : drafts;
+}
+
+async function getDetailedUnfinishedGroups(job) {
+        // Popup state is read-only. Never compact/delete/rewrite large drafts
+        // on UI open or refresh; consolidation belongs to explicit recovery.
+        const drafts = await listDrafts();
+        const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
+
+        let activeUnfinished = unfinishedPasses.find(item =>
+          (item.passIds || []).includes(job?.draftId || '') ||
+          (item.passIds || []).includes(job?.recoveryDraftId || '')
+        ) || null;
+
+        // A huge chat may fail while still travelling to the beginning, before
+        // the first chronological draft exists. Surface that as the same single
+        // unfinished capture card so the preserved tab remains recoverable.
+        if (!activeUnfinished &&
+            job &&
+            ['error', 'cancelled'].includes(job.status) &&
+            job.captureTabId != null &&
+            job.captureBoundary?.kind &&
+            job.captureBoundary?.key &&
+            job.sourceUrl) {
+          const linked = await getLinkedDoc(job.sourceUrl);
+          const pseudo = {
+            id: 'job:' + String(job.jobId || ''),
+            logicalGroupId: unfinishedGroupKey({
+              id: job.jobId || '',
+              sourceUrl: job.sourceUrl || ''
+            }),
+            resumePassId: '',
+            exportPassId: '',
+            copyPassId: '',
+            viewPassId: '',
+            passIds: [],
+            title: job.title || 'Незавершённый сбор',
+            sourceUrl: job.sourceUrl || '',
+            capturedAt: new Date(Number(job.updatedAt || job.finishedAt || Date.now())).toISOString(),
+            messageCount: Number(job.count || 0),
+            imageCount: 0,
+            captureMode: job.captureMode || 'full',
+            capturePhase: job.phase || 'top',
+            hasBoundary: true,
+            canExportCurrent: false,
+            exportMessageCount: 0,
+            recoveryTabAvailable: true,
+            recoveryTabId: job.captureTabId,
+            recoveryCaptureTarget: job.captureTarget || '',
+            resumeFromJob: true,
+            linkedDocUrl: linked?.url || '',
+            technicalPassCount: 0
+          };
+          unfinishedPasses.unshift(pseudo);
+          activeUnfinished = pseudo;
+        }
+
+  return { unfinishedPasses, unfinishedPass: activeUnfinished };
+}
+
+// Return only key names, not the large message/image blobs. The detailed
+// overlap scan runs only when the user requests the unfinished-pass section.
+async function countUnfinishedDraftKeys() {
+  if (typeof chrome.storage.local.getKeys !== 'function') return null;
+  const keys = await chrome.storage.local.getKeys();
+  return keys.filter(key => key.startsWith(STORAGE_KEYS.draftPrefix)).length;
 }
 
 async function buildUnfinishedCaptureGroups(drafts = []) {
@@ -463,18 +522,18 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
 
   const groups = new Map();
   const candidateDrafts = (drafts || []).filter(item => item?.id);
-  for (const component of groupVerifiedDraftWindows(candidateDrafts)) {
-    const members = component.map(item => rowsById.get(item.id)).filter(Boolean);
+  for (const component of groupVerifiedDraftComponents(candidateDrafts, mergeStoredMessageCapture)) {
+    const members = component.drafts.map(item => rowsById.get(item.id)).filter(Boolean);
     if (!members.length) continue;
-    const baseKey = unfinishedGroupKey(component[0]);
+    const baseKey = unfinishedGroupKey(component.drafts[0]);
     const groupKey = groups.has(baseKey)
-      ? baseKey + '|diverged:' + String(component[0].id)
+      ? baseKey + '|diverged:' + String(component.drafts[0].id)
       : baseKey;
-    groups.set(groupKey, members);
+    groups.set(groupKey, { members, mergedMessages: component.messages });
   }
 
   const result = [];
-  for (const [groupKey, members] of groups.entries()) {
+  for (const [groupKey, { members, mergedMessages }] of groups.entries()) {
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
 
@@ -523,13 +582,17 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       viewPassId: contentCandidate?.id || primary.id,
       passIds: chain.map(item => item.id),
       technicalPassCount: chain.length,
-      messageCount: Number(contentCandidate?.messageCount || 0),
-      imageCount: Number(contentCandidate?.imageCount || 0),
-      imageBinaryReady: Number(contentCandidate?.imageBinaryReady || 0),
-      imageBinaryFailed: Number(contentCandidate?.imageBinaryFailed || 0),
-      chronologicalCount: Number(contentCandidate?.chronologicalCount || 0),
+      // These numbers describe the verified union, never one arbitrary
+      // technical attempt that may cover only part of the saved timeline.
+      messageCount: mergedMessages.length,
+      imageCount: mergedMessages.reduce((n, item) => n + (item.images?.length || 0), 0),
+      imageBinaryReady: mergedMessages.reduce((n, item) =>
+        n + (item.images || []).filter(storedImageReady).length, 0),
+      imageBinaryFailed: mergedMessages.reduce((n, item) =>
+        n + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
+      chronologicalCount: mergedMessages.length,
       canExportCurrent: Boolean(exportCandidate?.id),
-      exportMessageCount: Number(exportCandidate?.messageCount || 0),
+      exportMessageCount: exportCandidate?.id ? mergedMessages.length : 0,
       recoveryTabAvailable: Boolean(resumeCandidate?.recoveryTabAvailable),
       recoveryTabId: resumeCandidate?.recoveryTabId ?? null,
       recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
@@ -6292,6 +6355,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: true, savedArchives: await listLinkedArchivesFast() };
       case 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS':
         return { ok: true, savedArchives: await hydrateLegacyArchiveLibrary() };
+      case 'ARCHIVER_GET_UNFINISHED_GROUPS':
+        return { ok: true, ...(await getDetailedUnfinishedGroups(await getJob())) };
       case 'ARCHIVER_GET_STATE': {
         let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
@@ -6329,58 +6394,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
-        // Popup state is read-only. Never compact/delete/rewrite large drafts
-        // on UI open or refresh; consolidation belongs to explicit recovery.
-        const drafts = await listDrafts();
-        const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
-
-        let activeUnfinished = unfinishedPasses.find(item =>
-          (item.passIds || []).includes(job?.draftId || '') ||
-          (item.passIds || []).includes(job?.recoveryDraftId || '')
-        ) || null;
-
-        // A huge chat may fail while still travelling to the beginning, before
-        // the first chronological draft exists. Surface that as the same single
-        // unfinished capture card so the preserved tab remains recoverable.
-        if (!activeUnfinished &&
-            job &&
-            ['error', 'cancelled'].includes(job.status) &&
-            job.captureTabId != null &&
-            job.captureBoundary?.kind &&
-            job.captureBoundary?.key &&
-            job.sourceUrl) {
-          const linked = await getLinkedDoc(job.sourceUrl);
-          const pseudo = {
-            id: 'job:' + String(job.jobId || ''),
-            logicalGroupId: unfinishedGroupKey({
-              id: job.jobId || '',
-              sourceUrl: job.sourceUrl || ''
-            }),
-            resumePassId: '',
-            exportPassId: '',
-            copyPassId: '',
-            viewPassId: '',
-            passIds: [],
-            title: job.title || 'Незавершённый сбор',
-            sourceUrl: job.sourceUrl || '',
-            capturedAt: new Date(Number(job.updatedAt || job.finishedAt || Date.now())).toISOString(),
-            messageCount: Number(job.count || 0),
-            imageCount: 0,
-            captureMode: job.captureMode || 'full',
-            capturePhase: job.phase || 'top',
-            hasBoundary: true,
-            canExportCurrent: false,
-            exportMessageCount: 0,
-            recoveryTabAvailable: true,
-            recoveryTabId: job.captureTabId,
-            recoveryCaptureTarget: job.captureTarget || '',
-            resumeFromJob: true,
-            linkedDocUrl: linked?.url || '',
-            technicalPassCount: 0
-          };
-          unfinishedPasses.unshift(pseudo);
-          activeUnfinished = pseudo;
-        }
+        // The saved archive/library must render before any full draft scan.
+        // A live capture still has a small progress summary.
+        const unfinishedDraftCount = await countUnfinishedDraftKeys();
+        const activeUnfinished = liveUnfinishedSummary(job);
+        const unfinishedPasses = activeUnfinished ? [activeUnfinished] : [];
+        const hasUnfinishedRecovery = Boolean(
+          job && ['error', 'cancelled'].includes(job.status) &&
+          job.captureTabId != null && job.captureBoundary?.key
+        );
 
         const rawArchiveDestination = archive?.id
           ? await getArchiveDestination(archive.id)
@@ -6397,6 +6419,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           archiveDestination,
           unfinishedPass: activeUnfinished,
           unfinishedPasses,
+          unfinishedDraftCount,
+          hasUnfinishedRecovery,
           linkedDoc,
           captureRange,
           savedArchives: await listLinkedArchivesFast(),

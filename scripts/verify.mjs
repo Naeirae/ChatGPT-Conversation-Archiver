@@ -658,9 +658,9 @@ try {
   if (!overlapModuleSource.includes('export function verifiedChronologicalOverlap(') ||
       !overlapModuleSource.includes('export function groupVerifiedDraftWindows(') ||
       !overlapModuleSource.includes('export function sameDraftCaptureScope(') ||
-      !serviceWorkerSource.includes('groupVerifiedDraftWindows(candidateDrafts)') ||
+      !serviceWorkerSource.includes('groupVerifiedDraftComponents(candidateDrafts, mergeStoredMessageCapture)') ||
       !serviceWorkerSource.includes('sameDraftCaptureScope(draft, item)') ||
-      !serviceWorkerSource.includes('verifiedChronologicalOverlap(messages, candidate.messages)') ||
+      !serviceWorkerSource.includes('verifiedChronologicalOverlap(messages, candidateMessages)') ||
       !serviceWorkerSource.includes('mergeVerifiedTurns(') ||
       !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
       !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
@@ -684,9 +684,27 @@ try {
   const popupStateEnd = serviceWorkerSource.indexOf("case 'ARCHIVER_GET_DRAFT':", popupStateStart);
   const popupStateBlock = serviceWorkerSource.slice(popupStateStart, popupStateEnd);
   if (popupStateBlock.includes('compactCompatibleDrafts(') ||
+      popupStateBlock.includes('await listDrafts(') ||
+      popupStateBlock.includes('buildUnfinishedCaptureGroups(') ||
       popupStateBlock.includes('await registerArchive(archive)') ||
       popupStateBlock.includes('savedArchives: await listLinkedArchives()')) {
-    fail('popup startup performance: state read must not mutate drafts or deserialize entire archive library');
+    fail('popup startup performance: state read must not load message bodies or compare drafts');
+  }
+  if (!overlapModuleSource.includes('export function groupVerifiedDraftComponents(') ||
+      !overlapModuleSource.includes('return id ? [\'id:\' + id] : []') ||
+      !overlapModuleSource.includes('strongMatches < 1') ||
+      !overlapModuleSource.includes('export function mergeNewestCapturedTurn(') ||
+      !serviceWorkerSource.includes('const unfinishedDraftCount = await countUnfinishedDraftKeys()') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_GET_UNFINISHED_GROUPS':") ||
+      !serviceWorkerSource.includes('async function getDetailedUnfinishedGroups(job)') ||
+      !serviceWorkerSource.includes('messageCount: mergedMessages.length') ||
+      !serviceWorkerSource.includes('imageCount: mergedMessages.reduce(') ||
+      !serviceWorkerSource.includes('mergeNewestCapturedTurn(oldMessage, newMessage, mergeStoredMessageCapture)') ||
+      !serviceWorkerSource.includes('messages = messages.map(({ __captureTime, ...message }) => message)') ||
+      !popupJs.includes('async function loadUnfinishedGroups()') ||
+      !popupJs.includes("type: 'ARCHIVER_GET_UNFINISHED_GROUPS'") ||
+      !popupHtml.includes('id="loadUnfinishedPasses"')) {
+    fail('0.4.63: weak-only overlap protection, truthful union counters, explicit draft loading and complete payload refresh');
   }
   const unsafeDraftDeletionStart = serviceWorkerSource.indexOf('async function deleteUnfinishedGroup(');
   const unsafeDraftDeletionEnd = serviceWorkerSource.indexOf('async function refreshCaptureJobHealth(', unsafeDraftDeletionStart);
