@@ -628,6 +628,15 @@ try {
       !contentResumeBlock.includes('lastArchiveId: archiveId')) {
     fail('manual full archive: bounded capture and legacy migration must allow normal Google Docs export and continuation');
   }
+  if (!serviceWorkerSource.includes('const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));') ||
+      !serviceWorkerSource.includes("replace(/^Фрагмент\\s*[—–-]\\s*/i, '')") ||
+      !serviceWorkerSource.includes('const selectionMatches = !activeIsConversation') ||
+      !serviceWorkerSource.includes('conversationKey(selectedCandidate.sourceUrl) === conversationKey(tab.url)') ||
+      !serviceWorkerSource.includes('selectedArchiveId: partialMerge.applied ? partialMerge.archiveId : archive.id') ||
+      !serviceWorkerSource.includes('const actualText = await copyCurrentGoogleDocTabText(tabId)') ||
+      !serviceWorkerSource.includes('if (!actual.includes(sample))')) {
+    fail('post-0.4.58 regressions: legacy archive continuation, per-chat selection, partial ID and Docs paste confirmation');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
