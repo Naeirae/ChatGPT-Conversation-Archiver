@@ -454,13 +454,44 @@ function renderUnfinishedPasses(items = []) {
   }
 }
 
+let detailedSavedArchives = null;
+
+function withDetailedArchiveCounts(rows = []) {
+  if (!Array.isArray(detailedSavedArchives)) return rows;
+  const byId = new Map(detailedSavedArchives.map(item => [item.id, item]));
+  return rows.map(item => {
+    const detailed = byId.get(item.id);
+    if (!detailed) return item;
+    return {
+      ...item,
+      messageCount: Number.isFinite(item.messageCount) ? item.messageCount : detailed.messageCount,
+      imageCount: Number.isFinite(item.imageCount) ? item.imageCount : detailed.imageCount,
+      imageBinaryReady: Number.isFinite(item.imageBinaryReady) ? item.imageBinaryReady : detailed.imageBinaryReady,
+      imageBinaryFailed: Number.isFinite(item.imageBinaryFailed) ? item.imageBinaryFailed : detailed.imageBinaryFailed
+    };
+  });
+}
+
+async function loadFastArchiveLibrary() {
+  const response = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_SAVED_ARCHIVES_FAST' });
+  if (!response?.ok) throw new Error(response?.error || 'Не удалось загрузить библиотеку архивов.');
+  renderSavedArchives(response.savedArchives || []);
+}
+
+async function hydrateSavedArchiveDetails() {
+  const response = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS' });
+  if (!response?.ok) throw new Error(response?.error || 'Не удалось получить статистику архивов.');
+  detailedSavedArchives = response.savedArchives || [];
+  renderSavedArchives(Array.isArray(state?.savedArchives) ? state.savedArchives : detailedSavedArchives);
+}
+
 function renderSavedArchives(items = []) {
   const list = $('savedArchivesList');
   const count = $('savedArchivesCount');
   const notice = $('savedArchivesNotice');
   if (!list || !count) return;
 
-  const rows = Array.isArray(items) ? items : [];
+  const rows = withDetailedArchiveCounts(Array.isArray(items) ? items : []);
   count.textContent = String(rows.length);
   list.textContent = '';
 
@@ -500,8 +531,8 @@ function renderSavedArchives(items = []) {
     const meta = document.createElement('div');
     meta.className = 'archive-link-meta';
     const parts = [
-      Number(item.messageCount || 0) + ' сообщений',
-      Number(item.imageCount || 0) + ' картинок'
+      (Number.isFinite(item.messageCount) ? item.messageCount : '…') + ' сообщений',
+      (Number.isFinite(item.imageCount) ? item.imageCount : '…') + ' картинок'
     ];
     if (Number(item.imageCount || 0)) {
       parts.push('готово ' + Number(item.imageBinaryReady || 0) + '/' + Number(item.imageCount || 0));
@@ -2252,6 +2283,7 @@ $('reloadExtension').addEventListener('click', () => {
 });
 
 (async () => {
+  void loadFastArchiveLibrary().catch(error => setStatus(error.message || String(error), true));
   try {
     const settings = await loadSettings();
     $('userName').value = settings.userName;
@@ -2271,6 +2303,7 @@ $('reloadExtension').addEventListener('click', () => {
     }
 
     const result = await getState();
+    void hydrateSavedArchiveDetails().catch(error => setStatus(error.message || String(error), true));
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
 
