@@ -5168,6 +5168,17 @@
 
       let draftId = '';
       let draftCount = 0;
+      // If the worker already rejected this candidate into a dedicated
+      // recoverable draft, don't overwrite its verified image/text snapshot
+      // with an older DOM map when the acknowledgement returns as an error.
+      if (current.status === 'error' && current.draftId) {
+        const key = 'draft:' + current.draftId;
+        const saved = (await chrome.storage.local.get(key))[key];
+        if (saved?.recoveredFromArchiveId && saved.messages?.length) {
+          draftId = current.draftId;
+          draftCount = saved.messages.length;
+        }
+      }
 
       // Image recovery is additive and safe to persist incrementally. If a full
       // image pass fails after finding some lazy-loaded images, merge and embed
@@ -5212,7 +5223,7 @@
         }
       }
 
-      if (mode !== 'images-draft' &&
+      if (!draftId && mode !== 'images-draft' &&
           (chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
