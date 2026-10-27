@@ -2,6 +2,8 @@ import {
   buildGoogleDocBaseline
 } from './lib/google-docs-baseline.mjs';
 
+import { buildRejectedCaptureDraft } from './lib/capture-recovery.mjs';
+
 import {
   createArchiveStore,
   summarizeArchive,
@@ -3586,18 +3588,20 @@ async function handleCaptureComplete(message) {
       markerEndVisible: Boolean(proof.endVerified)
     });
     if (!accepted) {
+      const reason =
+        'Сбор остановлен: отсутствует подтверждение начала или конца переписки. ' +
+        'Все собранные данные доступны в незавершённых черновиках.';
+      const rejected = buildRejectedCaptureDraft(archive, job, reason);
+      // Record a separately listed draft BEFORE declaring the job failed.
+      // Do not overwrite a previous complete archive or its canonical pointer.
+      await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + rejected.id]: rejected });
       await putArchive({ ...archive, partial: true, complete: false });
-      const pointer = await chrome.storage.local.get(STORAGE_KEYS.lastArchiveId);
-      if (pointer[STORAGE_KEYS.lastArchiveId] === archive.id) {
-        await chrome.storage.local.remove(STORAGE_KEYS.lastArchiveId);
-      }
       return finishJobWithError(
         message.jobId,
         job.sourceTabId ?? job.tabId,
-        'Сбор остановлен: отсутствует подтверждение начала или конца переписки. ' +
-          'Локальные данные сохранены без статуса полного архива.',
-        job.draftId || job.recoveryDraftId || '',
-        Number(archive.messages?.length || 0),
+        reason,
+        rejected.id,
+        rejected.messages.length,
         'error'
       );
     }
@@ -3623,6 +3627,9 @@ async function handleCaptureComplete(message) {
     }
   } else if (message.mode !== 'compare' && !archive.isFragment) {
     await indexArchive(archive);
+    // The page writes an unindexed candidate. Only the verified worker may
+    // publish it as the canonical last archive for this conversation.
+    await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
   }
 
   if (message.mode !== 'compare') {
@@ -6679,7 +6686,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_CAPTURE_FAILED': {
         const job = await getJob();
-        if (!job || job.jobId !== message.jobId) return { ok: true };
+        if (!job || job.jobId !== message.jobId ||
+            ['done', 'error', 'cancelled'].includes(job.status)) {
+          // Late/lost acknowledgements must not resurrect a terminal job.
+          return { ok: true, ignored: true };
+        }
         await finishJobWithError(
           message.jobId,
           job.sourceTabId ?? job.tabId,
@@ -6732,9 +6743,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_DRAFT_IMAGES_COMPLETE':
         await handleDraftImagesComplete(message);
         return { ok: true };
-      case 'ARCHIVER_CAPTURE_COMPLETE':
+      case 'ARCHIVER_CAPTURE_COMPLETE': {
         await handleCaptureComplete(message);
-        return { ok: true };
+        const result = await getJob();
+        const verified = result?.jobId === message.jobId &&
+          result.status === 'done';
+        return {
+          ok: verified,
+          status: result?.status || 'missing',
+          archiveId: result?.archiveId || '',
+          error: verified ? '' : (result?.message || 'Фоновый процесс не подтвердил завершение сбора.')
+        };
+      }
       case 'ARCHIVER_EXPORT_NEW_DOC':
         return { ok: true, ...(await exportConversation({
           activeDoc: false,
