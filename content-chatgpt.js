@@ -3901,6 +3901,7 @@
 
   function visibleNavigationRefsLightweight() {
     return orderedTurns()
+      .filter(turn => turnIntersectsCaptureViewport(turn))
       .map(turn => {
         const id = String(turnStableKey(turn) || '');
         return {
