@@ -46,6 +46,8 @@ import {
   planGoogleDocParts
 } from './lib/document-parts.mjs';
 
+import { completedBoundedPass } from './lib/capture-evidence.mjs';
+
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const RUN_HISTORY_KEY = 'captureRunHistory';
 const DOC_IMAGE_PATCHES_KEY = 'docImagePatches';
@@ -3562,6 +3564,37 @@ async function handleCaptureComplete(message) {
       Number(job.draftCount || 0),
       'error'
     );
+  }
+
+  // Page-side capture must prove the real start AND the fixed end.
+  // A stationary virtualized window (even with seven or fewer turns) is not
+  // evidence of completeness. A legitimately short manually marked range may
+  // require no physical wheel movements at all.
+  if (['full', 'fragment'].includes(message.mode)) {
+    const proof = archive.captureProof || {};
+    const accepted = completedBoundedPass({
+      mode: message.mode,
+      verifiedStart: Boolean(proof.startVerified),
+      verifiedEnd: Boolean(proof.endVerified && archive.captureBoundaryReached),
+      markerStartVisible: Boolean(proof.startVerified),
+      markerEndVisible: Boolean(proof.endVerified)
+    });
+    if (!accepted) {
+      await putArchive({ ...archive, partial: true, complete: false });
+      const pointer = await chrome.storage.local.get(STORAGE_KEYS.lastArchiveId);
+      if (pointer[STORAGE_KEYS.lastArchiveId] === archive.id) {
+        await chrome.storage.local.remove(STORAGE_KEYS.lastArchiveId);
+      }
+      return finishJobWithError(
+        message.jobId,
+        job.sourceTabId ?? job.tabId,
+        'Сбор остановлен: отсутствует подтверждение начала или конца переписки. ' +
+          'Локальные данные сохранены без статуса полного архива.',
+        job.draftId || job.recoveryDraftId || '',
+        Number(archive.messages?.length || 0),
+        'error'
+      );
+    }
   }
 
   if (message.mode !== 'compare' && (archive.partial || archive.complete !== true)) {
