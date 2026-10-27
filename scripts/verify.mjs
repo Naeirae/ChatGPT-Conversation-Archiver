@@ -75,6 +75,52 @@ try {
       !contentSource.includes('return INLINE_SCROLL_RUNTIME;')) {
     fail('scroll transport: content script must use its inline runtime and must not require a separate runtime file');
   }
+  // The end marker may be DOM-mounted offscreen, and after a scroll
+  // continuity must be checked before accepting its arrival.
+  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\n          turnIntersectsCaptureViewport(turn)')) {
+    fail('capture: do not trim at an offscreen DOM-mounted end marker');
+  }
+  for (const [startToken, endToken] of [
+    ['async function walkDownFullLegacy(', 'async function walkDown('],
+    ['async function walkDown(', 'async function captureConversation(']
+  ]) {
+    const start = contentSource.indexOf(startToken);
+    const end = contentSource.indexOf(endToken, start + startToken.length);
+    const body = start >= 0 && end > start ? contentSource.slice(start, end) : '';
+    const scroll = body.indexOf("await physicalScroll('down',");
+    const continuity = body.indexOf('!navigationWindowsOverlap(beforeRefs, afterRefs)', scroll);
+    const postScrollBoundary = body.indexOf('if (boundaryIsVisible(boundary))', scroll);
+    if (scroll < 0 || continuity < scroll || postScrollBoundary < continuity) {
+      fail('traversal: check continuity before accepting a newly arrived end marker');
+    }
+  }
+
+  const visibleRefsStart = contentSource.indexOf('function visibleNavigationRefsLightweight()');
+  const visibleRefsEnd = contentSource.indexOf('function navigationWindowsOverlap(', visibleRefsStart);
+  if (visibleRefsStart < 0 || visibleRefsEnd < 0 ||
+      !contentSource.slice(visibleRefsStart, visibleRefsEnd).includes('.filter(turn => turnIntersectsCaptureViewport(turn))')) {
+    fail('traversal: offscreen mounted messages must not count as window overlap');
+  }
+
+  // Both metric and fallback transports must pick the visible chat window,
+  // then measure the fallback result afresh rather than reusing stale metrics.
+  const transportStart = serviceWorkerSource.indexOf('async function chatScrollMetrics(');
+  const transportEnd = serviceWorkerSource.indexOf('async function withChatDebugger(', transportStart);
+  const transportSource = serviceWorkerSource.slice(transportStart, transportEnd);
+  if (transportStart < 0 || transportEnd < 0 ||
+      (transportSource.match(/r.bottom > 0 && r.top < innerHeight/g) || []).length < 2 ||
+      !transportSource.includes('const fallbackMetrics = await chatScrollMetrics(tabId, direction)') ||
+      !transportSource.includes('fallbackMetrics?.atEnd')) {
+    fail('scroll transport: physical viewport anchors and post-fallback edge verification required');
+  }
+
+  // Never silently skip the overlap check when virtualized DOM exposes no
+  // physically visible navigable turns before or after scrolling.
+  const emptyEvidenceGuardCount = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
+  if (emptyEvidenceGuardCount !== 2) {
+    fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
@@ -1089,6 +1135,7 @@ const tests = spawnSync(process.execPath, [
   'tests/draft-overlap.test.mjs',
   'tests/capture-evidence.test.mjs',
   'tests/capture-viewport.test.mjs',
+  'tests/capture-traversal.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',

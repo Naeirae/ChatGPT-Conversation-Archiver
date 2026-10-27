@@ -1941,7 +1941,9 @@
       // A full capture is a snapshot. Messages created after the bottom marker
       // must never be absorbed just because they became visible while we were
       // walking back down.
-      if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
+      // A mounted offscreen end marker must not truncate the current window.
+      if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
+          turnIntersectsCaptureViewport(turn)) break;
     }
 
     return [...new Set(touchedIds)];
@@ -2019,11 +2021,36 @@
     return messageTextSignature(message) === boundary.key && contextMatches;
   }
 
+  function uniqueBoundaryIndex(rows, boundary) {
+    if (!boundary) return -1;
+    const matches = rows
+      .map((message, index) =>
+        messageMatchesBoundary(message, boundary, rows, index) ? index : -1
+      )
+      .filter(index => index >= 0);
+    // A strong ID may identify exactly one message. Weak signatures must also
+    // resolve uniquely; choosing the first repeat truncates a real conversation.
+    return matches.length === 1 ? matches[0] : -1;
+  }
+
+  function trimMessagesFromMarkedStart(messages, marker) {
+    const rows = [...(messages || [])];
+    if (!marker) return { messages: rows, found: false, trimmed: 0 };
+    const boundary = isStrongMessageId(marker.id)
+      ? { kind: 'stable', key: marker.id }
+      : { kind: 'signature', key: marker.signature, contextBefore: marker.contextBefore || [] };
+    const index = uniqueBoundaryIndex(rows, boundary);
+    if (index < 0) return { messages: rows, found: false, trimmed: 0 };
+    return {
+      messages: rows.slice(index),
+      found: true,
+      trimmed: index
+    };
+  }
+
   function trimMessagesThroughBoundary(messages, boundary) {
     const rows = [...(messages || [])];
-    const index = rows.findIndex((message, i) =>
-      messageMatchesBoundary(message, boundary, rows, i)
-    );
+    const index = uniqueBoundaryIndex(rows, boundary);
     if (index < 0) return { messages: rows, found: false, trimmed: 0 };
     return {
       messages: rows.slice(0, index + 1),
@@ -3899,6 +3926,7 @@
 
   function visibleNavigationRefsLightweight() {
     return orderedTurns()
+      .filter(turn => turnIntersectsCaptureViewport(turn))
       .map(turn => {
         const id = String(turnStableKey(turn) || '');
         return {
@@ -3915,45 +3943,52 @@
     const right = (b || []).filter(ref => ref && (ref.strongId || ref.signature));
     if (!left.length || !right.length) return false;
 
-    // One real ChatGPT message ID is sufficient evidence that the two
-    // virtualized windows overlap.
+    // One immutable ChatGPT message ID is sufficient to prove identity.
     for (const x of left) {
       if (!x.strongId) continue;
       if (right.some(y => y.strongId && y.strongId === x.strongId)) return true;
     }
 
-    // Virtualized viewports do not necessarily align tail-to-head after a
-    // wheel step. Preserve the proven 0.3.87 rule: any ordered run of at least
-    // two adjacent messages shared by both windows proves continuity.
-    // Standalone text is never enough.
+    // Text repeats can form convincing but false windows. Accept a weak
+    // multi-turn sequence only when it has one placement in each viewport.
+    // If both DOM turns carry distinct strong IDs, text equality is not proof.
+    const weakCompatible = (x, y) => {
+      if (x.strongId && y.strongId) return x.strongId === y.strongId;
+      return Boolean(x.signature && y.signature && x.signature === y.signature);
+    };
+    // An A-B-A-B pattern can match as one four-turn window while its
+    // underlying two-turn witness is repeated. Such weak evidence cannot
+    // distinguish a stationary viewport from progress.
+    const hasRepeatedWeakPair = refs => {
+      const seen = new Set();
+      for (let i = 0; i + 1 < refs.length; i++) {
+        const a = refs[i], b = refs[i + 1];
+        if (a.strongId || b.strongId || !a.signature || !b.signature) continue;
+        const pair = JSON.stringify([a.signature, b.signature]);
+        if (seen.has(pair)) return true;
+        seen.add(pair);
+      }
+      return false;
+    };
+    if (hasRepeatedWeakPair(left) || hasRepeatedWeakPair(right)) return false;
     const maxLength = Math.min(6, left.length, right.length);
     for (let length = maxLength; length >= 2; length--) {
+      const placements = [];
       for (let i = 0; i <= left.length - length; i++) {
         for (let j = 0; j <= right.length - length; j++) {
           let same = true;
           for (let offset = 0; offset < length; offset++) {
-            const l = left[i + offset];
-            const r = right[j + offset];
-            const strongSame = Boolean(
-              l.strongId &&
-              r.strongId &&
-              l.strongId === r.strongId
-            );
-            const textSame = Boolean(
-              l.signature &&
-              r.signature &&
-              l.signature === r.signature
-            );
-            if (!strongSame && !textSame) {
+            if (!weakCompatible(left[i + offset], right[j + offset])) {
               same = false;
               break;
             }
           }
-          if (same) return true;
+          if (same) placements.push([i, j]);
         }
       }
+      if (placements.length === 1) return true;
+      if (placements.length > 1) return false;
     }
-
     return false;
   }
 
@@ -4041,24 +4076,9 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
 
-      if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнута метка конца снимка · ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
-        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        return { boundaryReached: true, physicalEndReached: false };
-      }
-
       const afterRefs = visibleNavigationRefsLightweight();
-      if (
-        beforeRefs.length &&
-        afterRefs.length &&
-        !navigationWindowsOverlap(beforeRefs, afterRefs)
-      ) {
+      if (!beforeRefs.length || !afterRefs.length ||
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4080,7 +4100,19 @@
         continue;
       }
 
-      await saveRecoveryCheckpoint(map, order, boundary);
+if (boundaryIsVisible(boundary)) {
+        await progress('Этап 2/3: достигнута метка конца снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        return { boundaryReached: true, physicalEndReached: false };
+      }
+
+            await saveRecoveryCheckpoint(map, order, boundary);
 
       const nextSignature = visibleTurnSignature();
       if (
@@ -4206,7 +4238,29 @@
         );
       }
 
-      if (boundaryIsVisible(boundary)) {
+      const afterRefs = visibleNavigationRefsLightweight();
+      if (!beforeRefs.length || !afterRefs.length ||
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+        const recovered = await recoverDownwardContinuity(
+          beforeRefs,
+          map,
+          order,
+          settings,
+          boundary
+        );
+        if (!recovered) {
+          throw new Error(
+            'Хронологический проход потерял перекрытие между соседними участками. ' +
+            'Сбор остановлен, чтобы не сохранить чат с пропуском.'
+          );
+        }
+
+        scrollRuntime().resetStabilityState(stability);
+        await saveRecoveryCheckpoint(map, order, boundary);
+        continue;
+      }
+
+if (boundaryIsVisible(boundary)) {
         const boundaryImageStats = capturedImageStats([...map.values()]);
         await progress(
           'Этап 2/3: достигнута метка конца снимка · ' +
@@ -4228,29 +4282,7 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const afterRefs = visibleNavigationRefsLightweight();
-      if (beforeRefs.length && afterRefs.length &&
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
-        const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
-        );
-        if (!recovered) {
-          throw new Error(
-            'Хронологический проход потерял перекрытие между соседними участками. ' +
-            'Сбор остановлен, чтобы не сохранить чат с пропуском.'
-          );
-        }
-
-        scrollRuntime().resetStabilityState(stability);
-        await saveRecoveryCheckpoint(map, order, boundary);
-        continue;
-      }
-
-      await saveRecoveryCheckpoint(map, order, boundary);
+            await saveRecoveryCheckpoint(map, order, boundary);
 
       const after = scrollObservation(map.size);
       const stall = scrollRuntime().updateStabilityState(stability, before, after);
@@ -4667,6 +4699,16 @@
       }
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      if (mode === 'fragment') {
+        const markedStart = trimMessagesFromMarkedStart(capturedMessages, selectedFragment?.start);
+        if (!markedStart.found) {
+          throw new Error(
+            'Отмеченное начало не удалось однозначно найти в итоговой последовательности. ' +
+            'Архив не сохранён, чтобы не включить сообщения до диапазона.'
+          );
+        }
+        capturedMessages = markedStart.messages;
+      }
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
       // Text-changing operations must stop at the snapshot boundary that was
       // fixed when the run started. Reaching the live physical bottom is not
