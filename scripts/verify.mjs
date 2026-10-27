@@ -333,10 +333,12 @@ try {
     fail('continuation navigation: candidate must retain navigation-only debugger ascent and avoid the 0.3.98 physical-top shortcut');
   }
 
-  if (!contentSource.includes('function explicitConversationStartVisible()') ||
-      !contentSource.includes('[data-testid="conversation-turn-0"]') ||
-      !contentSource.includes('[data-chatgpt-search-unit-key^="fallback-turn-0:"]')) {
-    fail('top detection: normal ChatGPT chats need an explicit first-turn marker path');
+  const startProofBegin = contentSource.indexOf('function explicitConversationStartVisible()');
+  const startProofEnd = contentSource.indexOf('function firstVisibleTurnSignature()', startProofBegin);
+  const startProofBlock = contentSource.slice(startProofBegin, startProofEnd);
+  if (!startProofBlock.includes("document.querySelectorAll('[data-testid=\"conversation-turn-0\"]')") ||
+      startProofBlock.includes("document.querySelectorAll('[data-chatgpt-search-unit-key^=\"fallback-turn-0:"]")) {
+    fail('top detection: only a globally indexed turn may prove first-message presence; virtual fallback-turn-0 is not the first conversation message');
   }
 
   const resumeAnchorStart = contentSource.indexOf('async function reachResumeAnchor');
