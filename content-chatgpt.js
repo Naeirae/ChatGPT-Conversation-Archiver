@@ -2932,6 +2932,58 @@
     return first ? turnTextSignature(first) : '';
   }
 
+  // Establish the real snapshot end before fixing its message boundary.
+  // A freshly loaded copy can start on an arbitrary virtualized window; its
+  // last rendered turn is NOT automatically the last turn of the conversation.
+  async function reachSnapshotEndWithoutCapture(timeoutMs = 20 * 60 * 1000) {
+    const startedAt = Date.now();
+    let previousSignature = '';
+    let quietAtEnd = 0;
+    let observedDownwardTravel = false;
+
+    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
+      await waitIfPaused();
+      if (await recoverVisibleLoadError('top', 0)) {
+        previousSignature = '';
+        quietAtEnd = 0;
+      }
+
+      const before = scrollObservation(0);
+      if (before.atEnd && before.signature && before.signature === previousSignature) {
+        quietAtEnd++;
+      } else {
+        quietAtEnd = 0;
+      }
+      if (quietAtEnd >= 2 && !visibleRetryButton()) {
+        return {
+          verified: true,
+          source: observedDownwardTravel ? 'downward-navigation' : 'settled-physical-end',
+          observedDownwardTravel
+        };
+      }
+
+      await progress(
+        'Этап 1/3: проверяю фактический конец переписки, прежде чем закрепить снимок…',
+        0,
+        { phase: 'boundary', boundarySearchDirection: 'down', iteration: i + 1 }
+      );
+      const result = await physicalScroll('down', 2, {
+        settleTimeout: 2200, quietWindow: 450
+      });
+      const after = scrollObservation(0);
+      observedDownwardTravel ||= Boolean(result.moved);
+      if (!result.moved && !after.atEnd && after.signature === before.signature) {
+        throw new Error(
+          'Не удалось прокрутить чат до настоящего конца. Последняя видимая реплика не считается границей архива.'
+        );
+      }
+      previousSignature = after.signature;
+      // Let ChatGPT finish lazy-loading the next virtualized page.
+      await sleep(500);
+    }
+    throw new Error('Не удалось подтвердить конец переписки. Архив не объявлен полным.');
+  }
+
   async function reachTopWithoutCapture(
     existingCount = 0,
     {
@@ -2942,6 +2994,7 @@
     let confirmedIdle = 0;
     let previousSignature = '';
     let firstVisibleKey = '';
+    let observedUpwardTravel = false;
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2960,7 +3013,7 @@
             force: true
           }
         );
-        return;
+        return { verified: true, source: 'user-confirmed-start' };
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
@@ -2975,7 +3028,7 @@
           force: true,
           explicitStartDetected: true
         });
-        return;
+        return { verified: true, source: 'visible-first-turn' };
       }
 
       const turnsBefore = orderedTurns();
@@ -3001,11 +3054,12 @@
       // 0.3.87 full-capture invariant: upward travel is navigation only.
       // Large bursts are allowed here because no canonical messages are
       // committed until the chronological pass starts at the confirmed top.
-      await physicalScroll(
+      const travel = await physicalScroll(
         'up',
         16,
         { settleTimeout: 5000, quietWindow: 550 }
       );
+      observedUpwardTravel ||= Boolean(travel.moved);
 
       if (state.manualTopConfirmed) {
         await progress(
@@ -3020,7 +3074,7 @@
             force: true
           }
         );
-        return;
+        return { verified: true, source: 'user-confirmed-start' };
       }
 
       if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
@@ -3030,7 +3084,7 @@
           force: true,
           explicitStartDetected: true
         });
-        return;
+        return { verified: true, source: 'visible-first-turn' };
       }
 
       let nextSignature = visibleTurnSignature();
@@ -3097,7 +3151,13 @@
             force: true
           }
         );
-        return;
+        if (!observedUpwardTravel) {
+          throw new Error(
+            'Вкладка не прокручивалась вверх и первая реплика не подтверждена. ' +
+            'Нельзя считать видимое окно полным чатом. Используйте ручные отметки начала и конца.'
+          );
+        }
+        return { verified: true, source: 'upward-traversal-and-stability' };
       }
     }
 
