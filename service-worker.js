@@ -841,7 +841,8 @@ async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
 async function selectSavedArchive(archiveId = '') {
   const archive = await getArchive(archiveId);
   if (!archive?.id) throw new Error('Сохранённый чат не найден.');
-  await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+  // Selection is a UI choice, not a mutation of the canonical conversation archive.
+  await chrome.storage.local.set({ selectedArchiveId: archive.id });
   return { ok: true, archive: summarize(archive) };
 }
 
@@ -6097,9 +6098,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } catch (_) {}
         }
         const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
-        const archive = activeIsConversation
+        const selection = await chrome.storage.local.get('selectedArchiveId');
+        const selectedArchive = selection.selectedArchiveId
+          ? await getArchive(selection.selectedArchiveId) : null;
+        const archive = selectedArchive || (activeIsConversation
           ? currentArchive
-          : (currentArchive || await getLastArchive());
+          : (currentArchive || await getLastArchive()));
         if (archive?.id && !archive.partial && archive.complete !== false) {
           await registerArchive(archive);
         }
@@ -6175,7 +6179,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc,
           captureRange,
           savedArchives: await listLinkedArchives(),
-          canContinue: Boolean(currentArchive?.messages?.length),
+          canContinue: Boolean(currentArchive?.messages?.length && !archive?.isFragment),
           history: await getRunHistory()
         };
       }
