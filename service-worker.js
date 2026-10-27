@@ -5224,6 +5224,25 @@ async function pasteArchiveIntoGoogleDoc(
     }
 
     await pasteChunk(buffer, headerPending, { stripImages: true });
+
+    // A successful CDP Ctrl+V is not evidence that Docs accepted the text.
+    // Read the current document tab back before recording an export as saved.
+    // A missing tail leaves the document open and the archive unlinked.
+    const expectedTail = [...(messages || [])].reverse()
+      .map(item => String(item?.text || '').replace(/\\s+/g, ' ').trim())
+      .find(text => text.length >= 48);
+    if (expectedTail) {
+      await sleep(650);
+      const actualText = await copyCurrentGoogleDocTabText(tabId);
+      const actual = String(actualText || '').replace(/\\s+/g, ' ').trim();
+      const sample = expectedTail.slice(0, 48);
+      if (!actual.includes(sample)) {
+        throw new Error(
+          'Google Docs не подтвердил вставку последнего текстового сообщения. ' +
+          'Документ оставлен открытым, экспорт не отмечен как сохранённый.'
+        );
+      }
+    }
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
