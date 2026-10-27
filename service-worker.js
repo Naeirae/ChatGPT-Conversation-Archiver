@@ -35,7 +35,8 @@ import {
   sameStoredTurn,
   sameDraftCaptureScope,
   verifiedChronologicalOverlap,
-  mergeVerifiedTurns
+  mergeVerifiedTurns,
+  groupVerifiedDraftWindows
 } from './lib/draft-overlap.mjs';
 
 import {
@@ -428,7 +429,7 @@ async function compactCompatibleDrafts(drafts = []) {
 }
 
 async function buildUnfinishedCaptureGroups(drafts = []) {
-  const groups = new Map();
+  const rowsById = new Map();
 
   for (const item of drafts || []) {
     if (!item?.id) continue;
@@ -453,29 +454,23 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       recoveryTabUpdatedAt: Number(recoveryTab.record?.updatedAt || 0),
       canExportPrefix: ['walk', 'finalizing'].includes(item.capturePhase || '')
     };
-    const baseKey = unfinishedGroupKey(item);
-    // Different passages of the same conversation may share an end marker and
-    // even a title. Only join drafts whose saved chronological overlap proves
-    // identity; divergent versions receive separate user-visible cards.
-    let key = '';
-    for (const [candidateKey, members] of groups) {
-      if (candidateKey !== baseKey && !candidateKey.startsWith(baseKey + '|diverged:')) continue;
-      const witness = members[0]?._draftWitness;
-      if (verifiedDraftPrefixOverlap(item, witness)) {
-        key = candidateKey;
-        break;
-      }
-    }
-    if (!key) key = groups.has(baseKey)
-      ? baseKey + '|diverged:' + String(item.id)
+    rowsById.set(item.id, row);
+  }
+
+  const groups = new Map();
+  const candidateDrafts = (drafts || []).filter(item => item?.id);
+  for (const component of groupVerifiedDraftWindows(candidateDrafts)) {
+    const members = component.map(item => rowsById.get(item.id)).filter(Boolean);
+    if (!members.length) continue;
+    const baseKey = unfinishedGroupKey(component[0]);
+    const groupKey = groups.has(baseKey)
+      ? baseKey + '|diverged:' + String(component[0].id)
       : baseKey;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ ...row, _draftWitness: item });
+    groups.set(groupKey, members);
   }
 
   const result = [];
   for (const [groupKey, members] of groups.entries()) {
-    members.forEach(item => { delete item._draftWitness; });
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
 
