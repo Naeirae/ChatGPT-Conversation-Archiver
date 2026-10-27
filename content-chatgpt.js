@@ -2915,21 +2915,69 @@
   }
 
   function explicitConversationStartVisible() {
-    const selectors = [
-      '[data-testid="conversation-turn-0"]',
-      '[data-chatgpt-search-unit-key^="fallback-turn-0:"]',
-      '[data-chatgpt-search-unit-key="fallback-turn-0:user"]',
-      '[data-chatgpt-search-unit-key="fallback-turn-0:assistant"]'
-    ];
-
-    return selectors.some(selector =>
-      [...document.querySelectorAll(selector)].some(node => isVisible(node))
-    );
+    // A fallback-turn-0 index may be assigned to the FIRST RENDERED ITEM of
+    // any virtualized window. It is not proof of the real conversation start.
+    // Use a globally numbered conversation turn when provided; otherwise
+    // require verified upward movement/stability or explicit user marking.
+    return [...document.querySelectorAll('[data-testid="conversation-turn-0"]')]
+      .some(node => isVisible(node) && roleOf(node));
   }
 
   function firstVisibleTurnSignature() {
     const first = orderedTurns()[0] || null;
     return first ? turnTextSignature(first) : '';
+  }
+
+  // Establish the real snapshot end before fixing its message boundary.
+  // A freshly loaded copy can start on an arbitrary virtualized window; its
+  // last rendered turn is NOT automatically the last turn of the conversation.
+  async function reachSnapshotEndWithoutCapture(timeoutMs = 20 * 60 * 1000) {
+    const startedAt = Date.now();
+    let previousSignature = '';
+    let quietAtEnd = 0;
+    let observedDownwardTravel = false;
+
+    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
+      await waitIfPaused();
+      if (await recoverVisibleLoadError('top', 0)) {
+        previousSignature = '';
+        quietAtEnd = 0;
+      }
+
+      const before = scrollObservation(0);
+      if (before.atEnd && before.signature && before.signature === previousSignature) {
+        quietAtEnd++;
+      } else {
+        quietAtEnd = 0;
+      }
+      if (quietAtEnd >= 2 && !visibleRetryButton()) {
+        return {
+          verified: true,
+          source: observedDownwardTravel ? 'downward-navigation' : 'settled-physical-end',
+          observedDownwardTravel
+        };
+      }
+
+      await progress(
+        'Этап 1/3: проверяю фактический конец переписки, прежде чем закрепить снимок…',
+        0,
+        { phase: 'boundary', boundarySearchDirection: 'down', iteration: i + 1 }
+      );
+      const result = await physicalScroll('down', 2, {
+        settleTimeout: 2200, quietWindow: 450
+      });
+      const after = scrollObservation(0);
+      observedDownwardTravel ||= Boolean(result.moved);
+      if (!result.moved && !after.atEnd && after.signature === before.signature) {
+        throw new Error(
+          'Не удалось прокрутить чат до настоящего конца. Последняя видимая реплика не считается границей архива.'
+        );
+      }
+      previousSignature = after.signature;
+      // Let ChatGPT finish lazy-loading the next virtualized page.
+      await sleep(500);
+    }
+    throw new Error('Не удалось подтвердить конец переписки. Архив не объявлен полным.');
   }
 
   async function reachTopWithoutCapture(
@@ -2942,6 +2990,7 @@
     let confirmedIdle = 0;
     let previousSignature = '';
     let firstVisibleKey = '';
+    let observedUpwardTravel = false;
     const startedAt = Date.now();
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
@@ -2960,7 +3009,7 @@
             force: true
           }
         );
-        return;
+        return { verified: true, source: 'user-confirmed-start', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
@@ -2975,7 +3024,7 @@
           force: true,
           explicitStartDetected: true
         });
-        return;
+        return { verified: true, source: 'visible-first-turn', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       const turnsBefore = orderedTurns();
@@ -3001,11 +3050,12 @@
       // 0.3.87 full-capture invariant: upward travel is navigation only.
       // Large bursts are allowed here because no canonical messages are
       // committed until the chronological pass starts at the confirmed top.
-      await physicalScroll(
+      const travel = await physicalScroll(
         'up',
         16,
         { settleTimeout: 5000, quietWindow: 550 }
       );
+      observedUpwardTravel ||= Boolean(travel.moved);
 
       if (state.manualTopConfirmed) {
         await progress(
@@ -3020,7 +3070,7 @@
             force: true
           }
         );
-        return;
+        return { verified: true, source: 'user-confirmed-start', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
@@ -3030,7 +3080,7 @@
           force: true,
           explicitStartDetected: true
         });
-        return;
+        return { verified: true, source: 'visible-first-turn', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       let nextSignature = visibleTurnSignature();
@@ -3083,6 +3133,12 @@
       // Do not use physicalScrollStartVisible() here. That heuristic was added
       // in 0.3.98 and was later explicitly reverted as a traversal regression.
       if (confirmedIdle >= 5 && !visibleRetryButton()) {
+        if (!observedUpwardTravel) {
+          throw new Error(
+            'Вкладка не прокручивалась вверх и первая реплика не подтверждена. ' +
+            'Нельзя считать видимое окно полным чатом. Используйте ручные отметки начала и конца.'
+          );
+        }
         await progress(
           fullCapture
             ? 'Этап 1/3: начало подтверждено. Начинаю сохранять сверху вниз…'
@@ -3097,7 +3153,7 @@
             force: true
           }
         );
-        return;
+        return { verified: true, source: 'upward-traversal-and-stability', observedUpwardTravel, stableChecks: confirmedIdle };
       }
     }
 
@@ -4182,6 +4238,9 @@
     const map = new Map();
     const order = [];
     let chronologicalStarted = false;
+    let verifiedSnapshotEnd = null;
+    let verifiedFullStart = null;
+    let verifiedMarkedStart = false;
     let navigationHighWater = 0;
     let navigationFirstId = '';
     let navigationFirstSignature = '';
@@ -4231,20 +4290,31 @@
         { phase: 'top', force: true, captureMode: mode }
       );
 
-      const turns = await waitForTurns(10000);
+      let turns = await waitForTurns(10000);
       if (!turns.length) {
         const roleCount = document.querySelectorAll(ROLE_SELECTOR).length;
         const shellCount = document.querySelectorAll(TURN_SHELL_SELECTOR).length;
         throw new Error(`Не удалось найти реплики ChatGPT. role-узлов: ${roleCount}, оболочек: ${shellCount}. Возможно, интерфейс еще загружается или ChatGPT изменил DOM.`);
       }
 
+      // Auto/full mode must first navigate to the real end. The final turn
+      // of an arbitrary initial viewport is not a snapshot boundary.
+      // Manual end/start marking bypasses this navigation entirely.
+      if (mode === 'full') {
+        verifiedSnapshotEnd = await reachSnapshotEndWithoutCapture();
+        turns = await waitForTurns(10000);
+        if (!turns.length) throw new Error('Реплики исчезли при проверке конца переписки.');
+      }
+
       const markerEnd = (mode === 'fragment') && selectedFragment.end
         ? {
-            kind: selectedFragment.end.id ? 'stable' : 'signature',
-            key: selectedFragment.end.id || selectedFragment.end.signature,
+            kind: isStrongMessageId(selectedFragment.end.id) ? 'stable' : 'signature',
+            key: isStrongMessageId(selectedFragment.end.id)
+              ? selectedFragment.end.id : selectedFragment.end.signature,
             role: selectedFragment.end.role || '',
             signature: selectedFragment.end.signature || '',
-            strictStable: Boolean(selectedFragment.end.id)
+            contextBefore: selectedFragment.end.contextBefore || [],
+            strictStable: isStrongMessageId(selectedFragment.end.id)
           }
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
@@ -4325,7 +4395,7 @@
           // the real top is confirmed.
           map.clear();
           order.length = 0;
-          await reachTopWithoutCapture(0, {
+          verifiedFullStart = await reachTopWithoutCapture(0, {
             fullCapture: true,
             timeoutMs: 20 * 60 * 1000
           });
@@ -4342,6 +4412,7 @@
               'Отмеченное начало сейчас не видно. Прокрутите текущую вкладку к отметке «Начало» и запустите сбор снова.'
             );
           }
+          verifiedMarkedStart = true;
 
           map.clear();
           order.length = 0;
@@ -4474,6 +4545,20 @@
             hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
           });
+
+      if (mode === 'full' &&
+          (!verifiedSnapshotEnd?.verified || !verifiedFullStart?.verified ||
+           !walkResult?.boundaryReached)) {
+        throw new Error(
+          'Полный архив не сохранён: начало и конец переписки не подтверждены независимо.'
+        );
+      }
+      if (mode === 'fragment' &&
+          (!verifiedMarkedStart || !walkResult?.boundaryReached)) {
+        throw new Error(
+          'Архив по отметкам не сохранён: не удалось подтвердить обе границы диапазона.'
+        );
+      }
 
       await progress(
         mode === 'compare'
@@ -4928,7 +5013,20 @@
         captureBoundaryRole: boundary.role || '',
         captureBoundaryTrimmedNewerCount: bounded.trimmed || 0,
         captureBoundaryReached: Boolean(bounded.found),
-        captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd)
+        captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd),
+        captureProof: (mode === 'full' || mode === 'fragment') ? {
+          mode,
+          startVerified: mode === 'fragment'
+            ? verifiedMarkedStart : Boolean(verifiedFullStart?.verified),
+          endVerified: Boolean(bounded.found && walkResult?.boundaryReached &&
+            (mode === 'fragment' || verifiedSnapshotEnd?.verified)),
+          startSource: mode === 'fragment'
+            ? 'user-marked-start' : (verifiedFullStart?.source || ''),
+          startTravelObserved: Boolean(verifiedFullStart?.observedUpwardTravel),
+          startStableChecks: Number(verifiedFullStart?.stableChecks || 0),
+          endSource: mode === 'fragment'
+            ? 'user-marked-end' : (verifiedSnapshotEnd?.source || '')
+        } : undefined
       };
 
       // Store the finished archive independently of the job record.
@@ -5176,17 +5274,30 @@
     const role = roleOf(turn);
     const signature = turnTextSignature(turn);
     const id = turnStableKey(turn);
-    return role && (id || signature) ? { id, signature, role } : null;
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    const contextBefore = index > 0 ? boundaryContextBefore(turns, index, 3) : [];
+    return role && (id || signature)
+      ? { id, signature, role, contextBefore } : null;
   }
   function markerIdentityMatches(anchor, candidate) {
     if (!anchor || !candidate) return false;
-    if (anchor.id && candidate.id && anchor.id === candidate.id) return true;
-    const anchorSignature = String(anchor.signature || '');
-    const candidateSignature = String(candidate.signature || '');
-    if (!anchorSignature || !candidateSignature || anchorSignature !== candidateSignature) return false;
-    const anchorRole = String(anchor.role || '');
-    const candidateRole = String(candidate.role || '');
-    return !anchorRole || !candidateRole || anchorRole === candidateRole;
+    const roleMatches = !anchor.role || !candidate.role || anchor.role === candidate.role;
+    const signatureMatches = Boolean(
+      anchor.signature && candidate.signature && anchor.signature === candidate.signature
+    );
+    if (!roleMatches || !signatureMatches) return false;
+    if (isStrongMessageId(anchor.id) && isStrongMessageId(candidate.id) &&
+        anchor.id !== candidate.id) return false;
+    const before = Array.isArray(anchor.contextBefore) ? anchor.contextBefore : [];
+    const actual = Array.isArray(candidate.contextBefore) ? candidate.contextBefore : null;
+    if (actual && before.length &&
+        (actual.length < before.length ||
+          !before.every((signature, i) =>
+            signature === actual[actual.length - before.length + i]))) return false;
+    return Boolean(
+      (anchor.id && candidate.id && anchor.id === candidate.id) || signatureMatches
+    );
   }
 
   function anchorMatches(message, anchor) {

@@ -46,6 +46,8 @@ import {
   planGoogleDocParts
 } from './lib/document-parts.mjs';
 
+import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mjs';
+
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const RUN_HISTORY_KEY = 'captureRunHistory';
 const DOC_IMAGE_PATCHES_KEY = 'docImagePatches';
@@ -3564,6 +3566,43 @@ async function handleCaptureComplete(message) {
     );
   }
 
+  // Page-side capture must prove the real start AND the fixed end.
+  // A stationary virtualized window (even with seven or fewer turns) is not
+  // evidence of completeness. A legitimately short manually marked range may
+  // require no physical wheel movements at all.
+  if (['full', 'fragment'].includes(message.mode)) {
+    const proof = archive.captureProof || {};
+    const top = message.mode === 'full' ? fullTopEvidence({
+      explicitConversationStart: proof.startSource === 'visible-first-turn',
+      manuallyConfirmed: proof.startSource === 'user-confirmed-start',
+      upwardTravelObserved: Boolean(proof.startTravelObserved),
+      stableChecks: Number(proof.startStableChecks || 0)
+    }) : null;
+    const accepted = completedBoundedPass({
+      mode: message.mode,
+      verifiedStart: Boolean(proof.startVerified && top?.verified),
+      verifiedEnd: Boolean(proof.endVerified && archive.captureBoundaryReached),
+      markerStartVisible: Boolean(proof.startVerified),
+      markerEndVisible: Boolean(proof.endVerified)
+    });
+    if (!accepted) {
+      await putArchive({ ...archive, partial: true, complete: false });
+      const pointer = await chrome.storage.local.get(STORAGE_KEYS.lastArchiveId);
+      if (pointer[STORAGE_KEYS.lastArchiveId] === archive.id) {
+        await chrome.storage.local.remove(STORAGE_KEYS.lastArchiveId);
+      }
+      return finishJobWithError(
+        message.jobId,
+        job.sourceTabId ?? job.tabId,
+        'Сбор остановлен: отсутствует подтверждение начала или конца переписки. ' +
+          'Локальные данные сохранены без статуса полного архива.',
+        job.draftId || job.recoveryDraftId || '',
+        Number(archive.messages?.length || 0),
+        'error'
+      );
+    }
+  }
+
   if (message.mode !== 'compare' && (archive.partial || archive.complete !== true)) {
     archive = {
       ...archive,
@@ -4431,16 +4470,23 @@ async function chatScrollMetrics(tabId, direction = 'down') {
             )[0]) || document.scrollingElement || document.documentElement;
       }
 
-      const top = Number(scroller?.scrollTop || window.scrollY || 0);
+      const top = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       const clientHeight = Number(scroller?.clientHeight || innerHeight || 0);
       const scrollHeight = Number(
         scroller?.scrollHeight || document.documentElement.scrollHeight || 0
       );
       const threshold = Math.max(24, Math.round(clientHeight * 0.04));
+      const viewportToken = visibleTurns.slice(0, 2).concat(visibleTurns.slice(-2))
+        .map(turn => String(
+          turn.getAttribute('data-message-id') ||
+          turn.getAttribute('data-turn-id') ||
+          turn.innerText || turn.textContent || ''
+        ).slice(0, 180)).join('|');
       return {
         top,
         clientHeight,
         scrollHeight,
+        viewportToken,
         atStart: top <= threshold,
         atEnd: top + clientHeight >= scrollHeight - threshold
       };
@@ -4511,7 +4557,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
       }
 
       const amount = scrollSign * 860 * burstCount;
-      const before = Number(scroller?.scrollTop || window.scrollY || 0);
+      const before = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       if (
         scroller === document.documentElement ||
         scroller === document.body ||
@@ -4521,7 +4567,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
       } else {
         scroller.scrollBy({ top: amount, left: 0, behavior: 'auto' });
       }
-      const after = Number(scroller?.scrollTop || window.scrollY || 0);
+      const after = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       return {
         ok: true,
         method: 'scripted-scroll-fallback',
@@ -4599,7 +4645,11 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   const afterMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
   const moved = Boolean(
     beforeMetrics && afterMetrics &&
-    Math.abs(Number(afterMetrics.top || 0) - Number(beforeMetrics.top || 0)) >= 2
+    (
+      Math.abs(Number(afterMetrics.top ?? 0) - Number(beforeMetrics.top ?? 0)) >= 2 ||
+      Boolean(beforeMetrics.viewportToken && afterMetrics.viewportToken &&
+        beforeMetrics.viewportToken !== afterMetrics.viewportToken)
+    )
   );
   const alreadyAtRequestedEdge = direction === 'up'
     ? Boolean(beforeMetrics?.atStart)
@@ -4611,6 +4661,8 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
       direction,
       bursts: count,
       method: moved ? 'debugger-wheel' : 'debugger-wheel-edge',
+      moved,
+      observedEdge: alreadyAtRequestedEdge,
       before: beforeMetrics?.top ?? null,
       after: afterMetrics?.top ?? null
     };
@@ -4625,11 +4677,19 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     'Резервная прокрутка ChatGPT'
   );
 
+  const fallbackMoved = Math.abs(Number(fallback.delta || 0)) >= 2;
+  const fallbackAtEdge = Boolean(
+    direction === 'up' ? afterMetrics?.atStart : afterMetrics?.atEnd
+  );
   return {
     ...fallback,
-    ok: true,
+    ok: fallbackMoved || fallbackAtEdge,
+    moved: fallbackMoved,
+    observedEdge: fallbackAtEdge,
     direction,
     bursts: count,
+    error: fallbackMoved || fallbackAtEdge ? '' :
+      'Прокрутка не сдвинула переписку и не подтвердила её физическую границу.',
     fallbackFrom: fallbackReason
   };
 }
