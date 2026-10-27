@@ -2960,12 +2960,12 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
 }
 
 async function saveUnfinishedAsPartial(passId = '') {
-  const draft = await getDraft(passId);
+  const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   return syncPartialArchiveFromDraft(draft, { enable: true });
 }
 
 async function exportUnfinishedPassToNewDoc(passId = '') {
-  const draft = await getDraft(passId);
+  const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!draft?.id || !draft?.messages?.length) {
     throw new Error('Незавершённый сбор не найден.');
   }
@@ -3280,7 +3280,7 @@ async function handleDraftImagesComplete(message) {
 }
 
 async function compareUnfinishedPass(passId = '') {
-  const unfinishedPass = await getDraft(passId);
+  const unfinishedPass = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!unfinishedPass?.messages?.length) {
     throw new Error('Сохранённый незавершённый проход не найден.');
   }
@@ -6395,9 +6395,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           history: await getRunHistory()
         };
       }
-      case 'ARCHIVER_GET_DRAFT':
-      case 'ARCHIVER_GET_UNFINISHED_PASS': {
+      case 'ARCHIVER_GET_DRAFT': {
         const draft = await getDraft(message.draftId || message.passId || '');
+        return { ok: true, unfinishedPass: draft, draft };
+      }
+      case 'ARCHIVER_GET_UNFINISHED_PASS': {
+        const draft = await reconcileUnfinishedPrefix(
+          await getDraft(message.draftId || message.passId || '')
+        );
         return { ok: true, unfinishedPass: draft, draft };
       }
       case 'ARCHIVER_COMPARE_UNFINISHED_PASS':
@@ -6614,7 +6619,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_COPY_DRAFT':
       case 'ARCHIVER_COPY_UNFINISHED_PASS': {
-        const draft = await getDraft(message.draftId || message.passId);
+        const original = await getDraft(message.draftId || message.passId);
+        const draft = message.type === 'ARCHIVER_COPY_UNFINISHED_PASS'
+          ? await reconcileUnfinishedPrefix(original) : original;
         if (!draft) throw new Error('Сохранённый незавершённый проход не найден.');
         const settings = await getSettings();
         await writeClipboard(
