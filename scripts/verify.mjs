@@ -605,8 +605,8 @@ try {
       !savedResumeBlock.includes("!['walk', 'finalizing'].includes(draft.capturePhase)")) {
     fail('manual range draft resume: preserve canonical archive identity and range provenance, without legacy top traversal');
   }
-  if (!serviceWorkerSource.includes("await chrome.storage.local.set({ selectedArchiveId: archive.id })") ||
-      !serviceWorkerSource.includes("const selectedArchive = selection.selectedArchiveId") ||
+  if (!serviceWorkerSource.includes("selectedArchiveId: archive.id,") ||
+      !serviceWorkerSource.includes("const selectedArchive = selectionMatches") ||
       !serviceWorkerSource.includes("const archive = selectedArchive ||") ||
       !popupJs.includes("viewPlanner.textContent = 'Просмотр и вкладки'") ||
       !popupJs.includes("'planner.html?archiveId=' + encodeURIComponent(item.id)") ||
@@ -622,7 +622,7 @@ try {
       !serviceWorkerSource.includes("lastCaptureMode: 'manual-range'") ||
       !serviceWorkerSource.includes('await indexArchive(promoted)') ||
       !serviceWorkerSource.includes('await registerArchive(promoted)') ||
-      !serviceWorkerSource.includes('promoteMarkedPrimaryArchive(await getArchive(selection.selectedArchiveId))') ||
+      !serviceWorkerSource.includes('promoteMarkedPrimaryArchive(selectedCandidate)') ||
       !serviceWorkerSource.includes('const conversation = await promoteMarkedPrimaryArchive(') ||
       !contentResumeBlock.includes('isFragment: false') ||
       !contentResumeBlock.includes('lastArchiveId: archiveId')) {
