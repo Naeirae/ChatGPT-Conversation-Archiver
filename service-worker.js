@@ -6213,13 +6213,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc = selectedArchive.isFragment
             ? null : await getLinkedDoc(selectedArchive.sourceUrl || '');
         }
-        if (archive?.id && !archive.partial && archive.complete !== false) {
-          await registerArchive(archive);
-        }
         if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
-        const drafts = await compactCompatibleDrafts(await listDrafts());
+        // Popup state is read-only. Never compact/delete/rewrite large drafts
+        // on UI open or refresh; consolidation belongs to explicit recovery.
+        const drafts = await listDrafts();
         const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
 
         let activeUnfinished = unfinishedPasses.find(item =>
