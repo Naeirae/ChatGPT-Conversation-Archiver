@@ -4435,6 +4435,8 @@ async function chatScrollMetrics(tabId, direction = 'down') {
         const r = el.getBoundingClientRect();
         const style = getComputedStyle(el);
         return r.width > 0 && r.height > 0 &&
+          r.bottom > 0 && r.top < innerHeight &&
+          r.right > 0 && r.left < innerWidth &&
           style.display !== 'none' && style.visibility !== 'hidden';
       });
       const anchor = scrollSign < 0
@@ -4521,6 +4523,8 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
         const r = el.getBoundingClientRect();
         const style = getComputedStyle(el);
         return r.width > 0 && r.height > 0 &&
+          r.bottom > 0 && r.top < innerHeight &&
+          r.right > 0 && r.left < innerWidth &&
           style.display !== 'none' && style.visibility !== 'hidden';
       });
       const anchor = scrollSign < 0
@@ -4684,9 +4688,17 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     'Резервная прокрутка ChatGPT'
   );
 
-  const fallbackMoved = Math.abs(Number(fallback.delta || 0)) >= 2;
+  // Re-read after fallback: afterMetrics was captured before this second
+  // transport ran, and cannot prove its final edge or viewport.
+  const fallbackMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
+  const fallbackMoved = Math.abs(Number(fallback.delta || 0)) >= 2 || Boolean(
+    afterMetrics && fallbackMetrics &&
+    (Math.abs(Number(fallbackMetrics.top ?? 0) - Number(afterMetrics.top ?? 0)) >= 2 ||
+      (afterMetrics.viewportToken && fallbackMetrics.viewportToken &&
+        afterMetrics.viewportToken !== fallbackMetrics.viewportToken))
+  );
   const fallbackAtEdge = Boolean(
-    direction === 'up' ? afterMetrics?.atStart : afterMetrics?.atEnd
+    direction === 'up' ? fallbackMetrics?.atStart : fallbackMetrics?.atEnd
   );
   return {
     ...fallback,
