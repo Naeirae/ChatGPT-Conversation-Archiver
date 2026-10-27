@@ -1032,7 +1032,7 @@ function render(data) {
   const hasUnfinished = Boolean(
     (state.unfinishedPasses || []).length ||
     Number(state.unfinishedDraftCount || 0) > 0 ||
-    state.unfinishedDraftCount == null ||
+    state.unfinishedDraftCount === null ||
     state.hasUnfinishedRecovery
   );
   const unfinishedPanel = $('unfinishedPassesPanel');
