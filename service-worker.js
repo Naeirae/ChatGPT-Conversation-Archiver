@@ -2348,8 +2348,10 @@ async function attemptAutomaticRecovery(failedJobId = '') {
     !failedJob ||
     failedJob.jobId !== failedJobId ||
     failedJob.status !== 'error' ||
-    !failedJob.autoRecoveryPending
+    !failedJob.autoRecoveryPending ||
+    failedJob.captureMode === 'fragment'
   ) {
+    // Stale alarms from older releases must never restart a manual range.
     return { ok: false, skipped: true };
   }
 
