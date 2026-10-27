@@ -581,10 +581,9 @@ try {
       finishErrorBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)")) {
     fail('manual range isolation: force positioned current tab; never restart range through legacy navigation recovery or stale alarms');
   }
-  const contentResumeBlock = contentSource.slice(
-    contentSource.indexOf('async function captureConversation('),
-    contentSource.indexOf('async function captureConversation(') + 40000
-  );
+  const manualContentSource = await readFile('content-chatgpt.js', 'utf8');
+  const captureStart = manualContentSource.indexOf('async function captureConversation(');
+  const contentResumeBlock = captureStart < 0 ? '' : manualContentSource.slice(captureStart, captureStart + 40000);
   const savedResumeStart = serviceWorkerSource.indexOf('async function resumeSavedUnfinishedPass(');
   const savedResumeEnd = serviceWorkerSource.indexOf('async function ', savedResumeStart + 10);
   const savedResumeBlock = serviceWorkerSource.slice(savedResumeStart, savedResumeEnd);
