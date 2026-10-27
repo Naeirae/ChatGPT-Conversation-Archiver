@@ -1846,8 +1846,8 @@ async function startCapture({
       (await chrome.storage.local.get(markersKey))[markersKey] ||
       {};
     captureRange = markers;
-    if (mode === 'fragment' && !markers.start && !markers.end) {
-      throw new Error('Сначала отметьте начало и/или конец фрагмента в переписке.');
+    if (mode === 'fragment' && (!markers.start || !markers.end)) {
+      throw new Error('Сначала отметьте и начало, и конец диапазона в переписке.');
     }
   }
   let existingArchive = providedArchive;
@@ -1997,7 +1997,7 @@ async function startCapture({
       pendingDocUrl,
       pendingDocMode,
       message: mode === 'fragment'
-          ? 'Рабочая вкладка готова; ищу выбранную границу начала фрагмента…'
+          ? 'Текущая вкладка готова; начало диапазона должно оставаться видимым…'
           : mode === 'full'
         ? (captureTarget === 'current'
             ? 'Текущая вкладка готова; иду к началу…'
@@ -6017,7 +6017,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_OPEN_MARKING_TAB':
         return await openBoundaryMarkingTab();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
-        return await startCapture({ mode: 'fragment', captureTarget: message.captureTarget || 'copy' });
+        return await startCapture({ mode: 'fragment', captureTarget: 'current' });
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
