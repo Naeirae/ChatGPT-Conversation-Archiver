@@ -786,7 +786,7 @@ async function setArchiveSavedDestination(archiveId = '', { saved = true, url = 
 }
 
 async function captureSavedArchive(archiveId = '', mode = 'continue', captureTarget = 'copy') {
-  const archive = await getArchive(archiveId);
+  const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));
   if (!archive?.messages?.length || !archive?.sourceUrl) {
     throw new Error('Сохранённый архив не найден.');
   }
@@ -848,7 +848,7 @@ async function promoteMarkedPrimaryArchive(archive) {
   }
   const promoted = {
     ...archive,
-    title: String(archive.title || 'Переписка ChatGPT').replace(/^Фрагмент\\s*[—–-]\\s*/i, ''),
+    title: String(archive.title || 'Переписка ChatGPT').replace(/^Фрагмент\s*[—–-]\s*/i, ''),
     isFragment: false,
     manualRangeMarkers: archive.fragmentMarkers,
     fragmentMarkers: undefined,
@@ -872,7 +872,10 @@ async function selectSavedArchive(archiveId = '') {
   const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));
   if (!archive?.id) throw new Error('Сохранённый чат не найден.');
   // Selection is a UI choice, not a mutation of the canonical conversation archive.
-  await chrome.storage.local.set({ selectedArchiveId: archive.id });
+  await chrome.storage.local.set({
+    selectedArchiveId: archive.id,
+    selectedArchiveConversationKey: conversationKey(archive.sourceUrl || '')
+  });
   return { ok: true, archive: summarize(archive) };
 }
 
@@ -3424,7 +3427,10 @@ async function handleCaptureComplete(message) {
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
   // The just-completed archive should be immediately previewable in the popup.
-  await chrome.storage.local.set({ selectedArchiveId: archive.id });
+  await chrome.storage.local.set({
+    selectedArchiveId: partialMerge.applied ? partialMerge.archiveId : archive.id,
+    selectedArchiveConversationKey: conversationKey(archive.sourceUrl || '')
+  });
 
   if ((archive.manualRangeMarkers || archive.isFragment) && archive.sourceUrl) {
     try {
@@ -6145,9 +6151,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } catch (_) {}
         }
         const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
-        const selection = await chrome.storage.local.get('selectedArchiveId');
-        const selectedArchive = selection.selectedArchiveId
-          ? await promoteMarkedPrimaryArchive(await getArchive(selection.selectedArchiveId)) : null;
+        const selection = await chrome.storage.local.get(['selectedArchiveId', 'selectedArchiveConversationKey']);
+        const selectedCandidate = selection.selectedArchiveId
+          ? await getArchive(selection.selectedArchiveId) : null;
+        const selectionMatches = !activeIsConversation || Boolean(
+          selectedCandidate?.sourceUrl &&
+          conversationKey(selectedCandidate.sourceUrl) === conversationKey(tab.url)
+        );
+        const selectedArchive = selectionMatches
+          ? await promoteMarkedPrimaryArchive(selectedCandidate) : null;
         const archive = selectedArchive || (activeIsConversation
           ? currentArchive
           : (currentArchive || await getLastArchive()));
