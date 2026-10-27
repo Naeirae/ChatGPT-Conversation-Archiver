@@ -372,9 +372,18 @@ async function reconcileUnfinishedPrefix(draft) {
       (item.images || []).filter(storedImageReady).length ===
         (messages[i].images || []).filter(storedImageReady).length
     ));
-  if (sameSourceSet && sameContent) return existing;
-
-  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
+  const sameFrontier = Boolean(existing &&
+    existing.capturePhase === 'walk' &&
+    existing.lastMessageId === updated.lastMessageId &&
+    existing.lastScrollDirection === updated.lastScrollDirection &&
+    existing.pendingDocUrl === updated.pendingDocUrl &&
+    JSON.stringify(existing.resumeWindowSignatures || []) ===
+      JSON.stringify(updated.resumeWindowSignatures || [])
+  );
+  const unchanged = sameSourceSet && sameContent && sameFrontier;
+  if (!unchanged) {
+    await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
+  }
 
   // A positioned recovery tab is useful only with a verified frontier.
   // Prefer the last appended window; never move or close source tabs here.
@@ -394,7 +403,7 @@ async function reconcileUnfinishedPrefix(draft) {
     break;
   }
 
-  return updated;
+  return unchanged ? existing : updated;
 }
 
 async function compactCompatibleDrafts(drafts = []) {
