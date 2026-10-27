@@ -660,7 +660,7 @@ try {
       !overlapModuleSource.includes('export function sameDraftCaptureScope(') ||
       !serviceWorkerSource.includes('groupVerifiedDraftComponents(candidateDrafts, mergeStoredMessageCapture)') ||
       !serviceWorkerSource.includes('sameDraftCaptureScope(draft, item)') ||
-      !serviceWorkerSource.includes('verifiedChronologicalOverlap(messages, candidate.messages)') ||
+      !serviceWorkerSource.includes('verifiedChronologicalOverlap(messages, candidateMessages)') ||
       !serviceWorkerSource.includes('mergeVerifiedTurns(') ||
       !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
       !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
