@@ -186,3 +186,36 @@ test('strong marked end remains unique despite identical texts', () => {
   assert.equal(result.found, true);
   assert.equal(result.messages.length, 2);
 });
+
+test('repeated weak two-message windows cannot falsely prove continuity', () => {
+  const overlap = new Function(
+    extract('navigationWindowsOverlap') + '; return navigationWindowsOverlap;'
+  )();
+  const ref = signature => ({ signature, strongId: '' });
+  const before = ['a', 'b', 'a', 'b'].map(ref);
+  const after = ['a', 'b', 'a', 'b'].map(ref);
+  assert.equal(overlap(before, after), false);
+});
+
+test('unique weak neighboring pair remains sufficient when IDs are absent', () => {
+  const overlap = new Function(
+    extract('navigationWindowsOverlap') + '; return navigationWindowsOverlap;'
+  )();
+  const ref = signature => ({ signature, strongId: '' });
+  assert.equal(overlap(['a','b','c'].map(ref), ['b','c','d'].map(ref)), true);
+});
+
+test('different immutable IDs with identical text do not prove overlap', () => {
+  const overlap = new Function(
+    extract('navigationWindowsOverlap') + '; return navigationWindowsOverlap;'
+  )();
+  const before = [
+    { strongId: 'data-message-id:one', signature: 'repeat' },
+    { strongId: 'data-message-id:two', signature: 'repeat' }
+  ];
+  const after = [
+    { strongId: 'data-message-id:three', signature: 'repeat' },
+    { strongId: 'data-message-id:four', signature: 'repeat' }
+  ];
+  assert.equal(overlap(before, after), false);
+});
