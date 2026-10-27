@@ -164,3 +164,25 @@ test('ambiguous weak repeated text does not merge an arbitrary draft group', () 
   const b = { ...scope(url), id: 'b', messages: pair };
   assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
 });
+
+
+test('formatting differences in enumerated messages are not merged as identity', () => {
+  const a = msg('a', { weak: true, text: '- apple\n- banana' });
+  const b = msg('b', { weak: true, text: '1. apple\n2. banana' });
+  assert.equal(sameStoredTurn(a, b), false);
+});
+
+test('large partially shifted windows use their unique chronological overlap', () => {
+  const make = i => ({
+    role: i % 2 ? 'assistant' : 'user',
+    id: 'data-message-id:long-' + i,
+    identityStrong: true,
+    text: 'Substantial original archive message number ' + i + ' with independent text.'
+  });
+  const full = Array.from({ length: 3000 }, (_, i) => make(i));
+  const left = full.slice(0, 2400);
+  const right = full.slice(1500);
+  const match = verifiedChronologicalOverlap(left, right);
+  assert.equal(match?.offset, 1500);
+  assert.equal(mergeVerifiedTurns(left, right, match).messages.length, 3000);
+});
