@@ -46,7 +46,7 @@ import {
   planGoogleDocParts
 } from './lib/document-parts.mjs';
 
-import { completedBoundedPass } from './lib/capture-evidence.mjs';
+import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mjs';
 
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const RUN_HISTORY_KEY = 'captureRunHistory';
@@ -3572,9 +3572,15 @@ async function handleCaptureComplete(message) {
   // require no physical wheel movements at all.
   if (['full', 'fragment'].includes(message.mode)) {
     const proof = archive.captureProof || {};
+    const top = message.mode === 'full' ? fullTopEvidence({
+      explicitConversationStart: proof.startSource === 'visible-first-turn',
+      manuallyConfirmed: proof.startSource === 'user-confirmed-start',
+      upwardTravelObserved: Boolean(proof.startTravelObserved),
+      stableChecks: Number(proof.startStableChecks || 0)
+    }) : null;
     const accepted = completedBoundedPass({
       mode: message.mode,
-      verifiedStart: Boolean(proof.startVerified),
+      verifiedStart: Boolean(proof.startVerified && top?.verified),
       verifiedEnd: Boolean(proof.endVerified && archive.captureBoundaryReached),
       markerStartVisible: Boolean(proof.startVerified),
       markerEndVisible: Boolean(proof.endVerified)
