@@ -278,3 +278,21 @@ The user also reported lost saved-archive preview and tab placement. Root cause 
 Evidence: exact GitHub source sections and targeted source assertions, plus JavaScript parse success for `popup.js` and `content-chatgpt.js`. Full `node scripts/verify.mjs` and Chrome behavior remain **unverified**: container git clone failed DNS resolution for github.com. Do not mark runtime regressions green.
 
 Next tests: library selection from an open different chat; view/mark/save tab plan for a full archive and fragment; resume a failed fragment draft; verify `lastArchiveId` remains intact and fragment export does not adopt canonical chat identity; test missing/weak markers and repeated messages.
+
+
+## 2026-10-27 — partial-overlap draft recovery (0.4.62)
+
+**User requirement:** multiple versions of one saved capture must be assembled by verified content overlap; same-titled but distinct ChatGPT conversations must never be conflated. Already captured archives/drafts must survive until the generated result is verified.
+
+**R201:** Compare identity by source conversation key, fixed lower snapshot boundary and manual range; title never establishes identity.
+**R202:** Allow contiguous, uniquely anchored chronological overlaps even when draft windows have different starts.
+**R203:** Reject conflicting strong IDs, ambiguous repeated content and one-turn/weak-only overlaps.
+**R204:** Preserve source snapshots while composing a new merged recovery draft, with explicit source provenance and repeatable ID.
+**R205:** Group overlapping versions as a single user-facing recovery card, and make preview/export/resume consume the same assembled material.
+**R206:** Package the unfinished viewer and run behavioral unit tests, not only textual source guards.
+
+**Implementation:** `lib/draft-overlap.mjs`, `tests/draft-overlap.test.mjs`, `service-worker.js`, `unfinished.js`, `scripts/package.mjs`, `scripts/verify.mjs`. The safe merge only follows one uniquely verified alignment; the source draft records are not overwritten or deleted. The popup's normal read-only load does not materialize a merged archive.
+
+**Verification:** GitHub Actions run `40578741997` passed both extension and updater jobs; 63 Node.js behavioral/unit tests passed, including the new partial-overlap cases. This is source/build verification only. Live Chrome validation is not claimed. Required browser checks: (1) reopen overlapping versions; (2) inspect grouped card and combined content; (3) export and confirm Google Docs body; (4) resume from the rightmost saved frontier; (5) delete a synthetic merged snapshot without losing the source attempts; (6) confirm equal-titled distinct conversations stay separated.
+
+**Next operation:** merge the source-verified PR to `main`; then perform the browser checklist against a long saved chat. If a real archive reveals ambiguous overlap, preserve both source drafts and inspect the exact conflicting ID/role/text sequences before changing the matcher. Earlier live scroll validation remains pending.

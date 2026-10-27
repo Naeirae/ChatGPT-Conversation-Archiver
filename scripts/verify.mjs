@@ -7,9 +7,11 @@ const jsFiles = [
   'popup.js',
   'updater.js',
   'planner.js',
+  'unfinished.js',
   'offscreen.js',
   'lib/text.mjs',
   'lib/urls.mjs',
+  'lib/draft-overlap.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -213,17 +215,20 @@ try {
       (serviceWorkerSource.match(/\{ replace: true \}/g) || []).length < 3) {
     fail('service-worker.js: new capture jobs must replace stale active-job state');
   }
-  if (!serviceWorkerSource.includes('unfinishedRangeKey(item) === range') ||
+  if (!serviceWorkerSource.includes('sameDraftCaptureScope(draft, item)') ||
+      !serviceWorkerSource.includes('captureRange: draft.captureRange || frontier.captureRange || null') ||
       !serviceWorkerSource.includes('pendingDocSource') ||
       !contentSource.includes("pendingDocUrl: current.pendingDocUrl || ''")) {
-    fail('unfinished recovery: range and pending-document metadata are not preserved');
+    fail('unfinished recovery: verified draft identity, manual range and pending-document metadata are not preserved');
   }
   if (!serviceWorkerSource.includes('draftId: draft.id') ||
-      !serviceWorkerSource.includes('const redundantIds = compatible') ||
+      !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
+      !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
+      !serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated })') ||
       !contentSource.includes("current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId)") ||
       !contentSource.includes('canonicalRecoveryDraft?.captureMode') ||
       !contentSource.includes('canonicalRecoveryDraft?.captureRange')) {
-    fail('unfinished recovery: retries must update one canonical draft and preserve original capture identity');
+    fail('unfinished recovery: retries must use a separate provenance-tracked merged draft and preserve original capture identity');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||
@@ -641,12 +646,27 @@ try {
       !serviceWorkerSource.includes("'manual-range',\n    'start:'")) {
     fail('draft grouping: manually bounded capture must retain the same range identity across resume modes');
   }
-  if (!serviceWorkerSource.includes('function verifiedDraftPrefixOverlap(left, right)') ||
-      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(draft, candidate)') ||
-      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(item, witness)') ||
-      !serviceWorkerSource.includes("'|diverged:' + String(item.id)") ||
-      !serviceWorkerSource.includes('conversationKey(item.sourceUrl || \'\') === source')) {
-    fail('draft grouping: same chat title is not proof; only matching conversation ID, boundary, range and chronological prefix allow merging');
+  const overlapModuleSource = await readFile('lib/draft-overlap.mjs', 'utf8');
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_GET_UNFINISHED_PASS':") ||
+      !serviceWorkerSource.includes("const draft = await reconcileUnfinishedPrefix(") ||
+      !serviceWorkerSource.includes("async function exportUnfinishedPassToNewDoc(passId = '') {") ||
+      !serviceWorkerSource.includes("const draft = await reconcileUnfinishedPrefix(await getDraft(passId));") ||
+      !serviceWorkerSource.includes("draftId: draft.id,") ||
+      !serviceWorkerSource.includes("recoveryDraftId: draft.id,")) {
+    fail('verified draft materialization: preview, export and saved-tab continuation must use the merged snapshot');
+  }
+  if (!overlapModuleSource.includes('export function verifiedChronologicalOverlap(') ||
+      !overlapModuleSource.includes('export function groupVerifiedDraftWindows(') ||
+      !overlapModuleSource.includes('export function sameDraftCaptureScope(') ||
+      !serviceWorkerSource.includes('groupVerifiedDraftWindows(candidateDrafts)') ||
+      !serviceWorkerSource.includes('sameDraftCaptureScope(draft, item)') ||
+      !serviceWorkerSource.includes('verifiedChronologicalOverlap(messages, candidate.messages)') ||
+      !serviceWorkerSource.includes('mergeVerifiedTurns(') ||
+      !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
+      !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
+      !serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated })') ||
+      serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + draft.id]: updated })')) {
+    fail('draft grouping: only uniquely verified chronological overlaps with exact chat/snapshot/range identity may merge into a new preserved snapshot');
   }
   const libraryStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
   if (!serviceWorkerSource.includes('async function listLinkedArchivesFast()') ||
@@ -968,7 +988,11 @@ try {
 
 try {
   const packageSource = await readFile('scripts/package.mjs', 'utf8');
-  for (const requiredFile of ['updater.html', 'updater.css', 'updater.js', 'help.html', 'help.css']) {
+  for (const requiredFile of [
+    'updater.html', 'updater.css', 'updater.js',
+    'help.html', 'help.css',
+    'unfinished.html', 'unfinished.css', 'unfinished.js'
+  ]) {
     if (!packageSource.includes("'" + requiredFile + "'")) {
       fail('scripts/package.mjs: missing packaged updater file ' + requiredFile);
     }
@@ -992,6 +1016,7 @@ const tests = spawnSync(process.execPath, [
   'tests/text.test.mjs',
   'tests/urls.test.mjs',
   'tests/archive-store.test.mjs',
+  'tests/draft-overlap.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
   'tests/document-parts.test.mjs'

@@ -19,6 +19,9 @@ const files = [
   'planner.html',
   'planner.css',
   'planner.js',
+  'unfinished.html',
+  'unfinished.css',
+  'unfinished.js',
   'offscreen.html',
   'offscreen.js'
 ];

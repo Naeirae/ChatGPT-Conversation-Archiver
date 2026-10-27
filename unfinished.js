@@ -9,7 +9,7 @@ const PHASE_NAMES = {
 
 const MODE_NAMES = {
   full: 'полный сбор',
-  fragment: 'фрагмент',
+  fragment: 'сбор основного архива по отметкам',
   continue: 'продолжение архива',
   sync: 'восстановление по документу Google Docs',
   images: 'сверка и добор изображений',
@@ -21,7 +21,8 @@ const MODE_NAMES = {
 };
 
 function passIdFromUrl() {
-  return new URL(location.href).searchParams.get('passId') || '';
+  return window.__archiverResolvedPassId ||
+    new URL(location.href).searchParams.get('passId') || '';
 }
 
 function formatDate(value) {
@@ -78,6 +79,11 @@ async function load() {
   }
 
   const pass = result.unfinishedPass;
+  // Explicit preview can assemble a new verified snapshot. Subsequent
+  // actions must address that snapshot, not a stale source pass ID.
+  window.__archiverResolvedPassId = pass.id || passId;
+  $('delete').textContent = pass.verifiedMerge
+    ? 'Удалить объединённую копию' : 'Удалить';
   $('title').textContent = pass.title || 'Незавершённый сбор';
 
   const meta = [
