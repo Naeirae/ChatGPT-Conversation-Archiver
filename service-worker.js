@@ -36,7 +36,8 @@ import {
   sameDraftCaptureScope,
   verifiedChronologicalOverlap,
   mergeVerifiedTurns,
-  groupVerifiedDraftWindows
+  groupVerifiedDraftWindows,
+  groupVerifiedDraftComponents
 } from './lib/draft-overlap.mjs';
 
 import {
@@ -463,18 +464,18 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
 
   const groups = new Map();
   const candidateDrafts = (drafts || []).filter(item => item?.id);
-  for (const component of groupVerifiedDraftWindows(candidateDrafts)) {
-    const members = component.map(item => rowsById.get(item.id)).filter(Boolean);
+  for (const component of groupVerifiedDraftComponents(candidateDrafts, mergeStoredMessageCapture)) {
+    const members = component.drafts.map(item => rowsById.get(item.id)).filter(Boolean);
     if (!members.length) continue;
-    const baseKey = unfinishedGroupKey(component[0]);
+    const baseKey = unfinishedGroupKey(component.drafts[0]);
     const groupKey = groups.has(baseKey)
-      ? baseKey + '|diverged:' + String(component[0].id)
+      ? baseKey + '|diverged:' + String(component.drafts[0].id)
       : baseKey;
-    groups.set(groupKey, members);
+    groups.set(groupKey, { members, mergedMessages: component.messages });
   }
 
   const result = [];
-  for (const [groupKey, members] of groups.entries()) {
+  for (const [groupKey, { members, mergedMessages }] of groups.entries()) {
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
 
@@ -523,13 +524,17 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       viewPassId: contentCandidate?.id || primary.id,
       passIds: chain.map(item => item.id),
       technicalPassCount: chain.length,
-      messageCount: Number(contentCandidate?.messageCount || 0),
-      imageCount: Number(contentCandidate?.imageCount || 0),
-      imageBinaryReady: Number(contentCandidate?.imageBinaryReady || 0),
-      imageBinaryFailed: Number(contentCandidate?.imageBinaryFailed || 0),
-      chronologicalCount: Number(contentCandidate?.chronologicalCount || 0),
+      // These numbers describe the verified union, never one arbitrary
+      // technical attempt that may cover only part of the saved timeline.
+      messageCount: mergedMessages.length,
+      imageCount: mergedMessages.reduce((n, item) => n + (item.images?.length || 0), 0),
+      imageBinaryReady: mergedMessages.reduce((n, item) =>
+        n + (item.images || []).filter(storedImageReady).length, 0),
+      imageBinaryFailed: mergedMessages.reduce((n, item) =>
+        n + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
+      chronologicalCount: mergedMessages.length,
       canExportCurrent: Boolean(exportCandidate?.id),
-      exportMessageCount: Number(exportCandidate?.messageCount || 0),
+      exportMessageCount: exportCandidate?.id ? mergedMessages.length : 0,
       recoveryTabAvailable: Boolean(resumeCandidate?.recoveryTabAvailable),
       recoveryTabId: resumeCandidate?.recoveryTabId ?? null,
       recoveryCaptureTarget: resumeCandidate?.recoveryCaptureTarget || '',
