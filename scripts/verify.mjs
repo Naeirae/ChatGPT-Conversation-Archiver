@@ -114,6 +114,13 @@ try {
     fail('scroll transport: physical viewport anchors and post-fallback edge verification required');
   }
 
+  // Never silently skip the overlap check when virtualized DOM exposes no
+  // physically visible navigable turns before or after scrolling.
+  const emptyWindowGuard = /if \\(!beforeRefs\\.length \\|\\| !afterRefs\\.length \\|\\|\\s*!navigationWindowsOverlap\\(beforeRefs, afterRefs\\)\\)/g;
+  if ((contentSource.match(emptyWindowGuard) || []).length !== 2) {
+    fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
