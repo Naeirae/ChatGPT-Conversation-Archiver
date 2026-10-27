@@ -341,3 +341,24 @@ test('summarizeArchive preserves resumable partial state', () => {
   assert.equal(summary.partialSourceDraftId, 'draft-1');
   assert.equal(summary.capturePhase, 'walk');
 });
+
+
+test('legacy full capture remains stored but is flagged as unverified without a traversal proof', () => {
+  const saved = summarizeArchive({
+    id: 'old-seven',
+    lastCaptureMode: 'full',
+    messages: Array.from({ length: 7 }, (_, i) => ({ id: 'm-' + i })),
+    captureBoundaryReached: true
+  });
+  assert.equal(saved.messageCount, 7);
+  assert.equal(saved.captureVerification, 'unverified');
+
+  const short = summarizeArchive({
+    id: 'real-short',
+    lastCaptureMode: 'full',
+    messages: [{ id: 'm-0' }],
+    captureProof: { startVerified: true, endVerified: true }
+  });
+  assert.equal(short.messageCount, 1);
+  assert.equal(short.captureVerification, 'verified');
+});
