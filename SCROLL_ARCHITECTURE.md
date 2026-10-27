@@ -240,3 +240,21 @@ Manual-range invariants:
 - the final archive is sliced exactly from marked start through marked end.
 
 Legacy full-navigation, continuation and reconciliation code may remain for technical/archive recovery operations, but it is no longer the primary capture UX.
+
+
+## 2026-10-27 — manual-range recovery isolation audit
+
+The default branch already contains 0.4.56's manual end → manual start → current-tab downward traversal. A separate follow-up branch `fix/manual-range-recovery-isolation-2026-10-27` isolates it from legacy transport and auto-recovery choices.
+
+Verified source-level problems and fixes:
+- `startCapture()` still accepted a `copy` target from non-popup callers for `fragment`. The worker now forces `current`, preserving the user's physically positioned start viewport.
+- `finishJobWithError()` could schedule automatic recovery for `fragment`, despite its single-pass/no-auto-retry contract. Manual ranges no longer become auto-recovery eligible.
+- `resumeNavigationOnlyFromWorkingTab()` could restart a `fragment` as a legacy top-navigation recovery. Its allowed modes now exclude `fragment`.
+- `attemptAutomaticRecovery()` now skips stale persisted alarms for failed manual-range jobs, including alarms created by an earlier release.
+- `scripts/verify.mjs` adds guards for these contracts.
+
+Preserved intentionally: unfinished draft persistence, explicit manual recovery controls, legacy full/reconcile/image maintenance paths, and physical overlap checking during downward capture.
+
+Verification: source content and six targeted pattern assertions confirmed via the GitHub connector. A local clone for `node --check` / `node scripts/verify.mjs` failed because this runtime could not resolve github.com; **no automated test pass or installed Chrome/live validation is claimed**.
+
+Remaining P0: perform full browser regression for current-tab end/start marking, valid downward range, stable repeated messages, forced stall/error with retained draft but no auto-restart, manual resume, and exported archive boundaries. Separately inspect manual draft resume semantics; do not silently re-enable automatic top navigation.
