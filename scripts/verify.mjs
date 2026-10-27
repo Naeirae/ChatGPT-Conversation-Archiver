@@ -210,7 +210,7 @@ try {
     fail('capture runtime: manual full-range mode must stay removed');
   }
   if (!contentSource.includes("closeSelection.textContent = 'Завершить разметку'") ||
-      !contentSource.includes('strictStable: Boolean(selectedFragment.end.id)') ||
+      !contentSource.includes('strictStable: isStrongMessageId(selectedFragment.end.id)') ||
       !contentSource.includes('if (boundary.strictStable) return false')) {
     fail('fragment marking: explicit end marker must remain stable and marking exit must stay visible');
   }
