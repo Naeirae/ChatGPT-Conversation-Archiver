@@ -416,14 +416,9 @@ async function compactCompatibleDrafts(drafts = []) {
       Number(b.messages?.length || 0) - Number(a.messages?.length || 0) ||
       String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
     )[0];
-    const before = members.length;
-    await reconcileUnfinishedPrefix(canonical);
-    const remaining = (await listDrafts()).filter(item =>
-      item?.id &&
-      unfinishedGroupKey(item) === unfinishedGroupKey(canonical) &&
-      ['walk', 'finalizing'].includes(item.capturePhase || '')
-    );
-    if (remaining.length < before) changed = true;
+    const merged = await reconcileUnfinishedPrefix(canonical);
+    if (merged?.id && merged.id !== canonical.id &&
+        !drafts.some(item => item.id === merged.id)) changed = true;
   }
   return changed ? await listDrafts() : drafts;
 }
@@ -3033,7 +3028,10 @@ async function resumeUnfinishedInSavedTab(passId = '') {
     await chrome.storage.local.set({ ['draft:' + draft.id]: draft });
   }
 
-  const recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
+  let recovery = await resolveDraftRecoveryTab(draft.id, draft.sourceUrl || '');
+  if (!recovery.available && draft.id !== passId) {
+    recovery = await resolveDraftRecoveryTab(passId, draft.sourceUrl || '');
+  }
   if (!recovery.available) {
     throw new Error('Та вкладка, в которой оборвался этот проход, уже недоступна.');
   }
@@ -3055,8 +3053,8 @@ async function resumeUnfinishedInSavedTab(passId = '') {
   // path can be reused even after another job or service-worker restart.
   await setJob({
     status: 'error',
-    draftId: passId,
-    recoveryDraftId: passId,
+    draftId: draft.id,
+    recoveryDraftId: draft.id,
     draftCount: draft.messages.length,
     resumeBaseCount: draft.messages.length,
     recoveryAvailable: true,
