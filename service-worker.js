@@ -2625,13 +2625,15 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (!lastMessage) throw new Error('В сохранённом незавершённом проходе нет точки, от которой можно продолжить.');
 
   const jobId = makeJobId();
-  const resumeNavigation = draft.capturePhase === 'top' &&
-    ['full', 'fragment', 'reconcile', 'images'].includes(draft.captureMode);
-  const resumeMode = resumeNavigation
-    ? draft.captureMode
-    : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
-        ? 'resume-draft'
-        : 'retry-walk');
+  const resumeNavigation = draft.captureMode !== 'fragment' && draft.capturePhase === 'top' &&
+    ['full', 'reconcile', 'images'].includes(draft.captureMode);
+  const resumeMode = draft.captureMode === 'fragment'
+    ? 'resume-draft'
+    : resumeNavigation
+      ? draft.captureMode
+      : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
+          ? 'resume-draft'
+          : 'retry-walk');
   const resumeTailSignatures = buildResumeTailSignatures(draft.messages, 4);
   const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
@@ -2952,9 +2954,9 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
 
 
   return startCapture({
-    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'reconcile', 'images'].includes(draft.captureMode)
+    mode: draft.captureMode !== 'fragment' && draft.capturePhase === 'top' && ['full', 'reconcile', 'images'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
-    resumeNavigation: draft.capturePhase === 'top',
+    resumeNavigation: draft.captureMode !== 'fragment' && draft.capturePhase === 'top',
     resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
@@ -3337,7 +3339,7 @@ async function handleCaptureComplete(message) {
       await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: partialMerge.archiveId });
       await indexArchive(await getArchive(partialMerge.archiveId));
     }
-  } else if (message.mode !== 'compare' && message.mode !== 'fragment') {
+  } else if (message.mode !== 'compare' && !archive.isFragment) {
     await indexArchive(archive);
   }
 
@@ -3379,7 +3381,7 @@ async function handleCaptureComplete(message) {
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
 
-  if (message.mode === 'fragment' && archive.sourceUrl) {
+  if (archive.isFragment && archive.sourceUrl) {
     try {
       const source = new URL(archive.sourceUrl);
       const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
