@@ -3943,45 +3943,37 @@
     const right = (b || []).filter(ref => ref && (ref.strongId || ref.signature));
     if (!left.length || !right.length) return false;
 
-    // One real ChatGPT message ID is sufficient evidence that the two
-    // virtualized windows overlap.
+    // One immutable ChatGPT message ID is sufficient to prove identity.
     for (const x of left) {
       if (!x.strongId) continue;
       if (right.some(y => y.strongId && y.strongId === x.strongId)) return true;
     }
 
-    // Virtualized viewports do not necessarily align tail-to-head after a
-    // wheel step. Preserve the proven 0.3.87 rule: any ordered run of at least
-    // two adjacent messages shared by both windows proves continuity.
-    // Standalone text is never enough.
+    // Text repeats can form convincing but false windows. Accept a weak
+    // multi-turn sequence only when it has one placement in each viewport.
+    // If both DOM turns carry distinct strong IDs, text equality is not proof.
+    const weakCompatible = (x, y) => {
+      if (x.strongId && y.strongId) return x.strongId === y.strongId;
+      return Boolean(x.signature && y.signature && x.signature === y.signature);
+    };
     const maxLength = Math.min(6, left.length, right.length);
     for (let length = maxLength; length >= 2; length--) {
+      const placements = [];
       for (let i = 0; i <= left.length - length; i++) {
         for (let j = 0; j <= right.length - length; j++) {
           let same = true;
           for (let offset = 0; offset < length; offset++) {
-            const l = left[i + offset];
-            const r = right[j + offset];
-            const strongSame = Boolean(
-              l.strongId &&
-              r.strongId &&
-              l.strongId === r.strongId
-            );
-            const textSame = Boolean(
-              l.signature &&
-              r.signature &&
-              l.signature === r.signature
-            );
-            if (!strongSame && !textSame) {
+            if (!weakCompatible(left[i + offset], right[j + offset])) {
               same = false;
               break;
             }
           }
-          if (same) return true;
+          if (same) placements.push([i, j]);
         }
       }
+      if (placements.length === 1) return true;
+      if (placements.length > 1) return false;
     }
-
     return false;
   }
 
