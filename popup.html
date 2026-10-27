@@ -145,7 +145,7 @@
       <div class="section-heading">
         <div>
           <div class="archive-label">Текущий чат</div>
-          <strong id="captureTitle">Собрать чат целиком</strong>
+          <strong id="captureTitle">Собрать диапазон</strong>
         </div>
         <span id="captureStateBadge" class="state-badge">…</span>
       </div>
@@ -155,7 +155,7 @@
         <div id="captureMeta" class="muted"></div>
       </div>
 
-      <div class="capture-location">
+      <div class="capture-location hidden">
         <label class="field compact-field">
           <span class="field-label-with-info">
             Где собирать
@@ -173,18 +173,18 @@
         <div id="captureTargetHint" class="muted"></div>
       </div>
 
-      <button id="capture" class="primary capture-primary">Собрать чат</button>
-      <button id="fragmentToggle" class="text-action" type="button" aria-expanded="false" aria-controls="fragmentPanel">Собрать фрагмент…</button>
-      <div id="fragmentPanel" class="inline-options hidden">
-        <p class="muted">Отметьте начало и/или конец прямо в чате. Обычная кнопка «Собрать чат» всегда собирает чат целиком.</p>
+      <button id="capture" class="primary capture-primary">Разметить диапазон</button>
+      <button id="fragmentToggle" class="hidden" type="button" aria-expanded="true" aria-controls="fragmentPanel">Диапазон</button>
+      <div id="fragmentPanel" class="inline-options">
+        <p class="muted">Сначала отметьте конец диапазона. Затем прокрутите чат к началу, отметьте начало и оставьте его видимым. Сбор пойдёт только вниз — без автоматического поиска верха.</p>
         <div class="inline-option-actions">
-          <button id="markFragment" class="compact-button" type="button">Отметить границы</button>
-          <button id="openMarkingTab" class="compact-button" type="button">Открыть рабочую вкладку</button>
-          <button id="captureFragment" class="compact-button primary" type="button">Собрать фрагмент</button>
+          <button id="markFragment" class="hidden" type="button">Разметить диапазон</button>
+          <button id="openMarkingTab" class="hidden" type="button">Открыть рабочую вкладку</button>
+          <button id="captureFragment" class="compact-button primary" type="button">Собрать отмеченный диапазон</button>
           <button id="clearMarkers" class="compact-button" type="button">Сбросить отметки</button>
-          <button id="copyFragment" class="compact-button" type="button">Скопировать последний фрагмент</button>
+          <button id="copyFragment" class="hidden" type="button">Скопировать последний диапазон</button>
         </div>
-        <div id="fragmentHint" class="muted"></div>
+        <div id="fragmentHint" class="muted">Нужны две отметки: начало и конец.</div>
       </div>
 
       <div id="captureControls" class="capture-controls">
