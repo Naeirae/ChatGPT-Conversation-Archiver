@@ -551,6 +551,35 @@ try {
       !serviceWorkerSource.includes("if (mode === 'fragment' && (!markers.start || !markers.end))")) {
     fail('manual range UX: primary capture must mark and collect an explicit current-tab range without automatic full-chat navigation');
   }
+  // Verify the worker contract independently of the popup. Recovery alarms
+  // and direct startCapture callers must not bypass the positioned-tab rule.
+  const startCaptureStart = serviceWorkerSource.indexOf('async function startCapture({');
+  const startCaptureEnd = serviceWorkerSource.indexOf('async function scheduleAutomaticRecovery(', startCaptureStart);
+  const startCaptureBlock = startCaptureStart >= 0 && startCaptureEnd > startCaptureStart
+    ? serviceWorkerSource.slice(startCaptureStart, startCaptureEnd)
+    : '';
+  const finishErrorStart = serviceWorkerSource.indexOf('async function finishJobWithError(');
+  const finishErrorEnd = serviceWorkerSource.indexOf('async function ', finishErrorStart + 10);
+  const finishErrorBlock = finishErrorStart >= 0 && finishErrorEnd > finishErrorStart
+    ? serviceWorkerSource.slice(finishErrorStart, finishErrorEnd)
+    : '';
+  const autoRecoveryStart = serviceWorkerSource.indexOf('async function attemptAutomaticRecovery(');
+  const autoRecoveryEnd = serviceWorkerSource.indexOf('async function finishJobWithError(', autoRecoveryStart);
+  const autoRecoveryBlock = autoRecoveryStart >= 0 && autoRecoveryEnd > autoRecoveryStart
+    ? serviceWorkerSource.slice(autoRecoveryStart, autoRecoveryEnd)
+    : '';
+  const navigationResumeStart = serviceWorkerSource.indexOf('async function resumeNavigationOnlyFromWorkingTab(');
+  const navigationResumeEnd = serviceWorkerSource.indexOf('async function attemptAutomaticRecovery(', navigationResumeStart);
+  const navigationResumeBlock = navigationResumeStart >= 0 && navigationResumeEnd > navigationResumeStart
+    ? serviceWorkerSource.slice(navigationResumeStart, navigationResumeEnd)
+    : '';
+  if (!startCaptureBlock.includes("captureTarget = mode === 'fragment' ? 'current'") ||
+      !finishErrorBlock.includes("job.captureMode !== 'fragment'") ||
+      !autoRecoveryBlock.includes("failedJob.captureMode === 'fragment'") ||
+      navigationResumeBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)") ||
+      finishErrorBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)")) {
+    fail('manual range isolation: force positioned current tab; never restart range through legacy navigation recovery or stale alarms');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
