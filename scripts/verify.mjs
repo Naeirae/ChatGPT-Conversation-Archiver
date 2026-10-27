@@ -337,7 +337,7 @@ try {
   const startProofEnd = contentSource.indexOf('function firstVisibleTurnSignature()', startProofBegin);
   const startProofBlock = contentSource.slice(startProofBegin, startProofEnd);
   if (!startProofBlock.includes("document.querySelectorAll('[data-testid=\"conversation-turn-0\"]')") ||
-      startProofBlock.includes("document.querySelectorAll('[data-chatgpt-search-unit-key^=\"fallback-turn-0:"]")) {
+      startProofBlock.includes("querySelectorAll('[data-chatgpt-search-unit-key")) {
     fail('top detection: only a globally indexed turn may prove first-message presence; virtual fallback-turn-0 is not the first conversation message');
   }
 
