@@ -3384,6 +3384,8 @@ async function handleCaptureComplete(message) {
   // needed.
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
+  // The just-completed archive should be immediately previewable in the popup.
+  await chrome.storage.local.set({ selectedArchiveId: archive.id });
 
   if (archive.isFragment && archive.sourceUrl) {
     try {
