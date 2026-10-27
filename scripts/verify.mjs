@@ -10,6 +10,7 @@ const jsFiles = [
   'offscreen.js',
   'lib/text.mjs',
   'lib/urls.mjs',
+  'lib/draft-overlap.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -641,12 +642,19 @@ try {
       !serviceWorkerSource.includes("'manual-range',\n    'start:'")) {
     fail('draft grouping: manually bounded capture must retain the same range identity across resume modes');
   }
-  if (!serviceWorkerSource.includes('function verifiedDraftPrefixOverlap(left, right)') ||
-      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(draft, candidate)') ||
-      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(item, witness)') ||
-      !serviceWorkerSource.includes("'|diverged:' + String(item.id)") ||
-      !serviceWorkerSource.includes('conversationKey(item.sourceUrl || \'\') === source')) {
-    fail('draft grouping: same chat title is not proof; only matching conversation ID, boundary, range and chronological prefix allow merging');
+  const overlapModuleSource = await readFile('lib/draft-overlap.mjs', 'utf8');
+  if (!overlapModuleSource.includes('export function verifiedChronologicalOverlap(') ||
+      !overlapModuleSource.includes('export function groupVerifiedDraftWindows(') ||
+      !overlapModuleSource.includes('export function sameDraftCaptureScope(') ||
+      !serviceWorkerSource.includes('groupVerifiedDraftWindows(candidateDrafts)') ||
+      !serviceWorkerSource.includes('sameDraftCaptureScope(draft, item)') ||
+      !serviceWorkerSource.includes('verifiedChronologicalOverlap(messages, candidate.messages)') ||
+      !serviceWorkerSource.includes('mergeVerifiedTurns(') ||
+      !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
+      !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
+      !serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated })') ||
+      serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + draft.id]: updated })')) {
+    fail('draft grouping: only uniquely verified chronological overlaps with exact chat/snapshot/range identity may merge into a new preserved snapshot');
   }
   const libraryStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
   if (!serviceWorkerSource.includes('async function listLinkedArchivesFast()') ||
@@ -992,6 +1000,7 @@ const tests = spawnSync(process.execPath, [
   'tests/text.test.mjs',
   'tests/urls.test.mjs',
   'tests/archive-store.test.mjs',
+  'tests/draft-overlap.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
   'tests/document-parts.test.mjs'
