@@ -648,6 +648,7 @@ try {
       !serviceWorkerSource.includes('conversationKey(item.sourceUrl || \'\') === source')) {
     fail('draft grouping: same chat title is not proof; only matching conversation ID, boundary, range and chronological prefix allow merging');
   }
+  const libraryStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
   if (!serviceWorkerSource.includes('async function listLinkedArchivesFast()') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_GET_SAVED_ARCHIVES_FAST':") ||
       !serviceWorkerSource.includes("case 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS':") ||
@@ -656,7 +657,7 @@ try {
       !popupJs.includes('async function hydrateSavedArchiveDetails()') ||
       !popupJs.includes("item.messageCount) ? item.messageCount : '…'") ||
       !popupJs.includes('void loadFastArchiveLibrary().catch(') ||
-      !archiveStoreSource.includes('messageCount: Number(conversation.messages?.length || 0)')) {
+      !libraryStoreSource.includes('messageCount: Number(conversation.messages?.length || 0)')) {
     fail('saved archive library: show counts from lightweight metadata first and hydrate legacy details separately');
   }
   const popupStateStart = serviceWorkerSource.indexOf("case 'ARCHIVER_GET_STATE':");
