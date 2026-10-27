@@ -4312,11 +4312,13 @@
 
       const markerEnd = (mode === 'fragment') && selectedFragment.end
         ? {
-            kind: selectedFragment.end.id ? 'stable' : 'signature',
-            key: selectedFragment.end.id || selectedFragment.end.signature,
+            kind: isStrongMessageId(selectedFragment.end.id) ? 'stable' : 'signature',
+            key: isStrongMessageId(selectedFragment.end.id)
+              ? selectedFragment.end.id : selectedFragment.end.signature,
             role: selectedFragment.end.role || '',
             signature: selectedFragment.end.signature || '',
-            strictStable: Boolean(selectedFragment.end.id)
+            contextBefore: selectedFragment.end.contextBefore || [],
+            strictStable: isStrongMessageId(selectedFragment.end.id)
           }
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
@@ -5274,17 +5276,30 @@
     const role = roleOf(turn);
     const signature = turnTextSignature(turn);
     const id = turnStableKey(turn);
-    return role && (id || signature) ? { id, signature, role } : null;
+    const turns = orderedTurns();
+    const index = turns.indexOf(turn);
+    const contextBefore = index > 0 ? boundaryContextBefore(turns, index, 3) : [];
+    return role && (id || signature)
+      ? { id, signature, role, contextBefore } : null;
   }
   function markerIdentityMatches(anchor, candidate) {
     if (!anchor || !candidate) return false;
-    if (anchor.id && candidate.id && anchor.id === candidate.id) return true;
-    const anchorSignature = String(anchor.signature || '');
-    const candidateSignature = String(candidate.signature || '');
-    if (!anchorSignature || !candidateSignature || anchorSignature !== candidateSignature) return false;
-    const anchorRole = String(anchor.role || '');
-    const candidateRole = String(candidate.role || '');
-    return !anchorRole || !candidateRole || anchorRole === candidateRole;
+    const roleMatches = !anchor.role || !candidate.role || anchor.role === candidate.role;
+    const signatureMatches = Boolean(
+      anchor.signature && candidate.signature && anchor.signature === candidate.signature
+    );
+    if (!roleMatches || !signatureMatches) return false;
+    if (isStrongMessageId(anchor.id) && isStrongMessageId(candidate.id) &&
+        anchor.id !== candidate.id) return false;
+    const before = Array.isArray(anchor.contextBefore) ? anchor.contextBefore : [];
+    const actual = Array.isArray(candidate.contextBefore) ? candidate.contextBefore : null;
+    if (actual && before.length &&
+        (actual.length < before.length ||
+          !before.every((signature, i) =>
+            signature === actual[actual.length - before.length + i]))) return false;
+    return Boolean(
+      (anchor.id && candidate.id && anchor.id === candidate.id) || signatureMatches
+    );
   }
 
   function anchorMatches(message, anchor) {
