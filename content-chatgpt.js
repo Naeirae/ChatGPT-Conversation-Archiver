@@ -3956,6 +3956,21 @@
       if (x.strongId && y.strongId) return x.strongId === y.strongId;
       return Boolean(x.signature && y.signature && x.signature === y.signature);
     };
+    // An A-B-A-B pattern can match as one four-turn window while its
+    // underlying two-turn witness is repeated. Such weak evidence cannot
+    // distinguish a stationary viewport from progress.
+    const hasRepeatedWeakPair = refs => {
+      const seen = new Set();
+      for (let i = 0; i + 1 < refs.length; i++) {
+        const a = refs[i], b = refs[i + 1];
+        if (a.strongId || b.strongId || !a.signature || !b.signature) continue;
+        const pair = JSON.stringify([a.signature, b.signature]);
+        if (seen.has(pair)) return true;
+        seen.add(pair);
+      }
+      return false;
+    };
+    if (hasRepeatedWeakPair(left) || hasRepeatedWeakPair(right)) return false;
     const maxLength = Math.min(6, left.length, right.length);
     for (let length = maxLength; length >= 2; length--) {
       const placements = [];
