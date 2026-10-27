@@ -987,7 +987,7 @@ function render(data) {
     ? (isFragmentRun
         ? 'Собирается выбранный фрагмент…'
         : (job?.captureTarget === 'copy' ? 'Сбор идёт в фоновой вкладке…' : 'Сбор идёт в текущей вкладке…'))
-    : 'Собрать чат';
+    : 'Разметить диапазон';
   $('continue').disabled = Boolean(running || !state.canContinue);
   $('syncDoc').disabled = Boolean(running);
   $('docUrl').disabled = Boolean(running);
@@ -1008,8 +1008,8 @@ function render(data) {
     job?.captureTabId != null &&
     ['full', 'images', 'images-draft', 'reconcile', 'retry-walk'].includes(job?.captureMode || '')
   );
-  $('confirmTop').classList.toggle('hidden', !canConfirmTop);
-  $('confirmTop').disabled = !canConfirmTop;
+  $('confirmTop').classList.add('hidden');
+  $('confirmTop').disabled = true;
   $('pauseCapture').classList.toggle('hidden', !activelyRunning);
   $('pauseCapture').textContent = job?.status === 'starting' ? 'Пауза (запуск)' : 'Пауза';
   $('captureControls').classList.toggle('hidden', !running);
@@ -1241,38 +1241,24 @@ async function exportToDoc(type, payload = {}) {
   return result;
 }
 
-$('fragmentToggle').onclick = () => {
-  const panel = $('fragmentPanel');
-  const nextOpen = panel.classList.contains('hidden');
-  panel.classList.toggle('hidden', !nextOpen);
-  $('fragmentToggle').setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
-  $('fragmentToggle').textContent = nextOpen ? 'Скрыть фрагмент' : 'Собрать фрагмент…';
-};
+$('fragmentToggle').onclick = () => {};
 
 $('capture').onclick = async () => {
-  $('capture').disabled = true;
-  const captureTarget = $('captureTarget').value;
-  setStatus(
-    captureTarget === 'copy'
-      ? 'Запускаю сбор в рабочей копии…'
-      : 'Запускаю сбор в текущей вкладке…'
-  );
+  const button = $('capture');
+  button.disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({
-      type: 'ARCHIVER_CAPTURE_CURRENT',
-      captureTarget
+      type: 'ARCHIVER_TOGGLE_MARKING_CURRENT'
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор.');
-    render({
-      ...state,
-      job: result.job,
-      archive: state?.archive || null,
-      unfinishedPass: null
-    });
-    startPolling();
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось включить разметку диапазона.');
+    button.textContent = result.enabled ? 'Завершить разметку' : 'Разметить диапазон';
+    $('fragmentHint').textContent = result.enabled
+      ? 'Разметка включена: кликните по реплике и поставьте «Начало» или «Конец» на панели в чате.'
+      : 'Разметка выключена. Для запуска оставьте отмеченное начало видимым.';
   } catch (error) {
     setStatus(error.message || String(error), true);
-    $('capture').disabled = false;
+  } finally {
+    button.disabled = false;
   }
 };
 
@@ -1356,10 +1342,10 @@ $('captureFragment').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CAPTURE_FRAGMENT',
-      captureTarget: $('captureTarget').value
+      captureTarget: 'current'
     });
-    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор фрагмента.');
-    $('fragmentHint').textContent = 'Сбор отмеченного фрагмента запущен.';
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор диапазона.');
+    $('fragmentHint').textContent = 'Сбор отмеченного диапазона запущен.';
     startPolling();
   } catch (error) {
     $('fragmentHint').textContent = error.message || String(error);
