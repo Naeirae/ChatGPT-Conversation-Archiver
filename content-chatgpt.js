@@ -3978,6 +3978,7 @@
     {
       bursts = 1,
       requireBoundary = false,
+      recoverLoadErrors = true,
       hydrateImages = false,
       attemptedImageSources = new Set()
     } = {}
@@ -3989,7 +3990,7 @@
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
 
-      if (await recoverVisibleLoadError('walk', map.size)) {
+      if (recoverLoadErrors && await recoverVisibleLoadError('walk', map.size)) {
         scrollRuntime().resetStabilityState(stability);
       }
 
@@ -4460,6 +4461,7 @@
         : await walkDown(map, order, settings, boundary, {
             bursts: 1,
             requireBoundary: mode === 'fragment',
+            recoverLoadErrors: mode !== 'fragment',
             hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
           });
