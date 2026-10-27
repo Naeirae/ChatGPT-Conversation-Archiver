@@ -573,12 +573,35 @@ try {
   const navigationResumeBlock = navigationResumeStart >= 0 && navigationResumeEnd > navigationResumeStart
     ? serviceWorkerSource.slice(navigationResumeStart, navigationResumeEnd)
     : '';
-  if (!startCaptureBlock.includes("captureTarget = mode === 'fragment' ? 'current'") ||
+  if (!startCaptureBlock.includes("(mode === 'fragment' ||") ||
+      !startCaptureBlock.includes("providedDraft?.captureMode === 'fragment'") ||
       !finishErrorBlock.includes("job.captureMode !== 'fragment'") ||
       !autoRecoveryBlock.includes("failedJob.captureMode === 'fragment'") ||
       navigationResumeBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)") ||
       finishErrorBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)")) {
     fail('manual range isolation: force positioned current tab; never restart range through legacy navigation recovery or stale alarms');
+  }
+  const contentResumeBlock = contentSource.slice(
+    contentSource.indexOf('async function captureConversation('),
+    contentSource.indexOf('async function captureConversation(') + 40000
+  );
+  const savedResumeStart = serviceWorkerSource.indexOf('async function resumeSavedUnfinishedPass(');
+  const savedResumeEnd = serviceWorkerSource.indexOf('async function ', savedResumeStart + 10);
+  const savedResumeBlock = serviceWorkerSource.slice(savedResumeStart, savedResumeEnd);
+  const failedResumeStart = serviceWorkerSource.indexOf('async function resumeFailedCaptureFromWorkingTab(');
+  const failedResumeEnd = serviceWorkerSource.indexOf('async function ', failedResumeStart + 10);
+  const failedResumeBlock = serviceWorkerSource.slice(failedResumeStart, failedResumeEnd);
+  const completionStart = serviceWorkerSource.indexOf('async function handleCaptureComplete(');
+  const completionEnd = serviceWorkerSource.indexOf('async function ', completionStart + 10);
+  const completionBlock = serviceWorkerSource.slice(completionStart, completionEnd);
+  if (!contentResumeBlock.includes("resumedDraft?.captureMode === 'fragment'") ||
+      !contentResumeBlock.includes('isFragment: preservingManualRange') ||
+      !contentResumeBlock.includes('fragmentLatestId: archiveId') ||
+      !failedResumeBlock.includes("draft.captureMode === 'fragment'") ||
+      !savedResumeBlock.includes("draft.captureMode !== 'fragment'") ||
+      !completionBlock.includes("!archive.isFragment") ||
+      !completionBlock.includes("if (archive.isFragment && archive.sourceUrl)")) {
+    fail('manual range draft resume: preserve original fragment identity, current-tab frontier and separate archive index');
   }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
