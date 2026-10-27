@@ -4200,8 +4200,8 @@
           (await chrome.storage.local.get(fragmentStorageKey()))[fragmentStorageKey()] ||
           {})
         : null;
-      if (mode === 'fragment' && !selectedFragment.start && !selectedFragment.end) {
-        throw new Error('Отметьте начало или конец фрагмента прямо в чате.');
+      if (mode === 'fragment' && (!selectedFragment.start || !selectedFragment.end)) {
+        throw new Error('Для ручного диапазона отметьте и начало, и конец.');
       }
       await progress(
         mode === 'full'
@@ -4319,25 +4319,48 @@
             fullCapture: true,
             timeoutMs: 20 * 60 * 1000
           });
+        } else if (mode === 'fragment') {
+          // Manual range is authoritative. Do not search upward or visit the
+          // lower boundary first. The user positions the current tab at the
+          // marked start; collection then moves only downward to the marked end.
+          const visibleStart = orderedTurns().find(turn => {
+            const anchor = fragmentAnchor(turn);
+            return anchor && markerIdentityMatches(selectedFragment.start, anchor);
+          });
+          if (!visibleStart) {
+            throw new Error(
+              'Отмеченное начало сейчас не видно. Прокрутите текущую вкладку к отметке «Начало» и запустите сбор снова.'
+            );
+          }
+
+          map.clear();
+          order.length = 0;
+          navigationMessages = [];
+          navigationSequence = [];
+          navigationHighWater = 0;
+
+          await progress(
+            'Начало диапазона видно · собираю только вниз до отмеченного конца…',
+            0,
+            {
+              phase: 'walk',
+              navigationOnly: true,
+              manualRange: true,
+              force: true
+            }
+          );
         } else {
-          // Rich upward scans normally begin at the fixed lower boundary. Manual
-          // full-range capture is different: the user already chose an explicit
-          // end marker, so travelling to that marker before finding the start
-          // only adds a redundant down/up pass. Start from the explicit start
-          // marker and let the chronological walk stop at the saved end marker.
           if (boundary && !boundaryIsVisible(boundary)) {
             await locateBoundaryForUpwardScan(boundary);
           }
           map.clear();
           order.length = 0;
-          // Image recovery still benefits from a rich upward scan, and fragment
-          // capture may need to discover its explicit start marker.
           await reachTop(
             map,
             order,
             settings,
             navigationWindows,
-            (mode === 'fragment') ? selectedFragment.start || null : null,
+            null,
             boundary
           );
           navigationMessages = [...map.values()];
@@ -4411,7 +4434,7 @@
             force: true
           }
         );
-      } else if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      } else if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile') {
         navigationHighWater = map.size;
         const firstAtTop = orderedTurns()[0] || null;
         navigationFirstId = firstAtTop ? turnStableKey(firstAtTop) : '';
@@ -4436,7 +4459,7 @@
         ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
             bursts: 1,
-            requireBoundary: false,
+            requireBoundary: mode === 'fragment',
             hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
           });
@@ -4480,7 +4503,7 @@
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
 
-      if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
+      if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile') {
         const reconciliation = reconcileNavigationCoverage(
           capturedMessages,
           navigationMessages,
