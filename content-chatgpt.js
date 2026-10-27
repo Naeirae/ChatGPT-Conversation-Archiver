@@ -946,11 +946,17 @@
 
   function matchesBoundary(turn, boundary) {
     if (!boundary || !turn) return false;
+    // A real ChatGPT message ID remains the same when surrounding turns are
+    // virtualized away. Its verified identity is stronger than stale context.
+    if (boundary.kind === 'stable' &&
+        isStrongMessageId(boundary.key)) {
+      return turnStableKey(turn) === boundary.key;
+    }
     const contextMatches = boundaryContextMatchesTurns(turn, boundary);
     if (boundary.kind === 'stable') {
       if (turnStableKey(turn) === boundary.key) return contextMatches;
-      // Explicitly marked boundaries are user-selected message identities.
-      // They must never stop early on another message with identical text.
+      // Weak virtual wrapper IDs can be recycled; do not stop at repeated
+      // text unless the original surrounding message context also matches.
       if (boundary.strictStable) return false;
       return Boolean(
         boundary.signature &&
@@ -969,8 +975,56 @@
     return scrollRuntime().physicalScrollStartVisible(orderedTurns());
   }
 
+  function rectIntersectsCaptureViewport(
+    targetRect, viewportWidth, viewportHeight, scrollportRect = null, minPixels = 2
+  ) {
+    if (!targetRect) return false;
+    const t = targetRect;
+    const values = [t.left, t.right, t.top, t.bottom, viewportWidth, viewportHeight]
+      .map(Number);
+    if (!values.every(Number.isFinite) ||
+        values[1] <= values[0] || values[3] <= values[2] ||
+        values[4] <= 0 || values[5] <= 0) return false;
+    let left = Math.max(values[0], 0);
+    let right = Math.min(values[1], values[4]);
+    let top = Math.max(values[2], 0);
+    let bottom = Math.min(values[3], values[5]);
+    if (scrollportRect) {
+      const r = scrollportRect;
+      if (![r.left, r.right, r.top, r.bottom].map(Number).every(Number.isFinite)) return false;
+      left = Math.max(left, Number(r.left));
+      right = Math.min(right, Number(r.right));
+      top = Math.max(top, Number(r.top));
+      bottom = Math.min(bottom, Number(r.bottom));
+    }
+    const minimum = Math.max(1, Number(minPixels) || 2);
+    return right - left >= minimum && bottom - top >= minimum;
+  }
+
+  function turnIntersectsCaptureViewport(turn) {
+    if (!turn?.isConnected) return false;
+    const root = contentRoot(turn, roleOf(turn)) || turn;
+    const element = root.getBoundingClientRect();
+    const scroller = findScrollContainer(turn);
+    const documentRoot = !scroller ||
+      scroller === document.documentElement ||
+      scroller === document.body ||
+      scroller === document.scrollingElement;
+    const scrollerRect = documentRoot ? null : scroller.getBoundingClientRect();
+    return rectIntersectsCaptureViewport(
+      element,
+      window.innerWidth || document.documentElement.clientWidth,
+      window.innerHeight || document.documentElement.clientHeight,
+      scrollerRect
+    );
+  }
+
   function boundaryIsVisible(boundary) {
-    return Boolean(boundary && orderedTurns().some(turn => matchesBoundary(turn, boundary)));
+    // Querying a present DOM turn is not enough: virtualized ChatGPT can keep
+    // the marked end mounted well outside the physical scroll viewport.
+    return Boolean(boundary && orderedTurns().some(turn =>
+      matchesBoundary(turn, boundary) && turnIntersectsCaptureViewport(turn)
+    ));
   }
 
   function findScrollContainer(turn) {
@@ -1748,8 +1802,12 @@
       if (state.cancel) throw new Error('Сбор отменен.');
 
       try {
-        const blob = await fetchImageBinary(refs[0]);
-        const dataUrl = await blobToDataUrl(blob);
+        const blob = await withCaptureOperationTimeout(
+          fetchImageBinary(refs[0]), 45000, 'Получение изображения'
+        );
+        const dataUrl = await withCaptureOperationTimeout(
+          blobToDataUrl(blob), 15000, 'Кодирование изображения'
+        );
         for (const image of refs) {
           image.dataUrl = dataUrl;
           image.mimeType = blob.type || 'image/png';
@@ -1945,6 +2003,9 @@
 
   function messageMatchesBoundary(message, boundary, rows = [], index = -1) {
     if (!message || !boundary) return false;
+    if (boundary.kind === 'stable' && isStrongMessageId(boundary.key)) {
+      return message.id === boundary.key;
+    }
     const contextMatches = messageBoundaryContextMatches(rows, index, boundary);
     if (boundary.kind === 'stable') {
       if (message.id === boundary.key) return contextMatches;
@@ -2488,25 +2549,47 @@
     return { ok: false, error: 'Фоновый процесс недоступен; контрольные точки сохраняются отдельно.' };
   }
 
+  async function withCaptureOperationTimeout(operation, timeoutMs, label) {
+    let timeoutId;
+    try {
+      return await Promise.race([
+        Promise.resolve(operation),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error(
+            label + ': не получен ответ за ' + Math.ceil(timeoutMs / 1000) + ' с.'
+          )), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
   async function progress(message, count, extra) {
     const now = Date.now();
     if (now - lastProgressAt < 1500 && !(extra && extra.force)) return;
     lastProgressAt = now;
     const patch = Object.assign({ status: 'running', message, count }, extra || {});
+    const strictFinalization = Boolean(extra?.finalizationStep);
     try {
-      const result = await chrome.runtime.sendMessage({
+      const request = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_PROGRESS',
         jobId: state.jobId,
         patch
       });
+      const result = strictFinalization
+        ? await withCaptureOperationTimeout(request, 30000, 'Сохранение состояния Архиватора')
+        : await request;
       if (result?.ok) return result;
       if (result && result.ok === false) {
         throw new Error(result.error || 'Фоновый процесс остановил этот сбор.');
       }
     } catch (error) {
-      // A concrete response from the worker means the run is no longer active;
-      // do not keep driving the tab after the popup has declared it stopped.
-      if (error?.message && /останов|неактуал|Прогресс пришел не из вкладки сбора/i.test(error.message)) {
+      // A missing acknowledgement during final persistence cannot be treated
+      // as an optional progress update: preserve a draft and stop rather than
+      // leaving the popup silently in the image-loading phase.
+      if (strictFinalization ||
+          (error?.message && /останов|неактуал|Прогресс пришел не из вкладки сбора/i.test(error.message))) {
         throw error;
       }
     }
@@ -4405,7 +4488,8 @@
           // marked start; collection then moves only downward to the marked end.
           const visibleStart = orderedTurns().find(turn => {
             const anchor = fragmentAnchor(turn);
-            return anchor && markerIdentityMatches(selectedFragment.start, anchor);
+            return anchor && turnIntersectsCaptureViewport(turn) &&
+              markerIdentityMatches(selectedFragment.start, anchor);
           });
           if (!visibleStart) {
             throw new Error(
@@ -4704,10 +4788,12 @@
 
       if (mode === 'fragment') {
         const startMatches = selectedFragment.start
-          ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.start) ? [i] : [])
+          ? capturedMessages.flatMap((item, i) =>
+              anchorMatches(item, selectedFragment.start, capturedMessages, i) ? [i] : [])
           : [0];
         const endMatches = selectedFragment.end
-          ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.end) ? [i] : [])
+          ? capturedMessages.flatMap((item, i) =>
+              anchorMatches(item, selectedFragment.end, capturedMessages, i) ? [i] : [])
           : [capturedMessages.length - 1];
         if (startMatches.length !== 1 || endMatches.length !== 1) {
           throw new Error('Невозможно однозначно определить отмеченные реплики.');
@@ -5029,23 +5115,52 @@
         } : undefined
       };
 
-      // Store the finished archive independently of the job record.
+      // Image hydration can be complete while the popup still reads 2/2.
+      // Split write and worker-ack into distinct, observable stages.
+      await progress(
+        'Этап 3/3: изображения обработаны · записываю локальный архив…',
+        messages.length,
+        {
+          phase: 'finalizing',
+          finalizationStep: 'write-archive',
+          imageBinaryProcessed: binaryStats.unique,
+          imageBinaryTotal: binaryStats.unique,
+          imageBinaryReady: conversation.imageBinaryReady,
+          imageBinaryFailed: conversation.imageBinaryFailed,
+          force: true
+        }
+      );
+      // Only the worker may publish lastArchiveId after it validates the
+      // result. Keep a rejected archive under its private key for recovery.
       await chrome.storage.local.set({
-        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        lastArchiveId: archiveId
+        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId })
       });
-
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_CAPTURE_COMPLETE',
-          jobId,
-          archiveId,
-          count: messages.length,
-          addedCount,
-          imageRecoveredCount: recoveredImageRefs.length,
-          mode
-        });
-      } catch (_) {}
+      await progress(
+        'Этап 3/3: локальная запись завершена · подтверждаю архив…',
+        messages.length,
+        { phase: 'finalizing', finalizationStep: 'confirm-complete', force: true }
+      );
+      const completionRequest = chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_COMPLETE',
+        jobId,
+        archiveId,
+        count: messages.length,
+        addedCount,
+        imageRecoveredCount: recoveredImageRefs.length,
+        mode
+      });
+      const completion = ['fragment', 'full'].includes(mode)
+        ? await withCaptureOperationTimeout(
+            completionRequest, 90000, 'Подтверждение полного архива'
+          )
+        : await completionRequest;
+      if (!completion?.ok || completion.status !== 'done') {
+        throw new Error(
+          'Фоновый процесс не подтвердил завершение: ' +
+          (completion?.error || completion?.status || 'нет ответа') +
+          '. Сохранённая часть остаётся доступной для восстановления.'
+        );
+      }
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
@@ -5053,6 +5168,17 @@
 
       let draftId = '';
       let draftCount = 0;
+      // If the worker already rejected this candidate into a dedicated
+      // recoverable draft, don't overwrite its verified image/text snapshot
+      // with an older DOM map when the acknowledgement returns as an error.
+      if (current.status === 'error' && current.draftId) {
+        const key = 'draft:' + current.draftId;
+        const saved = (await chrome.storage.local.get(key))[key];
+        if (saved?.recoveredFromArchiveId && saved.messages?.length) {
+          draftId = current.draftId;
+          draftCount = saved.messages.length;
+        }
+      }
 
       // Image recovery is additive and safe to persist incrementally. If a full
       // image pass fails after finding some lazy-loaded images, merge and embed
@@ -5097,7 +5223,7 @@
         }
       }
 
-      if (mode !== 'images-draft' &&
+      if (!draftId && mode !== 'images-draft' &&
           (chronologicalStarted || current.phase === 'top') && map.size > 0) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
@@ -5283,12 +5409,15 @@
   function markerIdentityMatches(anchor, candidate) {
     if (!anchor || !candidate) return false;
     const roleMatches = !anchor.role || !candidate.role || anchor.role === candidate.role;
+    if (!roleMatches) return false;
+    // The old 0.4.64 code additionally demanded the same text and neighbours
+    // even for immutable message IDs. This loses legitimate marked turns when
+    // ChatGPT virtualizes preceding messages or the text changes.
+    if (isStrongMessageId(anchor.id)) return anchor.id === candidate.id;
     const signatureMatches = Boolean(
       anchor.signature && candidate.signature && anchor.signature === candidate.signature
     );
-    if (!roleMatches || !signatureMatches) return false;
-    if (isStrongMessageId(anchor.id) && isStrongMessageId(candidate.id) &&
-        anchor.id !== candidate.id) return false;
+    if (!signatureMatches) return false;
     const before = Array.isArray(anchor.contextBefore) ? anchor.contextBefore : [];
     const actual = Array.isArray(candidate.contextBefore) ? candidate.contextBefore : null;
     if (actual && before.length &&
@@ -5300,11 +5429,24 @@
     );
   }
 
-  function anchorMatches(message, anchor) {
+  function anchorMatches(message, anchor, messages = null, index = -1) {
     if (!anchor || !message) return false;
+    // A persisted strong ID identifies a logical turn even after the nearby
+    // DOM/context disappears through ChatGPT virtualization.
+    if (isStrongMessageId(anchor.id)) return anchor.id === message.id;
+    const signature = messageTextSignature(message);
+    if (anchor.signature && anchor.signature !== signature) return false;
+    if (Array.isArray(messages) && index >= 0) {
+      // Final trimming must use the ORIGINAL marked neighbour context,
+      // otherwise a repeated text elsewhere in a long chat could be mistaken
+      // for the selected end marker.
+      return messageBoundaryContextMatches(messages, index, {
+        contextBefore: anchor.contextBefore || []
+      });
+    }
     return markerIdentityMatches(anchor, {
       id: String(message.id || ''),
-      signature: messageTextSignature(message),
+      signature,
       role: String(message.role || '')
     });
   }

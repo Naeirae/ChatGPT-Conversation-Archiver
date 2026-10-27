@@ -13,6 +13,8 @@ const jsFiles = [
   'lib/urls.mjs',
   'lib/draft-overlap.mjs',
   'lib/capture-evidence.mjs',
+  'lib/capture-viewport.mjs',
+  'lib/capture-recovery.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -73,6 +75,32 @@ try {
       !contentSource.includes('return INLINE_SCROLL_RUNTIME;')) {
     fail('scroll transport: content script must use its inline runtime and must not require a separate runtime file');
   }
+  // Physical marker arrival must be distinguishable from DOM presence.
+  // A large or virtualized chat may keep the marked end mounted off screen.
+  const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
+  const recoveryModule = await readFile('lib/capture-recovery.mjs', 'utf8');
+  const visibleBoundaryStart = contentSource.indexOf('function boundaryIsVisible(');
+  const visibleBoundaryEnd = contentSource.indexOf('function findScrollContainer()', visibleBoundaryStart);
+  const visibleBoundaryBlock = contentSource.slice(visibleBoundaryStart, visibleBoundaryEnd);
+  const endMatchStart = contentSource.indexOf('function matchesBoundary(');
+  const endMatchEnd = contentSource.indexOf('function physicalScrollEndVisible()', endMatchStart);
+  const endMatchBlock = contentSource.slice(endMatchStart, endMatchEnd);
+  if (!viewportModule.includes('export function rectIntersectsCaptureViewport(') ||
+      !recoveryModule.includes('export function buildRejectedCaptureDraft(') ||
+      !contentSource.includes('function turnIntersectsCaptureViewport(turn)') ||
+      !visibleBoundaryBlock.includes('turnIntersectsCaptureViewport(turn)') ||
+      !endMatchBlock.includes('isStrongMessageId(boundary.key)') ||
+      !contentSource.includes('anchor && turnIntersectsCaptureViewport(turn) &&') ||
+      !serviceWorkerSource.includes('buildRejectedCaptureDraft(archive, job, reason)') ||
+      !serviceWorkerSource.includes("STORAGE_KEYS.draftPrefix + rejected.id") ||
+      !serviceWorkerSource.includes('return {\n          ok: verified,') ||
+      !contentSource.includes("finalizationStep: 'write-archive'") ||
+      !contentSource.includes("finalizationStep: 'confirm-complete'") ||
+      !contentSource.includes("completion.status !== 'done'") ||
+      contentSource.includes("lastArchiveId: archiveId")) {
+    fail('0.4.65: marked boundaries must physically enter viewport; rejected capture remains a visible draft; finalization must require worker ACK');
+  }
+
   const retryStart = contentSource.indexOf('async function recoverVisibleLoadError');
   const retryEnd = contentSource.indexOf('async function getSettings', retryStart);
   const retryBlock = retryStart >= 0 && retryEnd > retryStart
@@ -625,7 +653,7 @@ try {
   if (!contentResumeBlock.includes("resumedDraft?.captureMode === 'fragment'") ||
       !contentResumeBlock.includes('isFragment: false') ||
       !contentResumeBlock.includes('manualRangeMarkers: manuallyBounded') ||
-      !contentResumeBlock.includes('lastArchiveId: archiveId') ||
+      !completionBlock.includes('[STORAGE_KEYS.lastArchiveId]: archive.id') ||
       !failedResumeBlock.includes("draft.captureMode === 'fragment'") ||
       !savedResumeBlock.includes("draft.captureMode !== 'fragment'") ||
       !completionBlock.includes("!archive.isFragment") ||
@@ -654,7 +682,7 @@ try {
       !serviceWorkerSource.includes('promoteMarkedPrimaryArchive(selectedCandidate)') ||
       !serviceWorkerSource.includes('const conversation = await promoteMarkedPrimaryArchive(') ||
       !contentResumeBlock.includes('isFragment: false') ||
-      !contentResumeBlock.includes('lastArchiveId: archiveId')) {
+      !completionBlock.includes('[STORAGE_KEYS.lastArchiveId]: archive.id')) {
     fail('manual full archive: bounded capture and legacy migration must allow normal Google Docs export and continuation');
   }
   if (!serviceWorkerSource.includes('const archive = await promoteMarkedPrimaryArchive(await getArchive(archiveId));') ||
@@ -1060,6 +1088,8 @@ const tests = spawnSync(process.execPath, [
   'tests/archive-store.test.mjs',
   'tests/draft-overlap.test.mjs',
   'tests/capture-evidence.test.mjs',
+  'tests/capture-viewport.test.mjs',
+  'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
   'tests/document-parts.test.mjs'
