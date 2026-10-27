@@ -4431,16 +4431,23 @@ async function chatScrollMetrics(tabId, direction = 'down') {
             )[0]) || document.scrollingElement || document.documentElement;
       }
 
-      const top = Number(scroller?.scrollTop || window.scrollY || 0);
+      const top = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       const clientHeight = Number(scroller?.clientHeight || innerHeight || 0);
       const scrollHeight = Number(
         scroller?.scrollHeight || document.documentElement.scrollHeight || 0
       );
       const threshold = Math.max(24, Math.round(clientHeight * 0.04));
+      const viewportToken = visibleTurns.slice(0, 2).concat(visibleTurns.slice(-2))
+        .map(turn => String(
+          turn.getAttribute('data-message-id') ||
+          turn.getAttribute('data-turn-id') ||
+          turn.innerText || turn.textContent || ''
+        ).slice(0, 180)).join('|');
       return {
         top,
         clientHeight,
         scrollHeight,
+        viewportToken,
         atStart: top <= threshold,
         atEnd: top + clientHeight >= scrollHeight - threshold
       };
@@ -4511,7 +4518,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
       }
 
       const amount = scrollSign * 860 * burstCount;
-      const before = Number(scroller?.scrollTop || window.scrollY || 0);
+      const before = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       if (
         scroller === document.documentElement ||
         scroller === document.body ||
@@ -4521,7 +4528,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
       } else {
         scroller.scrollBy({ top: amount, left: 0, behavior: 'auto' });
       }
-      const after = Number(scroller?.scrollTop || window.scrollY || 0);
+      const after = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       return {
         ok: true,
         method: 'scripted-scroll-fallback',
@@ -4599,7 +4606,11 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
   const afterMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
   const moved = Boolean(
     beforeMetrics && afterMetrics &&
-    Math.abs(Number(afterMetrics.top || 0) - Number(beforeMetrics.top || 0)) >= 2
+    (
+      Math.abs(Number(afterMetrics.top ?? 0) - Number(beforeMetrics.top ?? 0)) >= 2 ||
+      Boolean(beforeMetrics.viewportToken && afterMetrics.viewportToken &&
+        beforeMetrics.viewportToken !== afterMetrics.viewportToken)
+    )
   );
   const alreadyAtRequestedEdge = direction === 'up'
     ? Boolean(beforeMetrics?.atStart)
@@ -4611,6 +4622,8 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
       direction,
       bursts: count,
       method: moved ? 'debugger-wheel' : 'debugger-wheel-edge',
+      moved,
+      observedEdge: alreadyAtRequestedEdge,
       before: beforeMetrics?.top ?? null,
       after: afterMetrics?.top ?? null
     };
@@ -4625,11 +4638,19 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     'Резервная прокрутка ChatGPT'
   );
 
+  const fallbackMoved = Math.abs(Number(fallback.delta || 0)) >= 2;
+  const fallbackAtEdge = Boolean(
+    direction === 'up' ? afterMetrics?.atStart : afterMetrics?.atEnd
+  );
   return {
     ...fallback,
-    ok: true,
+    ok: fallbackMoved || fallbackAtEdge,
+    moved: fallbackMoved,
+    observedEdge: fallbackAtEdge,
     direction,
     bursts: count,
+    error: fallbackMoved || fallbackAtEdge ? '' :
+      'Прокрутка не сдвинула переписку и не подтвердила её физическую границу.',
     fallbackFrom: fallbackReason
   };
 }
