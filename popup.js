@@ -1193,8 +1193,7 @@ function render(data) {
       (attempted ? `Сбор остановлен после ${attempted} сообщений.` : 'Сбор остановлен.') +
       (hasUnfinished ? ' Сохранённую часть можно продолжить.' : '')
     );
-  } else if (completenessUnverified && archive?.messagesCount !== 0 &&
-             job?.status !== 'running' && job?.status !== 'starting') {
+  } else if (completenessUnverified) {
     setStatus(
       'Сохранено локально ' + Number(archive?.messageCount || 0) +
       ' сообщений. Полнота прежнего сбора не подтверждена; эти данные не следует считать всем чатом.',
