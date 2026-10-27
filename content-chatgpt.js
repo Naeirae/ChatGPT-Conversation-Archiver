@@ -2915,16 +2915,12 @@
   }
 
   function explicitConversationStartVisible() {
-    const selectors = [
-      '[data-testid="conversation-turn-0"]',
-      '[data-chatgpt-search-unit-key^="fallback-turn-0:"]',
-      '[data-chatgpt-search-unit-key="fallback-turn-0:user"]',
-      '[data-chatgpt-search-unit-key="fallback-turn-0:assistant"]'
-    ];
-
-    return selectors.some(selector =>
-      [...document.querySelectorAll(selector)].some(node => isVisible(node))
-    );
+    // A fallback-turn-0 index may be assigned to the FIRST RENDERED ITEM of
+    // any virtualized window. It is not proof of the real conversation start.
+    // Use a globally numbered conversation turn when provided; otherwise
+    // require verified upward movement/stability or explicit user marking.
+    return [...document.querySelectorAll('[data-testid="conversation-turn-0"]')]
+      .some(node => isVisible(node) && roleOf(node));
   }
 
   function firstVisibleTurnSignature() {
