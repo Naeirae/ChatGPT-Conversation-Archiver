@@ -217,3 +217,26 @@ The previous "direct scroll" reconstruction was not behaviorally equivalent to t
 - CDP wheel remains available only as fallback/other-mode infrastructure.
 
 This distinction matters because `scrollBy(-delta)` at a virtualized local top can be a no-op and may fail to trigger older-message loading, even though the old `scrollTo(0) + nudge` sequence did.
+
+
+## 0.4.56 primary workflow decision
+
+The primary user-facing capture path no longer attempts automatic full-chat navigation.
+
+Authoritative workflow:
+1. mark the end message;
+2. manually move to the desired start;
+3. mark the start and leave it visible;
+4. start manual-range capture;
+5. capture moves only downward until the marked end.
+
+Manual-range invariants:
+- both markers are required;
+- capture runs in the current positioned tab;
+- no `reachTopWithoutCapture()`, `reachTop()` or lower-boundary pre-navigation is allowed before the chronological pass;
+- no navigation reconciliation is used for the manual range;
+- no automatic Retry/load-error click recovery is used inside the range walk;
+- the marked end is mandatory and must be reached;
+- the final archive is sliced exactly from marked start through marked end.
+
+Legacy full-navigation, continuation and reconciliation code may remain for technical/archive recovery operations, but it is no longer the primary capture UX.
