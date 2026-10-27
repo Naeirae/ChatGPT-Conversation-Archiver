@@ -1992,7 +1992,7 @@ async function startCapture({
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
-    const modeLabel = mode === 'fragment' ? 'сбор выбранного фрагмента' : mode === 'reconcile'
+    const modeLabel = mode === 'fragment' ? 'сбор архива по ручным отметкам' : mode === 'reconcile'
       ? 'сверка и добор локального архива'
       : mode === 'compare'
         ? 'сверка с локальным архивом'
@@ -2119,7 +2119,7 @@ async function startCapture({
                 : mode === 'images'
                   ? 'Фоново сверяю и добираю изображения по всей переписке…'
                   : mode === 'fragment'
-                  ? 'Фоново собираю отмеченный фрагмент…'
+                  ? 'Собираю основной архив по отметкам…'
                   : 'Фоново добираю сообщения после найденного стыка…',
         phase: 'top'
       }, {
@@ -2135,7 +2135,7 @@ async function startCapture({
         message: mode === 'full'
           ? 'Физически прокручиваю текущую вкладку…'
           : mode === 'fragment'
-              ? 'Физически собираю отмеченный фрагмент…'
+              ? 'Собираю основной архив по отметкам…'
               : mode === 'reconcile'
                 ? 'Физически сверяю локальный архив и добираю пропуски…'
                 : mode === 'images-draft'
