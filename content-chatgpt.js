@@ -2545,25 +2545,47 @@
     return { ok: false, error: 'Фоновый процесс недоступен; контрольные точки сохраняются отдельно.' };
   }
 
+  async function withCaptureOperationTimeout(operation, timeoutMs, label) {
+    let timeoutId;
+    try {
+      return await Promise.race([
+        Promise.resolve(operation),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(() => reject(new Error(
+            label + ': не получен ответ за ' + Math.ceil(timeoutMs / 1000) + ' с.'
+          )), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
+  }
+
   async function progress(message, count, extra) {
     const now = Date.now();
     if (now - lastProgressAt < 1500 && !(extra && extra.force)) return;
     lastProgressAt = now;
     const patch = Object.assign({ status: 'running', message, count }, extra || {});
+    const strictFinalization = Boolean(extra?.finalizationStep);
     try {
-      const result = await chrome.runtime.sendMessage({
+      const request = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_PROGRESS',
         jobId: state.jobId,
         patch
       });
+      const result = strictFinalization
+        ? await withCaptureOperationTimeout(request, 30000, 'Сохранение состояния Архиватора')
+        : await request;
       if (result?.ok) return result;
       if (result && result.ok === false) {
         throw new Error(result.error || 'Фоновый процесс остановил этот сбор.');
       }
     } catch (error) {
-      // A concrete response from the worker means the run is no longer active;
-      // do not keep driving the tab after the popup has declared it stopped.
-      if (error?.message && /останов|неактуал|Прогресс пришел не из вкладки сбора/i.test(error.message)) {
+      // A missing acknowledgement during final persistence cannot be treated
+      // as an optional progress update: preserve a draft and stop rather than
+      // leaving the popup silently in the image-loading phase.
+      if (strictFinalization ||
+          (error?.message && /останов|неактуал|Прогресс пришел не из вкладки сбора/i.test(error.message))) {
         throw error;
       }
     }
@@ -5112,7 +5134,7 @@
         messages.length,
         { phase: 'finalizing', finalizationStep: 'confirm-complete', force: true }
       );
-      const completion = await chrome.runtime.sendMessage({
+      const completionRequest = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_COMPLETE',
         jobId,
         archiveId,
@@ -5121,6 +5143,11 @@
         imageRecoveredCount: recoveredImageRefs.length,
         mode
       });
+      const completion = ['fragment', 'full'].includes(mode)
+        ? await withCaptureOperationTimeout(
+            completionRequest, 90000, 'Подтверждение полного архива'
+          )
+        : await completionRequest;
       if (!completion?.ok || completion.status !== 'done') {
         throw new Error(
           'Фоновый процесс не подтвердил завершение: ' +
