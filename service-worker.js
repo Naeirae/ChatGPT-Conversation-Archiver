@@ -861,6 +861,10 @@ async function promoteMarkedPrimaryArchive(archive) {
     [STORAGE_KEYS.lastArchiveId]: promoted.id,
     selectedArchiveId: promoted.id
   });
+  const legacyMarker = await chrome.storage.local.get('fragmentLatestId');
+  if (legacyMarker.fragmentLatestId === promoted.id) {
+    await chrome.storage.local.remove('fragmentLatestId');
+  }
   return promoted;
 }
 
