@@ -2610,6 +2610,9 @@ async function resumeFailedCaptureFromWorkingTab() {
     String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
   );
   let draft = draftCandidates[0];
+  if (draft.captureMode === 'fragment' && draft.capturePhase !== 'walk' && draft.capturePhase !== 'finalizing') {
+    throw new Error('Ручной диапазон не успел сохранить непрерывный участок. Вернитесь к отмеченному началу и запустите диапазон заново; старый черновик сохранён.');
+  }
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
   if (!captureTab?.id ||
@@ -2849,6 +2852,9 @@ async function resumeUnfinishedInSavedTab(passId = '') {
   let draft = await getDraft(passId);
   draft = await reconcileUnfinishedPrefix(draft);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  if (draft.captureMode === 'fragment' && !['walk', 'finalizing'].includes(draft.capturePhase)) {
+    throw new Error('Ручной диапазон ещё не имеет подтверждённого хронологического checkpoint. Вернитесь к отмеченному началу и перезапустите сбор. Черновик не удалён.');
+  }
 
   // 0.3.91 could relabel a chronological walk draft as "top" when a fresh
   // recovery attempt failed while it was only searching for the saved frontier.
@@ -2925,6 +2931,9 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
   }
   const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  if (draft.captureMode === 'fragment' && !['walk', 'finalizing'].includes(draft.capturePhase)) {
+    throw new Error('В черновике ручного диапазона нет подтверждённого прохода вниз. Снова откройте отмеченное начало; черновик сохранён.');
+  }
   if (!isConversationUrl(draft.sourceUrl || '')) {
     throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
   }
