@@ -4041,18 +4041,6 @@
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
 
-      if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнута метка конца снимка · ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
-        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        return { boundaryReached: true, physicalEndReached: false };
-      }
-
       const afterRefs = visibleNavigationRefsLightweight();
       if (
         beforeRefs.length &&
@@ -4080,7 +4068,19 @@
         continue;
       }
 
-      await saveRecoveryCheckpoint(map, order, boundary);
+if (boundaryIsVisible(boundary)) {
+        await progress('Этап 2/3: достигнута метка конца снимка · ' + map.size + ' сообщений', map.size, {
+          phase: 'walk',
+          iteration: i + 1,
+          boundaryReached: true,
+          chronologicalCount: map.size,
+          force: true
+        });
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        return { boundaryReached: true, physicalEndReached: false };
+      }
+
+            await saveRecoveryCheckpoint(map, order, boundary);
 
       const nextSignature = visibleTurnSignature();
       if (
@@ -4206,28 +4206,6 @@
         );
       }
 
-      if (boundaryIsVisible(boundary)) {
-        const boundaryImageStats = capturedImageStats([...map.values()]);
-        await progress(
-          'Этап 2/3: достигнута метка конца снимка · ' +
-            map.size + ' сообщений · ' +
-            boundaryImageStats.total + ' изображений найдено',
-          map.size,
-          {
-            phase: 'walk',
-            iteration: i + 1,
-            boundaryReached: true,
-            chronologicalCount: map.size,
-            imageCount: boundaryImageStats.total,
-            imageBinaryReady: boundaryImageStats.ready,
-            imageBinaryFailed: boundaryImageStats.failed,
-            force: true
-          }
-        );
-        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        return { boundaryReached: true, physicalEndReached: false };
-      }
-
       const afterRefs = visibleNavigationRefsLightweight();
       if (beforeRefs.length && afterRefs.length &&
           !navigationWindowsOverlap(beforeRefs, afterRefs)) {
@@ -4250,7 +4228,29 @@
         continue;
       }
 
-      await saveRecoveryCheckpoint(map, order, boundary);
+if (boundaryIsVisible(boundary)) {
+        const boundaryImageStats = capturedImageStats([...map.values()]);
+        await progress(
+          'Этап 2/3: достигнута метка конца снимка · ' +
+            map.size + ' сообщений · ' +
+            boundaryImageStats.total + ' изображений найдено',
+          map.size,
+          {
+            phase: 'walk',
+            iteration: i + 1,
+            boundaryReached: true,
+            chronologicalCount: map.size,
+            imageCount: boundaryImageStats.total,
+            imageBinaryReady: boundaryImageStats.ready,
+            imageBinaryFailed: boundaryImageStats.failed,
+            force: true
+          }
+        );
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        return { boundaryReached: true, physicalEndReached: false };
+      }
+
+            await saveRecoveryCheckpoint(map, order, boundary);
 
       const after = scrollObservation(map.size);
       const stall = scrollRuntime().updateStabilityState(stability, before, after);
