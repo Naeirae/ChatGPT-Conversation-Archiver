@@ -1018,11 +1018,11 @@ function render(data) {
   const done = job?.status === 'done' && archive;
   const hasManualRange = Boolean(state?.captureRange?.start && state?.captureRange?.end);
 
-  $('captureTitle').textContent = 'Собрать чат целиком';
+  $('captureTitle').textContent = hasManualRange ? 'Основной архив по отметкам' : 'Собрать чат';
   $('capture').textContent = 'Собрать чат';
   if (!running && hasManualRange) {
     $('fragmentHint').textContent =
-      'Начало и конец отмечены для фрагмента. Обычный «Собрать чат» всегда собирает весь чат.';
+      'Начало и конец основного архива отмечены. Оставьте начало видимым и нажмите «Собрать отмеченный диапазон». Этот режим не открывает копию и не ищет верх автоматически.';
   }
 
   renderCaptureState(job);
@@ -1052,7 +1052,7 @@ function render(data) {
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
   if (captureHeading) captureHeading.textContent = isFragmentRun
     ? 'Собирается архив по отметкам'
-    : 'Собрать чат целиком';
+    : (hasManualRange ? 'Основной архив по отметкам' : 'Собрать чат');
   $('captureFragment').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
   $('clearMarkers').disabled = Boolean(running);
@@ -1445,7 +1445,7 @@ $('openMarkingTab').onclick = async () => {
     $('captureTarget').value = 'current';
     updateCaptureTargetHint('current');
     $('fragmentHint').textContent =
-      'Рабочая вкладка открыта. Там отметьте «Начало» и/или «Конец» фрагмента, затем снова откройте Архиватор и нажмите «Собрать отмеченный фрагмент».';
+      'Рабочая вкладка открыта. Отметьте в ней «Конец», затем «Начало», оставьте начало видимым и нажмите «Собрать отмеченный диапазон».';
   } catch (error) {
     setStatus(error.message || String(error), true);
     button.disabled = false;
