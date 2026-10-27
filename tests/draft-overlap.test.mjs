@@ -5,7 +5,8 @@ import {
   sameStoredTurn,
   sameDraftCaptureScope,
   verifiedChronologicalOverlap,
-  mergeVerifiedTurns
+  mergeVerifiedTurns,
+  groupVerifiedDraftWindows
 } from '../lib/draft-overlap.mjs';
 
 const words = Object.fromEntries('abcdefgh'.split('').map(letter => [
@@ -119,4 +120,47 @@ test('conflicting text under the same stable ID stops the join', () => {
     msg('a', { text: 'A distinctly long original message.' }),
     msg('a', { text: 'A distinctly long edited message.' })
   ), false);
+});
+
+
+test('groups shifted attempts as one logical card without mutating source drafts', () => {
+  const url = 'https://chatgpt.com/c/one-chat';
+  const first = { ...scope(url), id: 'draft-a', messages: seq('a','b','c','d') };
+  const second = { ...scope(url), id: 'draft-b', messages: seq('c','d','e','f'), captureMode: 'resume-draft' };
+  const groups = groupVerifiedDraftWindows([first, second]);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].map(x => x.id), ['draft-a', 'draft-b']);
+  assert.equal(first.messages.length, 4);
+  assert.equal(second.messages.length, 4);
+});
+
+test('a later bridge joins previously separate draft groups transitively', () => {
+  const url = 'https://chatgpt.com/c/one-chat';
+  const first = { ...scope(url), id: 'draft-a', messages: seq('a','b','c') };
+  const last = { ...scope(url), id: 'draft-last', messages: seq('d','e','f') };
+  const bridge = { ...scope(url), id: 'draft-bridge', messages: seq('b','c','d','e') };
+  const groups = groupVerifiedDraftWindows([first, last, bridge]);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].map(x => x.id), ['draft-a', 'draft-bridge', 'draft-last']);
+});
+
+test('same title and even equal content never group different conversation IDs', () => {
+  const messages = seq('a','b','c');
+  const a = { ...scope('https://chatgpt.com/c/first-chat'), id: 'first', messages };
+  const b = { ...scope('https://chatgpt.com/c/second-chat'), id: 'second', messages };
+  assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
+});
+
+test('different lower capture bounds stay separate despite matching messages', () => {
+  const a = { ...scope('https://chatgpt.com/c/same-chat', 'first-end'), id: 'a', messages: seq('a','b','c') };
+  const b = { ...scope('https://chatgpt.com/c/same-chat', 'second-end'), id: 'b', messages: seq('a','b','c') };
+  assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
+});
+
+test('ambiguous weak repeated text does not merge an arbitrary draft group', () => {
+  const url = 'https://chatgpt.com/c/same-chat';
+  const pair = [msg('a', { weak: true }), msg('b', { weak: true })];
+  const a = { ...scope(url), id: 'a', messages: [...pair, ...pair] };
+  const b = { ...scope(url), id: 'b', messages: pair };
+  assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
 });
