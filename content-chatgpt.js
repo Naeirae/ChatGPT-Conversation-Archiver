@@ -946,11 +946,17 @@
 
   function matchesBoundary(turn, boundary) {
     if (!boundary || !turn) return false;
+    // A real ChatGPT message ID remains the same when surrounding turns are
+    // virtualized away. Its verified identity is stronger than stale context.
+    if (boundary.kind === 'stable' &&
+        isStrongMessageId(boundary.key)) {
+      return turnStableKey(turn) === boundary.key;
+    }
     const contextMatches = boundaryContextMatchesTurns(turn, boundary);
     if (boundary.kind === 'stable') {
       if (turnStableKey(turn) === boundary.key) return contextMatches;
-      // Explicitly marked boundaries are user-selected message identities.
-      // They must never stop early on another message with identical text.
+      // Weak virtual wrapper IDs can be recycled; do not stop at repeated
+      // text unless the original surrounding message context also matches.
       if (boundary.strictStable) return false;
       return Boolean(
         boundary.signature &&
@@ -969,8 +975,30 @@
     return scrollRuntime().physicalScrollStartVisible(orderedTurns());
   }
 
+  function turnIntersectsCaptureViewport(turn) {
+    if (!turn?.isConnected) return false;
+    const root = contentRoot(turn, roleOf(turn)) || turn;
+    const element = root.getBoundingClientRect();
+    const scroller = findScrollContainer(turn);
+    const documentRoot = !scroller ||
+      scroller === document.documentElement ||
+      scroller === document.body ||
+      scroller === document.scrollingElement;
+    const scrollerRect = documentRoot ? null : scroller.getBoundingClientRect();
+    return rectIntersectsCaptureViewport(
+      element,
+      window.innerWidth || document.documentElement.clientWidth,
+      window.innerHeight || document.documentElement.clientHeight,
+      scrollerRect
+    );
+  }
+
   function boundaryIsVisible(boundary) {
-    return Boolean(boundary && orderedTurns().some(turn => matchesBoundary(turn, boundary)));
+    // Querying a present DOM turn is not enough: virtualized ChatGPT can keep
+    // the marked end mounted well outside the physical scroll viewport.
+    return Boolean(boundary && orderedTurns().some(turn =>
+      matchesBoundary(turn, boundary) && turnIntersectsCaptureViewport(turn)
+    ));
   }
 
   function findScrollContainer(turn) {
@@ -1945,6 +1973,9 @@
 
   function messageMatchesBoundary(message, boundary, rows = [], index = -1) {
     if (!message || !boundary) return false;
+    if (boundary.kind === 'stable' && isStrongMessageId(boundary.key)) {
+      return message.id === boundary.key;
+    }
     const contextMatches = messageBoundaryContextMatches(rows, index, boundary);
     if (boundary.kind === 'stable') {
       if (message.id === boundary.key) return contextMatches;
@@ -5283,12 +5314,15 @@
   function markerIdentityMatches(anchor, candidate) {
     if (!anchor || !candidate) return false;
     const roleMatches = !anchor.role || !candidate.role || anchor.role === candidate.role;
+    if (!roleMatches) return false;
+    // The old 0.4.64 code additionally demanded the same text and neighbours
+    // even for immutable message IDs. This loses legitimate marked turns when
+    // ChatGPT virtualizes preceding messages or the text changes.
+    if (isStrongMessageId(anchor.id)) return anchor.id === candidate.id;
     const signatureMatches = Boolean(
       anchor.signature && candidate.signature && anchor.signature === candidate.signature
     );
-    if (!roleMatches || !signatureMatches) return false;
-    if (isStrongMessageId(anchor.id) && isStrongMessageId(candidate.id) &&
-        anchor.id !== candidate.id) return false;
+    if (!signatureMatches) return false;
     const before = Array.isArray(anchor.contextBefore) ? anchor.contextBefore : [];
     const actual = Array.isArray(candidate.contextBefore) ? candidate.contextBefore : null;
     if (actual && before.length &&
