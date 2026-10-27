@@ -551,6 +551,29 @@ function renderSavedArchives(items = []) {
     };
     actions.appendChild(openArchive);
 
+    // The archive planner is also the full local-message viewer. Open it by
+    // archive ID, independently of current-chat URL or popup selection state.
+    const viewPlanner = document.createElement('button');
+    viewPlanner.className = 'archive-link-open';
+    viewPlanner.type = 'button';
+    viewPlanner.textContent = 'Просмотр и вкладки';
+    viewPlanner.disabled = busy;
+    viewPlanner.onclick = async () => {
+      viewPlanner.disabled = true;
+      try {
+        const url = chrome.runtime.getURL(
+          'planner.html?archiveId=' + encodeURIComponent(item.id)
+        );
+        await chrome.tabs.create({ url });
+        setStatus('Открыт просмотр архива с разметкой вкладок.');
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        viewPlanner.disabled = false;
+      }
+    };
+    actions.appendChild(viewPlanner);
+
     if (!item.isFragment && item.sourceUrl) {
       const continueSaved = document.createElement('button');
       continueSaved.className = 'archive-link-open';

@@ -240,3 +240,41 @@ Manual-range invariants:
 - the final archive is sliced exactly from marked start through marked end.
 
 Legacy full-navigation, continuation and reconciliation code may remain for technical/archive recovery operations, but it is no longer the primary capture UX.
+
+
+## 2026-10-27 — manual-range recovery isolation audit
+
+The default branch already contains 0.4.56's manual end → manual start → current-tab downward traversal. A separate follow-up branch `fix/manual-range-recovery-isolation-2026-10-27` isolates it from legacy transport and auto-recovery choices.
+
+Verified source-level problems and fixes:
+- `startCapture()` still accepted a `copy` target from non-popup callers for `fragment`. The worker now forces `current`, preserving the user's physically positioned start viewport.
+- `finishJobWithError()` could schedule automatic recovery for `fragment`, despite its single-pass/no-auto-retry contract. Manual ranges no longer become auto-recovery eligible.
+- `resumeNavigationOnlyFromWorkingTab()` could restart a `fragment` as a legacy top-navigation recovery. Its allowed modes now exclude `fragment`.
+- `attemptAutomaticRecovery()` now skips stale persisted alarms for failed manual-range jobs, including alarms created by an earlier release.
+- `scripts/verify.mjs` adds guards for these contracts.
+
+Preserved intentionally: unfinished draft persistence, explicit manual recovery controls, legacy full/reconcile/image maintenance paths, and physical overlap checking during downward capture.
+
+Verification: source content and six targeted pattern assertions confirmed via the GitHub connector. A local clone for `node --check` / `node scripts/verify.mjs` failed because this runtime could not resolve github.com; **no automated test pass or installed Chrome/live validation is claimed**.
+
+Remaining P0: perform full browser regression for current-tab end/start marking, valid downward range, stable repeated messages, forced stall/error with retained draft but no auto-restart, manual resume, and exported archive boundaries. Separately inspect manual draft resume semantics; do not silently re-enable automatic top navigation.
+
+
+## 2026-10-27 — restoration of manual-range resume and archive planner
+
+Further source audit discovered that restoring a fragment draft through `resume-draft` dropped its `isFragment` archive identity, could replace `lastArchiveId`, and could invoke legacy upward-navigation recovery. Changes on the same feature branch:
+- `resumeFailedCaptureFromWorkingTab` and `resumeSavedUnfinishedPass` route fragment drafts through frontier-based `resume-draft`, never the original `fragment` top-navigation branch.
+- `startCapture` forces current-tab capture for fragment draft restoration.
+- Content capture preserves `isFragment`, original range markers, `fragmentLatestId` and separate canonical archive pointer through successful resume.
+- Worker completion indexes and clears markers based on completed archive identity rather than the temporary `resume-draft` mode.
+
+The user also reported lost saved-archive preview and tab placement. Root cause in the inspected code: `selectSavedArchive` overwrote `lastArchiveId`, while `GET_STATE` preferred the current conversation's archive from URL, ignoring the selected library row. The planner itself (`planner.html` / `planner.js`) still existed and accepted an explicit `archiveId`.
+- Selection now uses independent `selectedArchiveId`.
+- `GET_STATE` resolves explicit selection for the popup; completion selects the freshly created archive.
+- Saved-archive rows now have a direct **Просмотр и вкладки** action that opens `planner.html?archiveId=...`, independent of the current chat.
+- The main archive panel has an explicit **Просмотр архива и вкладки** action.
+- `scripts/verify.mjs` contains new static guards for these paths.
+
+Evidence: exact GitHub source sections and targeted source assertions, plus JavaScript parse success for `popup.js` and `content-chatgpt.js`. Full `node scripts/verify.mjs` and Chrome behavior remain **unverified**: container git clone failed DNS resolution for github.com. Do not mark runtime regressions green.
+
+Next tests: library selection from an open different chat; view/mark/save tab plan for a full archive and fragment; resume a failed fragment draft; verify `lastArchiveId` remains intact and fragment export does not adopt canonical chat identity; test missing/weak markers and repeated messages.

@@ -841,7 +841,8 @@ async function continueSavedArchive(archiveId = '', captureTarget = 'copy') {
 async function selectSavedArchive(archiveId = '') {
   const archive = await getArchive(archiveId);
   if (!archive?.id) throw new Error('Сохранённый чат не найден.');
-  await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archive.id });
+  // Selection is a UI choice, not a mutation of the canonical conversation archive.
+  await chrome.storage.local.set({ selectedArchiveId: archive.id });
   return { ok: true, archive: summarize(archive) };
 }
 
@@ -1814,7 +1815,11 @@ async function startCapture({
     throw makeCaptureError('WRONG_SITE', 'Откройте ChatGPT в активной вкладке.');
   }
 
-  captureTarget = captureTarget === 'current' ? 'current' : 'copy';
+  // The manual range is tied to the viewport positioned by the user.
+  captureTarget = (mode === 'fragment' ||
+    (mode === 'resume-draft' && providedDraft?.captureMode === 'fragment'))
+    ? 'current'
+    : (captureTarget === 'current' ? 'current' : 'copy');
 
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
@@ -2270,7 +2275,7 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     throw new Error('Не сохранена нижняя метка снимка; безопасно продолжить этот проход нельзя.');
   }
 
-  if (!['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)) {
+  if (!['full', 'reconcile', 'images'].includes(failedJob.captureMode)) {
     throw new Error('Этот этап нельзя безопасно продолжить без сохранённого черновика.');
   }
 
@@ -2347,8 +2352,10 @@ async function attemptAutomaticRecovery(failedJobId = '') {
     !failedJob ||
     failedJob.jobId !== failedJobId ||
     failedJob.status !== 'error' ||
-    !failedJob.autoRecoveryPending
+    !failedJob.autoRecoveryPending ||
+    failedJob.captureMode === 'fragment'
   ) {
+    // Stale alarms from older releases must never restart a manual range.
     return { ok: false, skipped: true };
   }
 
@@ -2440,7 +2447,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     ['top', 'boundary'].includes(job.phase || '') &&
     boundary?.kind &&
     boundary?.key &&
-    ['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)
+    ['full', 'reconcile', 'images'].includes(job.captureMode)
   );
 
   let preservedCaptureTabId = null;
@@ -2497,6 +2504,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   const maxAttempts = Number(job.autoRecoveryMaxAttempts || AUTO_RECOVERY_MAX_ATTEMPTS);
   const autoRecoveryEligible = Boolean(
     status === 'error' &&
+    job.captureMode !== 'fragment' &&
     recoveryAvailable &&
     attempts < maxAttempts
   );
@@ -2602,6 +2610,9 @@ async function resumeFailedCaptureFromWorkingTab() {
     String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
   );
   let draft = draftCandidates[0];
+  if (draft.captureMode === 'fragment' && draft.capturePhase !== 'walk' && draft.capturePhase !== 'finalizing') {
+    throw new Error('Ручной диапазон не успел сохранить непрерывный участок. Вернитесь к отмеченному началу и запустите диапазон заново; старый черновик сохранён.');
+  }
 
   const captureTab = await chrome.tabs.get(failedJob.captureTabId).catch(() => null);
   if (!captureTab?.id ||
@@ -2621,13 +2632,15 @@ async function resumeFailedCaptureFromWorkingTab() {
   if (!lastMessage) throw new Error('В сохранённом незавершённом проходе нет точки, от которой можно продолжить.');
 
   const jobId = makeJobId();
-  const resumeNavigation = draft.capturePhase === 'top' &&
-    ['full', 'fragment', 'reconcile', 'images'].includes(draft.captureMode);
-  const resumeMode = resumeNavigation
-    ? draft.captureMode
-    : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
-        ? 'resume-draft'
-        : 'retry-walk');
+  const resumeNavigation = draft.captureMode !== 'fragment' && draft.capturePhase === 'top' &&
+    ['full', 'reconcile', 'images'].includes(draft.captureMode);
+  const resumeMode = draft.captureMode === 'fragment'
+    ? 'resume-draft'
+    : resumeNavigation
+      ? draft.captureMode
+      : (draft.capturePhase === 'walk' || draft.capturePhase === 'finalizing'
+          ? 'resume-draft'
+          : 'retry-walk');
   const resumeTailSignatures = buildResumeTailSignatures(draft.messages, 4);
   const target = failedJob.captureTarget === 'current' ? 'current' : 'copy';
   await setJob({
@@ -2839,6 +2852,9 @@ async function resumeUnfinishedInSavedTab(passId = '') {
   let draft = await getDraft(passId);
   draft = await reconcileUnfinishedPrefix(draft);
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  if (draft.captureMode === 'fragment' && !['walk', 'finalizing'].includes(draft.capturePhase)) {
+    throw new Error('Ручной диапазон ещё не имеет подтверждённого хронологического checkpoint. Вернитесь к отмеченному началу и перезапустите сбор. Черновик не удалён.');
+  }
 
   // 0.3.91 could relabel a chronological walk draft as "top" when a fresh
   // recovery attempt failed while it was only searching for the saved frontier.
@@ -2915,6 +2931,9 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
   }
   const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!draft?.messages?.length) throw new Error('Сохранённый незавершённый проход не найден.');
+  if (draft.captureMode === 'fragment' && !['walk', 'finalizing'].includes(draft.capturePhase)) {
+    throw new Error('В черновике ручного диапазона нет подтверждённого прохода вниз. Снова откройте отмеченное начало; черновик сохранён.');
+  }
   if (!isConversationUrl(draft.sourceUrl || '')) {
     throw new Error('У незавершённого прохода нет рабочей ссылки на исходный чат.');
   }
@@ -2948,9 +2967,9 @@ async function resumeSavedUnfinishedPass(passId = '', captureTarget = 'copy', re
 
 
   return startCapture({
-    mode: draft.capturePhase === 'top' && ['full', 'fragment', 'reconcile', 'images'].includes(draft.captureMode)
+    mode: draft.captureMode !== 'fragment' && draft.capturePhase === 'top' && ['full', 'reconcile', 'images'].includes(draft.captureMode)
       ? draft.captureMode : 'resume-draft',
-    resumeNavigation: draft.capturePhase === 'top',
+    resumeNavigation: draft.captureMode !== 'fragment' && draft.capturePhase === 'top',
     resumeTailSignatures: buildResumeTailSignatures(draft.messages, 4),
     existingDraft: draft,
     fixedCaptureBoundary: boundary,
@@ -3333,7 +3352,7 @@ async function handleCaptureComplete(message) {
       await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: partialMerge.archiveId });
       await indexArchive(await getArchive(partialMerge.archiveId));
     }
-  } else if (message.mode !== 'compare' && message.mode !== 'fragment') {
+  } else if (message.mode !== 'compare' && !archive.isFragment) {
     await indexArchive(archive);
   }
 
@@ -3374,8 +3393,10 @@ async function handleCaptureComplete(message) {
   // needed.
 
   const addedCount = Number(message.addedCount || archive.lastCaptureAddedCount || 0);
+  // The just-completed archive should be immediately previewable in the popup.
+  await chrome.storage.local.set({ selectedArchiveId: archive.id });
 
-  if (message.mode === 'fragment' && archive.sourceUrl) {
+  if (archive.isFragment && archive.sourceUrl) {
     try {
       const source = new URL(archive.sourceUrl);
       const markersKey = 'archiverFragmentMarkers:' + source.origin + source.pathname;
@@ -6088,9 +6109,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           } catch (_) {}
         }
         const activeIsConversation = Boolean(tab?.url && isConversationUrl(tab.url));
-        const archive = activeIsConversation
+        const selection = await chrome.storage.local.get('selectedArchiveId');
+        const selectedArchive = selection.selectedArchiveId
+          ? await getArchive(selection.selectedArchiveId) : null;
+        const archive = selectedArchive || (activeIsConversation
           ? currentArchive
-          : (currentArchive || await getLastArchive());
+          : (currentArchive || await getLastArchive()));
+        // The displayed archive owns its Google Docs association. Never show
+        // the active chat's link while a different saved archive is selected.
+        if (selectedArchive) {
+          linkedDoc = selectedArchive.isFragment
+            ? null : await getLinkedDoc(selectedArchive.sourceUrl || '');
+        }
         if (archive?.id && !archive.partial && archive.complete !== false) {
           await registerArchive(archive);
         }
@@ -6166,7 +6196,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc,
           captureRange,
           savedArchives: await listLinkedArchives(),
-          canContinue: Boolean(currentArchive?.messages?.length),
+          canContinue: Boolean(archive?.messages?.length && !archive.isFragment),
           history: await getRunHistory()
         };
       }

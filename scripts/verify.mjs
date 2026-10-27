@@ -551,6 +551,69 @@ try {
       !serviceWorkerSource.includes("if (mode === 'fragment' && (!markers.start || !markers.end))")) {
     fail('manual range UX: primary capture must mark and collect an explicit current-tab range without automatic full-chat navigation');
   }
+  // Verify the worker contract independently of the popup. Recovery alarms
+  // and direct startCapture callers must not bypass the positioned-tab rule.
+  const startCaptureStart = serviceWorkerSource.indexOf('async function startCapture({');
+  const startCaptureEnd = serviceWorkerSource.indexOf('async function scheduleAutomaticRecovery(', startCaptureStart);
+  const startCaptureBlock = startCaptureStart >= 0 && startCaptureEnd > startCaptureStart
+    ? serviceWorkerSource.slice(startCaptureStart, startCaptureEnd)
+    : '';
+  const finishErrorStart = serviceWorkerSource.indexOf('async function finishJobWithError(');
+  const finishErrorEnd = serviceWorkerSource.indexOf('async function ', finishErrorStart + 10);
+  const finishErrorBlock = finishErrorStart >= 0 && finishErrorEnd > finishErrorStart
+    ? serviceWorkerSource.slice(finishErrorStart, finishErrorEnd)
+    : '';
+  const autoRecoveryStart = serviceWorkerSource.indexOf('async function attemptAutomaticRecovery(');
+  const autoRecoveryEnd = serviceWorkerSource.indexOf('async function finishJobWithError(', autoRecoveryStart);
+  const autoRecoveryBlock = autoRecoveryStart >= 0 && autoRecoveryEnd > autoRecoveryStart
+    ? serviceWorkerSource.slice(autoRecoveryStart, autoRecoveryEnd)
+    : '';
+  const navigationResumeStart = serviceWorkerSource.indexOf('async function resumeNavigationOnlyFromWorkingTab(');
+  const navigationResumeEnd = serviceWorkerSource.indexOf('async function attemptAutomaticRecovery(', navigationResumeStart);
+  const navigationResumeBlock = navigationResumeStart >= 0 && navigationResumeEnd > navigationResumeStart
+    ? serviceWorkerSource.slice(navigationResumeStart, navigationResumeEnd)
+    : '';
+  if (!startCaptureBlock.includes("(mode === 'fragment' ||") ||
+      !startCaptureBlock.includes("providedDraft?.captureMode === 'fragment'") ||
+      !finishErrorBlock.includes("job.captureMode !== 'fragment'") ||
+      !autoRecoveryBlock.includes("failedJob.captureMode === 'fragment'") ||
+      navigationResumeBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)") ||
+      finishErrorBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)")) {
+    fail('manual range isolation: force positioned current tab; never restart range through legacy navigation recovery or stale alarms');
+  }
+  const manualContentSource = await readFile('content-chatgpt.js', 'utf8');
+  const captureStart = manualContentSource.indexOf('async function captureConversation(');
+  const contentResumeBlock = captureStart < 0 ? '' : manualContentSource.slice(captureStart, captureStart + 40000);
+  const savedResumeStart = serviceWorkerSource.indexOf('async function resumeSavedUnfinishedPass(');
+  const savedResumeEnd = serviceWorkerSource.indexOf('async function ', savedResumeStart + 10);
+  const savedResumeBlock = serviceWorkerSource.slice(savedResumeStart, savedResumeEnd);
+  const failedResumeStart = serviceWorkerSource.indexOf('async function resumeFailedCaptureFromWorkingTab(');
+  const failedResumeEnd = serviceWorkerSource.indexOf('async function ', failedResumeStart + 10);
+  const failedResumeBlock = serviceWorkerSource.slice(failedResumeStart, failedResumeEnd);
+  const completionStart = serviceWorkerSource.indexOf('async function handleCaptureComplete(');
+  const completionEnd = serviceWorkerSource.indexOf('async function ', completionStart + 10);
+  const completionBlock = serviceWorkerSource.slice(completionStart, completionEnd);
+  if (!contentResumeBlock.includes("resumedDraft?.captureMode === 'fragment'") ||
+      !contentResumeBlock.includes('isFragment: preservingManualRange') ||
+      !contentResumeBlock.includes('fragmentLatestId: archiveId') ||
+      !failedResumeBlock.includes("draft.captureMode === 'fragment'") ||
+      !savedResumeBlock.includes("draft.captureMode !== 'fragment'") ||
+      !completionBlock.includes("!archive.isFragment") ||
+      !completionBlock.includes("if (archive.isFragment && archive.sourceUrl)") ||
+      !failedResumeBlock.includes("draft.capturePhase !== 'walk' && draft.capturePhase !== 'finalizing'") ||
+      !savedResumeBlock.includes("!['walk', 'finalizing'].includes(draft.capturePhase)")) {
+    fail('manual range draft resume: preserve original fragment identity, current-tab frontier and separate archive index');
+  }
+  if (!serviceWorkerSource.includes("await chrome.storage.local.set({ selectedArchiveId: archive.id })") ||
+      !serviceWorkerSource.includes("const selectedArchive = selection.selectedArchiveId") ||
+      !serviceWorkerSource.includes("const archive = selectedArchive ||") ||
+      !popupJs.includes("viewPlanner.textContent = 'Просмотр и вкладки'") ||
+      !popupJs.includes("'planner.html?archiveId=' + encodeURIComponent(item.id)") ||
+      !serviceWorkerSource.includes("linkedDoc = selectedArchive.isFragment") ||
+      !serviceWorkerSource.includes("await getLinkedDoc(selectedArchive.sourceUrl || '')") ||
+      !serviceWorkerSource.includes("canContinue: Boolean(archive?.messages?.length && !archive.isFragment)")) {
+    fail('archive viewer regression: selected local archive must reach the popup and the tab planner without replacing canonical lastArchiveId');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||

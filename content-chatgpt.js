@@ -4195,6 +4195,13 @@
 
     try {
       const settings = await getSettings();
+      const resumedDraft = (mode === 'resume-draft' && existingDraftId)
+        ? (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId]
+        : null;
+      const preservingManualRange = mode === 'fragment' || Boolean(
+        resumedDraft?.captureMode === 'fragment' &&
+        resumedDraft?.captureRange?.start && resumedDraft?.captureRange?.end
+      );
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
       const selectedFragment = (mode === 'fragment')
         ? (options.captureRange ||
@@ -4892,7 +4899,7 @@
       }
 
       const conversation = {
-        title: (mode === 'fragment' ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
+        title: (preservingManualRange ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
         sourceUrl: location.href,
         capturedAt: new Date().toISOString(),
         messages,
@@ -4905,8 +4912,8 @@
         firstPassCount: undefined,
         secondPassCount: undefined,
         passCountMatch: undefined,
-        isFragment: mode === 'fragment',
-        fragmentMarkers: mode === 'fragment' ? selectedFragment : undefined,
+        isFragment: preservingManualRange,
+        fragmentMarkers: preservingManualRange ? (selectedFragment || resumedDraft?.captureRange) : undefined,
         lastCaptureAddedCount: addedCount,
         lastImageRecoveredCount: recoveredImageRefs.length,
         lastRecoveredImageRefs: recoveredImageRefs,
@@ -4925,7 +4932,7 @@
       // Store the finished archive independently of the job record.
       await chrome.storage.local.set({
         ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        ...(mode === 'fragment' ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId })
+        ...(preservingManualRange ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId })
       });
 
       try {
