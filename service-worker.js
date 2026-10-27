@@ -6115,6 +6115,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const archive = selectedArchive || (activeIsConversation
           ? currentArchive
           : (currentArchive || await getLastArchive()));
+        // The displayed archive owns its Google Docs association. Never show
+        // the active chat's link while a different saved archive is selected.
+        if (selectedArchive) {
+          linkedDoc = selectedArchive.isFragment
+            ? null : await getLinkedDoc(selectedArchive.sourceUrl || '');
+        }
         if (archive?.id && !archive.partial && archive.complete !== false) {
           await registerArchive(archive);
         }
@@ -6190,7 +6196,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc,
           captureRange,
           savedArchives: await listLinkedArchives(),
-          canContinue: Boolean(currentArchive?.messages?.length && !archive?.isFragment),
+          canContinue: Boolean(archive?.messages?.length && !archive.isFragment),
           history: await getRunHistory()
         };
       }
