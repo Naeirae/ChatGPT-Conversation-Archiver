@@ -1131,15 +1131,22 @@ function render(data) {
   const savedDocUrl = archiveDestination?.saved && archiveDestination?.kind === 'google-doc'
     ? (archiveDestination.url || '')
     : '';
-  $('archiveStateLabel').textContent = savedDocUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён';
-  $('archiveStateHint').textContent = savedDocUrl
-    ? 'локальная копия также сохранена для продолжения'
-    : (linkedUrl ? 'локально · для переписки есть связанный документ' : 'локально в Chrome');
-  $('archiveDocStatus').textContent = savedDocUrl
-    ? 'Этот локальный архив уже сохранён в документ Google Docs.'
-    : linkedUrl
-      ? 'Этот архив сохранён локально. Для переписки есть связанный документ: его можно обновить или создать новый документ.'
-      : 'Этот архив сохранён локально. Можно создать для него новый документ Google Docs.';
+  const completenessUnverified = archive?.captureVerification === 'unverified';
+  $('archiveStateLabel').textContent = completenessUnverified
+    ? 'Локальный архив · полнота не подтверждена'
+    : (savedDocUrl ? 'Сохранён в документ Google Docs' : 'Чат сохранён');
+  $('archiveStateHint').textContent = completenessUnverified
+    ? 'Предыдущая версия Архиватора не проверяла весь проход от начала до конца'
+    : (savedDocUrl
+        ? 'локальная копия также сохранена для продолжения'
+        : (linkedUrl ? 'локально · для переписки есть связанный документ' : 'локально в Chrome'));
+  $('archiveDocStatus').textContent = completenessUnverified
+    ? 'Этот архив сохранён локально, но его полнота не доказана. Экспорт перенесёт только фактически сохранённые сообщения. Для полной копии запустите сбор по отметкам заново.'
+    : (savedDocUrl
+        ? 'Этот локальный архив уже сохранён в документ Google Docs.'
+        : linkedUrl
+          ? 'Этот архив сохранён локально. Для переписки есть связанный документ: его можно обновить или создать новый документ.'
+          : 'Этот архив сохранён локально. Можно создать для него новый документ Google Docs.');
   $('archiveDocLink').classList.toggle('hidden', !(savedDocUrl || linkedUrl));
   $('archiveDocLink').href = savedDocUrl || linkedUrl || '#';
   $('archiveDocLink').textContent = savedDocUrl
@@ -1185,6 +1192,13 @@ function render(data) {
     setStatus(
       (attempted ? `Сбор остановлен после ${attempted} сообщений.` : 'Сбор остановлен.') +
       (hasUnfinished ? ' Сохранённую часть можно продолжить.' : '')
+    );
+  } else if (completenessUnverified && archive?.messagesCount !== 0 &&
+             job?.status !== 'running' && job?.status !== 'starting') {
+    setStatus(
+      'Сохранено локально ' + Number(archive?.messageCount || 0) +
+      ' сообщений. Полнота прежнего сбора не подтверждена; эти данные не следует считать всем чатом.',
+      true
     );
   } else if (job?.status === 'done' && job?.captureMode === 'images-draft') {
     setStatus(
