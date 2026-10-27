@@ -3013,7 +3013,7 @@
             force: true
           }
         );
-        return { verified: true, source: 'user-confirmed-start' };
+        return { verified: true, source: 'user-confirmed-start', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       if (await recoverVisibleLoadError('top', existingCount)) {
@@ -3028,7 +3028,7 @@
           force: true,
           explicitStartDetected: true
         });
-        return { verified: true, source: 'visible-first-turn' };
+        return { verified: true, source: 'visible-first-turn', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       const turnsBefore = orderedTurns();
@@ -3074,7 +3074,7 @@
             force: true
           }
         );
-        return { verified: true, source: 'user-confirmed-start' };
+        return { verified: true, source: 'user-confirmed-start', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       if (sharedConversationStartVisible() || explicitConversationStartVisible()) {
@@ -3084,7 +3084,7 @@
           force: true,
           explicitStartDetected: true
         });
-        return { verified: true, source: 'visible-first-turn' };
+        return { verified: true, source: 'visible-first-turn', observedUpwardTravel, stableChecks: confirmedIdle };
       }
 
       let nextSignature = visibleTurnSignature();
@@ -3157,7 +3157,7 @@
             'Нельзя считать видимое окно полным чатом. Используйте ручные отметки начала и конца.'
           );
         }
-        return { verified: true, source: 'upward-traversal-and-stability' };
+        return { verified: true, source: 'upward-traversal-and-stability', observedUpwardTravel, stableChecks: confirmedIdle };
       }
     }
 
@@ -5026,6 +5026,8 @@
             (mode === 'fragment' || verifiedSnapshotEnd?.verified)),
           startSource: mode === 'fragment'
             ? 'user-marked-start' : (verifiedFullStart?.source || ''),
+          startTravelObserved: Boolean(verifiedFullStart?.observedUpwardTravel),
+          startStableChecks: Number(verifiedFullStart?.stableChecks || 0),
           endSource: mode === 'fragment'
             ? 'user-marked-end' : (verifiedSnapshotEnd?.source || '')
         } : undefined
