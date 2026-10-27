@@ -77,7 +77,7 @@ try {
   }
   // The end marker may be DOM-mounted offscreen, and after a scroll
   // continuity must be checked before accepting its arrival.
-  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\\n          turnIntersectsCaptureViewport(turn)')) {
+  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\n          turnIntersectsCaptureViewport(turn)')) {
     fail('capture: do not trim at an offscreen DOM-mounted end marker');
   }
   for (const [startToken, endToken] of [
