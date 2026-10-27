@@ -7,6 +7,7 @@ const jsFiles = [
   'popup.js',
   'updater.js',
   'planner.js',
+  'unfinished.js',
   'offscreen.js',
   'lib/text.mjs',
   'lib/urls.mjs',
@@ -643,6 +644,14 @@ try {
     fail('draft grouping: manually bounded capture must retain the same range identity across resume modes');
   }
   const overlapModuleSource = await readFile('lib/draft-overlap.mjs', 'utf8');
+  if (!serviceWorkerSource.includes("case 'ARCHIVER_GET_UNFINISHED_PASS':") ||
+      !serviceWorkerSource.includes("const draft = await reconcileUnfinishedPrefix(") ||
+      !serviceWorkerSource.includes("async function exportUnfinishedPassToNewDoc(passId = '') {") ||
+      !serviceWorkerSource.includes("const draft = await reconcileUnfinishedPrefix(await getDraft(passId));") ||
+      !serviceWorkerSource.includes("draftId: draft.id,") ||
+      !serviceWorkerSource.includes("recoveryDraftId: draft.id,")) {
+    fail('verified draft materialization: preview, export and saved-tab continuation must use the merged snapshot');
+  }
   if (!overlapModuleSource.includes('export function verifiedChronologicalOverlap(') ||
       !overlapModuleSource.includes('export function groupVerifiedDraftWindows(') ||
       !overlapModuleSource.includes('export function sameDraftCaptureScope(') ||
@@ -976,7 +985,11 @@ try {
 
 try {
   const packageSource = await readFile('scripts/package.mjs', 'utf8');
-  for (const requiredFile of ['updater.html', 'updater.css', 'updater.js', 'help.html', 'help.css']) {
+  for (const requiredFile of [
+    'updater.html', 'updater.css', 'updater.js',
+    'help.html', 'help.css',
+    'unfinished.html', 'unfinished.css', 'unfinished.js'
+  ]) {
     if (!packageSource.includes("'" + requiredFile + "'")) {
       fail('scripts/package.mjs: missing packaged updater file ' + requiredFile);
     }
