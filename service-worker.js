@@ -377,10 +377,11 @@ async function reconcileUnfinishedPrefix(draft) {
       if (Object.keys(patch).length) await setJob(patch);
     }
 
-    for (const id of redundantIds) {
-      await removeDraft(id).catch(() => {});
-      await removeDraftRecoveryTab(id).catch(() => {});
-    }
+    // Do not destroy original copies during reconciliation: a write succeeds
+    // before the merged result is behaviourally verified, and alternative
+    // image/source payloads may be the only recoverable copy. Keep originals
+    // available until an explicit user-confirmed cleanup operation.
+    // The merged candidate's recoveredFromDraftIds records provenance.
   }
 
   return updated;
@@ -577,12 +578,23 @@ function liveUnfinishedSummary(job) {
 }
 
 async function deleteUnfinishedGroup(logicalGroupId = '', passIds = []) {
-  const drafts = await listDrafts();
+  // The exact membership rendered to the user is authoritative. The broad
+  // group key does not encode the verified content witness and may also
+  // match a divergent draft shown as a separate card.
   const ids = new Set((passIds || []).filter(Boolean));
-  for (const item of drafts) {
-    if (logicalGroupId && unfinishedGroupKey(item) === logicalGroupId) ids.add(item.id);
-  }
   if (!ids.size) return { ok: true, removed: 0 };
+  const drafts = await listDrafts();
+  const current = new Map(drafts.map(item => [item.id, item]));
+  const selected = [...ids].map(id => current.get(id)).filter(Boolean);
+  if (selected.length !== ids.size) {
+    throw new Error('Состав группы черновиков изменился. Обновите список перед удалением.');
+  }
+  if (logicalGroupId) {
+    const baseKey = logicalGroupId.split('|diverged:')[0];
+    if (selected.some(item => unfinishedGroupKey(item) !== baseKey)) {
+      throw new Error('Найдены несовместимые черновики. Удаление остановлено.');
+    }
+  }
 
   let removed = 0;
   for (const id of ids) {
