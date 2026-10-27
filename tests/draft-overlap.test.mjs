@@ -6,6 +6,8 @@ import {
   sameDraftCaptureScope,
   verifiedChronologicalOverlap,
   mergeVerifiedTurns,
+  mergeNewestCapturedTurn,
+  groupVerifiedDraftComponents,
   groupVerifiedDraftWindows
 } from '../lib/draft-overlap.mjs';
 
@@ -185,4 +187,71 @@ test('large partially shifted windows use their unique chronological overlap', (
   const match = verifiedChronologicalOverlap(left, right);
   assert.equal(match?.offset, 1500);
   assert.equal(mergeVerifiedTurns(left, right, match).messages.length, 3000);
+});
+
+
+test('long repeated weak text never proves an overlap without a stable ID', () => {
+  const a = [
+    msg('a', { weak: true }),
+    msg('b', { weak: true }),
+    msg('c', { weak: true })
+  ];
+  const b = [
+    msg('x', { weak: true, text: words.a }),
+    msg('y', { weak: true, text: words.b }),
+    msg('z', { weak: true, text: words.c })
+  ];
+  assert.equal(verifiedChronologicalOverlap(a, b), null);
+  const left = { ...scope('https://chatgpt.com/c/shared-chat'), id: 'left', messages: a };
+  const right = { ...scope('https://chatgpt.com/c/shared-chat'), id: 'right', messages: b };
+  assert.equal(groupVerifiedDraftWindows([left, right]).length, 2);
+});
+
+test('one stable matching turn anchors neighbouring weak turns uniquely', () => {
+  const left = [msg('a', { weak: true }), msg('b'), msg('c', { weak: true })];
+  const right = [msg('b'), msg('c', { weak: true }), msg('d')];
+  const aligned = verifiedChronologicalOverlap(left, right);
+  assert.equal(aligned?.offset, 1);
+  assert.equal(mergeVerifiedTurns(left, right, aligned).messages.length, 4);
+});
+
+test('display group counts use the entire verified window union', () => {
+  const url = 'https://chatgpt.com/c/example';
+  const first = { ...scope(url), id: 'one', messages: seq('a', 'b', 'c', 'd') };
+  const second = { ...scope(url), id: 'two', messages: [
+    ...seq('c','d'), { ...msg('e'), images: [{ src: 'image-1', binaryStatus: 'ready', dataUrl: 'data:image/png;base64,AA==' }] },
+    msg('f')
+  ] };
+  const groups = groupVerifiedDraftComponents([first, second], (a,b) => ({
+    ...a, images: [...(a.images || []), ...(b.images || [])]
+  }));
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].messages.length, 6);
+  assert.equal(groups[0].messages.reduce((n, turn) => n + (turn.images?.length || 0), 0), 1);
+  assert.equal(first.messages.length, 4);
+});
+
+test('newer checkpoint image bytes override equally ready older image bytes', () => {
+  const oldTurn = {
+    ...msg('a'), __captureTime: 100,
+    images: [{ src: 'img', binaryStatus: 'ready', dataUrl: 'old-image' }]
+  };
+  const newTurn = {
+    ...msg('a'), __captureTime: 200,
+    images: [{ src: 'img', binaryStatus: 'ready', dataUrl: 'new-image' }]
+  };
+  const merge = (primary, alternate) => ({
+    ...primary,
+    images: [...(primary.images || []), ...(alternate.images || []).filter(
+      i => !(primary.images || []).some(j => j.src === i.src)
+    )]
+  });
+  assert.equal(
+    mergeNewestCapturedTurn(oldTurn, newTurn, merge).images[0].dataUrl,
+    'new-image'
+  );
+  assert.equal(
+    mergeNewestCapturedTurn(newTurn, oldTurn, merge).images[0].dataUrl,
+    'new-image'
+  );
 });
