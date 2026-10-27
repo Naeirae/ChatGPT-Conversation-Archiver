@@ -215,17 +215,20 @@ try {
       (serviceWorkerSource.match(/\{ replace: true \}/g) || []).length < 3) {
     fail('service-worker.js: new capture jobs must replace stale active-job state');
   }
-  if (!serviceWorkerSource.includes('unfinishedRangeKey(item) === range') ||
+  if (!serviceWorkerSource.includes('sameDraftCaptureScope(draft, item)') ||
+      !serviceWorkerSource.includes('captureRange: draft.captureRange || frontier.captureRange || null') ||
       !serviceWorkerSource.includes('pendingDocSource') ||
       !contentSource.includes("pendingDocUrl: current.pendingDocUrl || ''")) {
-    fail('unfinished recovery: range and pending-document metadata are not preserved');
+    fail('unfinished recovery: verified draft identity, manual range and pending-document metadata are not preserved');
   }
   if (!serviceWorkerSource.includes('draftId: draft.id') ||
-      !serviceWorkerSource.includes('const redundantIds = compatible') ||
+      !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
+      !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
+      !serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated })') ||
       !contentSource.includes("current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId)") ||
       !contentSource.includes('canonicalRecoveryDraft?.captureMode') ||
       !contentSource.includes('canonicalRecoveryDraft?.captureRange')) {
-    fail('unfinished recovery: retries must update one canonical draft and preserve original capture identity');
+    fail('unfinished recovery: retries must use a separate provenance-tracked merged draft and preserve original capture identity');
   }
   if (!contentSource.includes('REASONING_STATUS_RE') ||
       !contentSource.includes('обработка заняла') ||
