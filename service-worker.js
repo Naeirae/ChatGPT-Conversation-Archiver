@@ -32,6 +32,13 @@ import {
 } from './lib/tab-plan.mjs';
 
 import {
+  sameStoredTurn,
+  sameDraftCaptureScope,
+  verifiedChronologicalOverlap,
+  mergeVerifiedTurns
+} from './lib/draft-overlap.mjs';
+
+import {
   partTitle,
   planGoogleDocParts
 } from './lib/document-parts.mjs';
@@ -246,22 +253,7 @@ function mergeStoredMessageCapture(primary, alternate) {
 }
 
 function storedMessagesMatch(a, b) {
-  if (!a || !b || a.role !== b.role) return false;
-  if (a.id && b.id && a.id === b.id) return true;
-  return Boolean(
-    a.text && b.text &&
-    messageSignature(a.role, a.text) === messageSignature(b.role, b.text)
-  );
-}
-
-// A common title, a common URL alone or a single repeated utterance cannot
-// establish that two drafts are interchangeable. Require a complete prefix
-// overlap with at least two messages, preserving the original order.
-function verifiedDraftPrefixOverlap(left, right) {
-  if (!left?.messages?.length || !right?.messages?.length) return false;
-  const overlap = Math.min(left.messages.length, right.messages.length);
-  return overlap >= 2 && Array.from({ length: overlap }, (_, i) => i)
-    .every(i => storedMessagesMatch(left.messages[i], right.messages[i]));
+  return sameStoredTurn(a, b);
 }
 
 // Merge only verified chronological prefixes from the same conversation,
