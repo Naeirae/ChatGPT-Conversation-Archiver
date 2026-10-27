@@ -594,15 +594,16 @@ try {
   const completionEnd = serviceWorkerSource.indexOf('async function ', completionStart + 10);
   const completionBlock = serviceWorkerSource.slice(completionStart, completionEnd);
   if (!contentResumeBlock.includes("resumedDraft?.captureMode === 'fragment'") ||
-      !contentResumeBlock.includes('isFragment: preservingManualRange') ||
-      !contentResumeBlock.includes('fragmentLatestId: archiveId') ||
+      !contentResumeBlock.includes('isFragment: false') ||
+      !contentResumeBlock.includes('manualRangeMarkers: manuallyBounded') ||
+      !contentResumeBlock.includes('lastArchiveId: archiveId') ||
       !failedResumeBlock.includes("draft.captureMode === 'fragment'") ||
       !savedResumeBlock.includes("draft.captureMode !== 'fragment'") ||
       !completionBlock.includes("!archive.isFragment") ||
-      !completionBlock.includes("if (archive.isFragment && archive.sourceUrl)") ||
+      !completionBlock.includes("if ((archive.manualRangeMarkers || archive.isFragment) && archive.sourceUrl)") ||
       !failedResumeBlock.includes("draft.capturePhase !== 'walk' && draft.capturePhase !== 'finalizing'") ||
       !savedResumeBlock.includes("!['walk', 'finalizing'].includes(draft.capturePhase)")) {
-    fail('manual range draft resume: preserve original fragment identity, current-tab frontier and separate archive index');
+    fail('manual range draft resume: preserve canonical archive identity and range provenance, without legacy top traversal');
   }
   if (!serviceWorkerSource.includes("await chrome.storage.local.set({ selectedArchiveId: archive.id })") ||
       !serviceWorkerSource.includes("const selectedArchive = selection.selectedArchiveId") ||
@@ -613,6 +614,19 @@ try {
       !serviceWorkerSource.includes("await getLinkedDoc(selectedArchive.sourceUrl || '')") ||
       !serviceWorkerSource.includes("canContinue: Boolean(archive?.messages?.length && !archive.isFragment)")) {
     fail('archive viewer regression: selected local archive must reach the popup and the tab planner without replacing canonical lastArchiveId');
+  }
+  // The primary end/start workflow must save as a normal archive, including
+  // archives already collected with the incorrect 0.4.57 fragment flag.
+  if (!serviceWorkerSource.includes('async function promoteMarkedPrimaryArchive(') ||
+      !serviceWorkerSource.includes('manualRangeMarkers: archive.fragmentMarkers') ||
+      !serviceWorkerSource.includes("lastCaptureMode: 'manual-range'") ||
+      !serviceWorkerSource.includes('await indexArchive(promoted)') ||
+      !serviceWorkerSource.includes('await registerArchive(promoted)') ||
+      !serviceWorkerSource.includes('promoteMarkedPrimaryArchive(await getArchive(selection.selectedArchiveId))') ||
+      !serviceWorkerSource.includes('const conversation = await promoteMarkedPrimaryArchive(') ||
+      !contentResumeBlock.includes('isFragment: false') ||
+      !contentResumeBlock.includes('lastArchiveId: archiveId')) {
+    fail('manual full archive: bounded capture and legacy migration must allow normal Google Docs export and continuation');
   }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
