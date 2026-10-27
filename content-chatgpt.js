@@ -4198,7 +4198,9 @@
       const resumedDraft = (mode === 'resume-draft' && existingDraftId)
         ? (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId]
         : null;
-      const preservingManualRange = mode === 'fragment' || Boolean(
+      // Manual markers are the capture transport for the primary chat archive.
+      // They do not change the archive's canonical identity.
+      const manuallyBounded = mode === 'fragment' || Boolean(
         resumedDraft?.captureMode === 'fragment' &&
         resumedDraft?.captureRange?.start && resumedDraft?.captureRange?.end
       );
@@ -4899,7 +4901,7 @@
       }
 
       const conversation = {
-        title: (preservingManualRange ? 'Фрагмент — ' : '') + (document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation'),
+        title: document.title.replace(/\s*[–—-]\s*ChatGPT\s*$/i, '').trim() || 'ChatGPT conversation',
         sourceUrl: location.href,
         capturedAt: new Date().toISOString(),
         messages,
@@ -4912,8 +4914,8 @@
         firstPassCount: undefined,
         secondPassCount: undefined,
         passCountMatch: undefined,
-        isFragment: preservingManualRange,
-        fragmentMarkers: preservingManualRange ? (selectedFragment || resumedDraft?.captureRange) : undefined,
+        isFragment: false,
+        manualRangeMarkers: manuallyBounded ? (selectedFragment || resumedDraft?.captureRange) : undefined,
         lastCaptureAddedCount: addedCount,
         lastImageRecoveredCount: recoveredImageRefs.length,
         lastRecoveredImageRefs: recoveredImageRefs,
@@ -4932,7 +4934,7 @@
       // Store the finished archive independently of the job record.
       await chrome.storage.local.set({
         ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId }),
-        ...(preservingManualRange ? { fragmentLatestId: archiveId } : { lastArchiveId: archiveId })
+        lastArchiveId: archiveId
       });
 
       try {
