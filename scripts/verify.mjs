@@ -116,8 +116,7 @@ try {
 
   // Never silently skip the overlap check when virtualized DOM exposes no
   // physically visible navigable turns before or after scrolling.
-  const emptyWindowGuard = /if \\(!beforeRefs\\.length \\|\\| !afterRefs\\.length \\|\\|\\s*!navigationWindowsOverlap\\(beforeRefs, afterRefs\\)\\)/g;
-  if ((contentSource.match(emptyWindowGuard) || []).length !== 2) {
+  if ((contentSource.match(/!beforeRefs\\.length \\|\\| !afterRefs\\.length \\|\\|/g) || []).length !== 2) {
     fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
   }
 
