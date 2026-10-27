@@ -5581,11 +5581,9 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
   const conversation = archiveId ? await getArchive(archiveId) : await getLastArchive();
   if (!conversation) throw new Error('Сначала соберите переписку.');
 
-  if (conversation.isFragment && activeDoc) throw new Error('Фрагмент можно экспортировать только в новый документ Google Docs.');
   if (!activeDoc) {
     const autoParts = planGoogleDocParts(conversation.messages || [], []);
     if (autoParts.length > 1) {
-      if (conversation.isFragment) throw new Error('Этот фрагмент превышает лимит одного документа Google Docs. Скопируйте его или разбейте на части.');
       return exportTabbedConversation('', conversation.id);
     }
   }
@@ -5607,7 +5605,9 @@ async function exportConversation({ activeDoc = false, archiveId = '' } = {}) {
     const previous = await getDocExport(docKey);
     const currentConversationKey = conversationKey(conversation.sourceUrl);
 
-    if (previous?.conversationKey === currentConversationKey) {
+    // A marked-range archive is an independent snapshot, not a continuation
+    // of the conversation's canonical Google Doc. Never reuse its append anchor.
+    if (!conversation.isFragment && previous?.conversationKey === currentConversationKey) {
       let anchorIndex = -1;
 
       if (previous.lastMessageId) {
@@ -5948,7 +5948,9 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
       title,
       messages: part.messages
     };
-    await recordDocExport(partConversation, finalTab.url, { link: false });
+    if (!conversation.isFragment) {
+      await recordDocExport(partConversation, finalTab.url, { link: false });
+    }
 
     docs.push({
       partNumber: part.partNumber,
@@ -5984,13 +5986,23 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
   }
 
   const finalDoc = docs[docs.length - 1];
-  const linkedDocBase = await recordDocExport(conversation, finalDoc.url, { link: true });
-  const linkedDoc = await setLinkedDoc(conversation.sourceUrl, {
-    ...(linkedDocBase || {}),
-    url: finalDoc.url,
-    docId: googleDocKey(finalDoc.url),
-    parts: docs.map(({ browserTabId, ...item }) => item)
-  });
+  // Exporting a manually bounded archive must not relink the canonical chat.
+  const linkedDoc = conversation.isFragment
+    ? await setArchiveDestination(conversation.id, {
+        saved: true,
+        url: finalDoc.url,
+        kind: 'google-doc',
+        label: 'Google Docs'
+      })
+    : await (async () => {
+        const linkedDocBase = await recordDocExport(conversation, finalDoc.url, { link: true });
+        return setLinkedDoc(conversation.sourceUrl, {
+          ...(linkedDocBase || {}),
+          url: finalDoc.url,
+          docId: googleDocKey(finalDoc.url),
+          parts: docs.map(({ browserTabId, ...item }) => item)
+        });
+      })();
 
   return {
     docUrl: finalDoc.url,
