@@ -1815,7 +1815,10 @@ async function startCapture({
   }
 
   // The manual range is tied to the viewport positioned by the user.
-  captureTarget = mode === 'fragment' ? 'current' : (captureTarget === 'current' ? 'current' : 'copy');
+  captureTarget = (mode === 'fragment' ||
+    (mode === 'resume-draft' && providedDraft?.captureMode === 'fragment'))
+    ? 'current'
+    : (captureTarget === 'current' ? 'current' : 'copy');
 
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
