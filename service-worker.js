@@ -1814,7 +1814,8 @@ async function startCapture({
     throw makeCaptureError('WRONG_SITE', 'Откройте ChatGPT в активной вкладке.');
   }
 
-  captureTarget = captureTarget === 'current' ? 'current' : 'copy';
+  // The manual range is tied to the viewport positioned by the user.
+  captureTarget = mode === 'fragment' ? 'current' : (captureTarget === 'current' ? 'current' : 'copy');
 
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
@@ -2270,7 +2271,7 @@ async function resumeNavigationOnlyFromWorkingTab(failedJob = null) {
     throw new Error('Не сохранена нижняя метка снимка; безопасно продолжить этот проход нельзя.');
   }
 
-  if (!['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)) {
+  if (!['full', 'reconcile', 'images'].includes(failedJob.captureMode)) {
     throw new Error('Этот этап нельзя безопасно продолжить без сохранённого черновика.');
   }
 
@@ -2440,7 +2441,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     ['top', 'boundary'].includes(job.phase || '') &&
     boundary?.kind &&
     boundary?.key &&
-    ['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)
+    ['full', 'reconcile', 'images'].includes(job.captureMode)
   );
 
   let preservedCaptureTabId = null;
@@ -2497,6 +2498,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
   const maxAttempts = Number(job.autoRecoveryMaxAttempts || AUTO_RECOVERY_MAX_ATTEMPTS);
   const autoRecoveryEligible = Boolean(
     status === 'error' &&
+    job.captureMode !== 'fragment' &&
     recoveryAvailable &&
     attempts < maxAttempts
   );
