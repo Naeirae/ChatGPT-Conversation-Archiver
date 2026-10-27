@@ -36,6 +36,7 @@ import {
   sameDraftCaptureScope,
   verifiedChronologicalOverlap,
   mergeVerifiedTurns,
+  mergeNewestCapturedTurn,
   groupVerifiedDraftWindows,
   groupVerifiedDraftComponents
 } from './lib/draft-overlap.mjs';
@@ -277,7 +278,13 @@ async function reconcileUnfinishedPrefix(draft) {
     sameDraftCaptureScope(draft, item)
   );
 
-  let messages = draft.messages;
+  // Tag revisions in memory only. A later verified checkpoint with the
+  // same image src but different bytes must replace an older payload.
+  const tagged = itemDraft => (itemDraft.messages || []).map(item => ({
+    ...item,
+    __captureTime: Date.parse(itemDraft.capturedAt || '') || 0
+  }));
+  let messages = tagged(draft);
   let frontier = draft;
   let frontierEnd = messages.length - 1;
   const compatible = [draft];
@@ -287,11 +294,14 @@ async function reconcileUnfinishedPrefix(draft) {
     progress = false;
     for (const candidate of others) {
       if (usedIds.has(candidate.id)) continue;
-      const alignment = verifiedChronologicalOverlap(messages, candidate.messages);
+      const candidateMessages = tagged(candidate);
+      const alignment = verifiedChronologicalOverlap(messages, candidateMessages);
       if (!alignment) continue;
 
       const joined = mergeVerifiedTurns(
-        messages, candidate.messages, alignment, mergeStoredMessageCapture
+        messages, candidateMessages, alignment,
+        (oldMessage, newMessage) =>
+          mergeNewestCapturedTurn(oldMessage, newMessage, mergeStoredMessageCapture)
       );
       const previousFrontierEnd = frontierEnd + joined.startShift;
       if (joined.rightEndIndex > previousFrontierEnd) {
@@ -307,6 +317,8 @@ async function reconcileUnfinishedPrefix(draft) {
     }
   }
   if (compatible.length < 2) return draft;
+  // Internal comparison timestamps must not leak into exported messages.
+  messages = messages.map(({ __captureTime, ...message }) => message);
 
   // Deterministic synthetic draft, never a destructive rewrite of a source
   // snapshot. This also makes repeated retries of the same component reusable.
@@ -362,29 +374,11 @@ async function reconcileUnfinishedPrefix(draft) {
     ])]
   };
 
-  const existing = await getDraft(mergeId);
-  const sameSourceSet = existing?.verifiedMergedFromDraftIds?.length === originalIds.length &&
-    originalIds.every((id, index) => existing.verifiedMergedFromDraftIds[index] === id);
-  const sameContent = Boolean(existing &&
-    existing.messages?.length === messages.length &&
-    existing.messages.every((item, i) =>
-      storedMessagesMatch(item, messages[i]) &&
-      (item.images?.length || 0) === (messages[i].images?.length || 0) &&
-      (item.images || []).filter(storedImageReady).length ===
-        (messages[i].images || []).filter(storedImageReady).length
-    ));
-  const sameFrontier = Boolean(existing &&
-    existing.capturePhase === 'walk' &&
-    existing.lastMessageId === updated.lastMessageId &&
-    existing.lastScrollDirection === updated.lastScrollDirection &&
-    existing.pendingDocUrl === updated.pendingDocUrl &&
-    JSON.stringify(existing.resumeWindowSignatures || []) ===
-      JSON.stringify(updated.resumeWindowSignatures || [])
-  );
-  const unchanged = sameSourceSet && sameContent && sameFrontier;
-  if (!unchanged) {
-    await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
-  }
+  // Materialization occurs only through an explicit draft operation. Rewrite
+  // the synthetic copy from the latest verified sources so changes in image
+  // bytes, HTML, reasoning or metadata cannot be hidden by equal ready counts.
+  // Source drafts are never overwritten.
+  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
 
   // A positioned recovery tab is useful only with a verified frontier.
   // Prefer the last appended window; never move or close source tabs here.
@@ -404,7 +398,7 @@ async function reconcileUnfinishedPrefix(draft) {
     break;
   }
 
-  return unchanged ? existing : updated;
+  return updated;
 }
 
 async function compactCompatibleDrafts(drafts = []) {
