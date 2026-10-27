@@ -102,6 +102,18 @@ try {
     fail('traversal: offscreen mounted messages must not count as window overlap');
   }
 
+  // Both metric and fallback transports must pick the visible chat window,
+  // then measure the fallback result afresh rather than reusing stale metrics.
+  const transportStart = serviceWorkerSource.indexOf('async function chatScrollMetrics(');
+  const transportEnd = serviceWorkerSource.indexOf('async function withChatDebugger(', transportStart);
+  const transportSource = serviceWorkerSource.slice(transportStart, transportEnd);
+  if (transportStart < 0 || transportEnd < 0 ||
+      (transportSource.match(/r.bottom > 0 && r.top < innerHeight/g) || []).length < 2 ||
+      !transportSource.includes('const fallbackMetrics = await chatScrollMetrics(tabId, direction)') ||
+      !transportSource.includes('fallbackMetrics?.atEnd')) {
+    fail('scroll transport: physical viewport anchors and post-fallback edge verification required');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
