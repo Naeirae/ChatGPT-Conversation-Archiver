@@ -4062,11 +4062,8 @@
       collect(map, order, settings, boundary);
 
       const afterRefs = visibleNavigationRefsLightweight();
-      if (
-        beforeRefs.length &&
-        afterRefs.length &&
-        !navigationWindowsOverlap(beforeRefs, afterRefs)
-      ) {
+      if (!beforeRefs.length || !afterRefs.length ||
+          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4227,7 +4224,7 @@ if (boundaryIsVisible(boundary)) {
       }
 
       const afterRefs = visibleNavigationRefsLightweight();
-      if (beforeRefs.length && afterRefs.length &&
+      if (!beforeRefs.length || !afterRefs.length ||
           !navigationWindowsOverlap(beforeRefs, afterRefs)) {
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
