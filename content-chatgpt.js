@@ -4788,10 +4788,12 @@
 
       if (mode === 'fragment') {
         const startMatches = selectedFragment.start
-          ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.start) ? [i] : [])
+          ? capturedMessages.flatMap((item, i) =>
+              anchorMatches(item, selectedFragment.start, capturedMessages, i) ? [i] : [])
           : [0];
         const endMatches = selectedFragment.end
-          ? capturedMessages.flatMap((item, i) => anchorMatches(item, selectedFragment.end) ? [i] : [])
+          ? capturedMessages.flatMap((item, i) =>
+              anchorMatches(item, selectedFragment.end, capturedMessages, i) ? [i] : [])
           : [capturedMessages.length - 1];
         if (startMatches.length !== 1 || endMatches.length !== 1) {
           throw new Error('Невозможно однозначно определить отмеченные реплики.');
@@ -5416,11 +5418,24 @@
     );
   }
 
-  function anchorMatches(message, anchor) {
+  function anchorMatches(message, anchor, messages = null, index = -1) {
     if (!anchor || !message) return false;
+    // A persisted strong ID identifies a logical turn even after the nearby
+    // DOM/context disappears through ChatGPT virtualization.
+    if (isStrongMessageId(anchor.id)) return anchor.id === message.id;
+    const signature = messageTextSignature(message);
+    if (anchor.signature && anchor.signature !== signature) return false;
+    if (Array.isArray(messages) && index >= 0) {
+      // Final trimming must use the ORIGINAL marked neighbour context,
+      // otherwise a repeated text elsewhere in a long chat could be mistaken
+      // for the selected end marker.
+      return messageBoundaryContextMatches(messages, index, {
+        contextBefore: anchor.contextBefore || []
+      });
+    }
     return markerIdentityMatches(anchor, {
       id: String(message.id || ''),
-      signature: messageTextSignature(message),
+      signature,
       role: String(message.role || '')
     });
   }
