@@ -12,6 +12,7 @@ const jsFiles = [
   'lib/text.mjs',
   'lib/urls.mjs',
   'lib/draft-overlap.mjs',
+  'lib/capture-evidence.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -89,6 +90,27 @@ try {
       !serviceWorkerSource.includes("type: 'mouseWheel'") ||
       !serviceWorkerSource.includes("deltaY: sign * 860")) {
     fail('scroll transport: debugger wheel must remain the primary traversal transport in this forensic candidate');
+  }
+
+  // Completion is boundary evidence, not a minimum message count. Seven
+  // genuinely complete messages are valid; seven frozen virtualized turns
+  // without confirmed start/end must not be marked as a full archive.
+  const proofSource = await readFile('lib/capture-evidence.mjs', 'utf8');
+  if (!proofSource.includes('export function fullTopEvidence(') ||
+      !proofSource.includes('export function completedBoundedPass(') ||
+      !contentSource.includes('async function reachSnapshotEndWithoutCapture(') ||
+      !contentSource.includes('verifiedSnapshotEnd = await reachSnapshotEndWithoutCapture()') ||
+      !contentSource.includes('verifiedFullStart = await reachTopWithoutCapture(') ||
+      !contentSource.includes('verifiedMarkedStart = true') ||
+      !contentSource.includes('captureProof: (mode === \'full\' || mode === \'fragment\')') ||
+      !contentSource.includes('if (!observedUpwardTravel)') ||
+      !contentSource.includes("kind: isStrongMessageId(selectedFragment.end.id) ? 'stable' : 'signature'") ||
+      !serviceWorkerSource.includes('const top = message.mode === \'full\' ? fullTopEvidence(') ||
+      !serviceWorkerSource.includes('const accepted = completedBoundedPass(') ||
+      !serviceWorkerSource.includes('ok: fallbackMoved || fallbackAtEdge') ||
+      !serviceWorkerSource.includes('moved,') ||
+      !serviceWorkerSource.includes('await putArchive({ ...archive, partial: true, complete: false })')) {
+    fail('capture completeness: require a verified snapshot end and proven start; never treat a frozen viewport as a completed chat');
   }
 
   const debuggerTopStart = contentSource.indexOf('async function reachTopWithoutCapture');
@@ -1035,6 +1057,7 @@ const tests = spawnSync(process.execPath, [
   'tests/urls.test.mjs',
   'tests/archive-store.test.mjs',
   'tests/draft-overlap.test.mjs',
+  'tests/capture-evidence.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
   'tests/document-parts.test.mjs'
