@@ -1941,7 +1941,9 @@
       // A full capture is a snapshot. Messages created after the bottom marker
       // must never be absorbed just because they became visible while we were
       // walking back down.
-      if (stopBoundary && matchesBoundary(turn, stopBoundary)) break;
+      // A mounted offscreen end marker must not truncate the current window.
+      if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
+          turnIntersectsCaptureViewport(turn)) break;
     }
 
     return [...new Set(touchedIds)];
