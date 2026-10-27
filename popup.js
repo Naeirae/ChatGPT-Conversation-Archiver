@@ -438,7 +438,10 @@ function renderUnfinishedPasses(items = []) {
         row.remove();
         count.textContent = String(list.children.length);
         setStatus('Сохранённые данные незавершённого сбора удалены. Рабочая вкладка не закрыта.');
-        void getState().catch(error => setStatus(error.message || String(error), true));
+        cachedUnfinishedGroups = null;
+        void getState()
+          .then(() => loadUnfinishedGroups())
+          .catch(error => setStatus(error.message || String(error), true));
       } catch (error) {
         remove.disabled = false;
         setStatus(error.message || String(error), true);
@@ -1026,10 +1029,25 @@ function render(data) {
   if (Array.isArray(state.history)) renderHistory(state.history);
   renderUnfinishedPasses(state.unfinishedPasses || []);
   if (Array.isArray(state.savedArchives)) renderSavedArchives(state.savedArchives);
-  const hasUnfinished = Boolean((state.unfinishedPasses || []).length);
+  const hasUnfinished = Boolean(
+    (state.unfinishedPasses || []).length ||
+    Number(state.unfinishedDraftCount || 0) > 0 ||
+    state.unfinishedDraftCount == null ||
+    state.hasUnfinishedRecovery
+  );
   const unfinishedPanel = $('unfinishedPassesPanel');
   unfinishedPanel?.classList.toggle('hidden', !hasUnfinished);
   unfinishedPanel?.classList.toggle('has-items', hasUnfinished);
+  if (!state.unfinishedDetailsLoaded) {
+    const draftCount = state.unfinishedDraftCount;
+    $('unfinishedPassesCount').textContent =
+      draftCount == null ? '…' : String(draftCount) + ' черновиков';
+  }
+  const showDrafts = $('loadUnfinishedPasses');
+  if (showDrafts && !unfinishedGroupLoading) {
+    showDrafts.textContent = state.unfinishedDetailsLoaded
+      ? 'Обновить черновики' : 'Показать черновики';
+  }
   const isFragmentRun = job?.captureMode === 'fragment' && running;
   const captureHeading = document.querySelector('.capture-card .section-heading strong');
   if (captureHeading) captureHeading.textContent = isFragmentRun
@@ -1210,9 +1228,48 @@ function render(data) {
   }
 }
 
+let cachedUnfinishedGroups = null;
+let unfinishedGroupLoading = false;
+
+async function loadUnfinishedGroups() {
+  if (unfinishedGroupLoading) return;
+  const button = $('loadUnfinishedPasses');
+  unfinishedGroupLoading = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = 'Проверяю черновики…';
+  }
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_UNFINISHED_GROUPS' });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить черновики.');
+    cachedUnfinishedGroups = result.unfinishedPasses || [];
+    if (state) {
+      render({
+        ...state,
+        unfinishedPasses: cachedUnfinishedGroups,
+        unfinishedPass: result.unfinishedPass || null,
+        unfinishedDetailsLoaded: true
+      });
+    }
+  } catch (error) {
+    setStatus(error?.message || String(error), true);
+  } finally {
+    unfinishedGroupLoading = false;
+    if (button) button.disabled = false;
+    if (button) button.textContent = cachedUnfinishedGroups
+      ? 'Обновить черновики' : 'Показать черновики';
+  }
+}
+
+$('loadUnfinishedPasses').onclick = () => { void loadUnfinishedGroups(); };
+
 async function getState() {
   const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' });
   if (!result?.ok) throw new Error(result?.error || 'Не удалось получить состояние.');
+  if (cachedUnfinishedGroups) {
+    result.unfinishedPasses = cachedUnfinishedGroups;
+    result.unfinishedDetailsLoaded = true;
+  }
   render(result);
   return result;
 }
@@ -1271,6 +1328,7 @@ async function getLiveState() {
   const wasActive = ['starting', 'running', 'paused'].includes(previousStatus);
   const isActive = ['starting', 'running', 'paused'].includes(nextStatus);
   if (wasActive && !isActive) {
+    cachedUnfinishedGroups = null;
     return getState();
   }
   return result;
