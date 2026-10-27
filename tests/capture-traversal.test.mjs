@@ -119,3 +119,70 @@ test('shared visible strong message proves genuine window overlap', () => {
   turns = [fixtureTurn('two'), fixtureTurn('three')];
   assert.equal(overlap(first, refs()), true);
 });
+
+function boundaryFixture() {
+  const hash = value => String(value);
+  const signature = msg => msg.role + ':' + hash(msg.text);
+  const strong = id => /^(?:data-message-id|data-turn-id):/.test(String(id || ''));
+  return new Function(
+    'messageTextSignature', 'isStrongMessageId',
+    extract('messageBoundaryContextMatches') +
+    extract('messageMatchesBoundary') +
+    extract('uniqueBoundaryIndex') +
+    extract('trimMessagesFromMarkedStart') +
+    extract('trimMessagesThroughBoundary') +
+    '; return { trimMessagesFromMarkedStart, trimMessagesThroughBoundary };'
+  )(signature, strong);
+}
+
+test('marked start excludes older turns while retaining the selected message', () => {
+  const { trimMessagesFromMarkedStart } = boundaryFixture();
+  const rows = [
+    { id: 'data-message-id:older', role: 'user', text: 'earlier' },
+    { id: 'data-message-id:start', role: 'assistant', text: 'begin' },
+    { id: 'data-message-id:later', role: 'user', text: 'later' }
+  ];
+  const result = trimMessagesFromMarkedStart(rows, { id: 'data-message-id:start' });
+  assert.equal(result.found, true);
+  assert.deepEqual(result.messages.map(x => x.text), ['begin', 'later']);
+});
+
+test('repeated weak end signatures without a unique context fail closed', () => {
+  const { trimMessagesThroughBoundary } = boundaryFixture();
+  const rows = [
+    { id: 'weak:1', role: 'assistant', text: 'same' },
+    { id: 'weak:2', role: 'user', text: 'middle' },
+    { id: 'weak:3', role: 'assistant', text: 'same' }
+  ];
+  const result = trimMessagesThroughBoundary(rows, { kind: 'signature', key: 'assistant:same' });
+  assert.equal(result.found, false);
+  assert.equal(result.messages.length, 3);
+});
+
+test('neighbor context distinguishes weak end marker repetitions', () => {
+  const { trimMessagesThroughBoundary } = boundaryFixture();
+  const rows = [
+    { id: 'weak:1', role: 'assistant', text: 'same' },
+    { id: 'weak:2', role: 'user', text: 'middle' },
+    { id: 'weak:3', role: 'assistant', text: 'same' },
+    { id: 'weak:4', role: 'user', text: 'after' }
+  ];
+  const result = trimMessagesThroughBoundary(rows, {
+    kind: 'signature', key: 'assistant:same', contextBefore: ['user:middle']
+  });
+  assert.equal(result.found, true);
+  assert.deepEqual(result.messages.map(x => x.text), ['same', 'middle', 'same']);
+});
+
+test('strong marked end remains unique despite identical texts', () => {
+  const { trimMessagesThroughBoundary } = boundaryFixture();
+  const rows = [
+    { id: 'data-message-id:one', role: 'assistant', text: 'same' },
+    { id: 'data-message-id:two', role: 'assistant', text: 'same' }
+  ];
+  const result = trimMessagesThroughBoundary(rows, {
+    kind: 'stable', key: 'data-message-id:two'
+  });
+  assert.equal(result.found, true);
+  assert.equal(result.messages.length, 2);
+});
