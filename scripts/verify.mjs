@@ -116,7 +116,8 @@ try {
 
   // Never silently skip the overlap check when virtualized DOM exposes no
   // physically visible navigable turns before or after scrolling.
-  if ((contentSource.match(/!beforeRefs\\.length \\|\\| !afterRefs\\.length \\|\\|/g) || []).length !== 2) {
+  const emptyEvidenceGuardCount = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
+  if (emptyEvidenceGuardCount !== 2) {
     fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
   }
 
