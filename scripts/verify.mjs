@@ -648,6 +648,26 @@ try {
       !serviceWorkerSource.includes('conversationKey(item.sourceUrl || \'\') === source')) {
     fail('draft grouping: same chat title is not proof; only matching conversation ID, boundary, range and chronological prefix allow merging');
   }
+  const libraryStoreSource = await readFile('lib/archive-store.mjs', 'utf8');
+  if (!serviceWorkerSource.includes('async function listLinkedArchivesFast()') ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_GET_SAVED_ARCHIVES_FAST':") ||
+      !serviceWorkerSource.includes("case 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS':") ||
+      !serviceWorkerSource.includes('savedArchives: await listLinkedArchivesFast()') ||
+      !popupJs.includes('async function loadFastArchiveLibrary()') ||
+      !popupJs.includes('async function hydrateSavedArchiveDetails()') ||
+      !popupJs.includes("item.messageCount) ? item.messageCount : '…'") ||
+      !popupJs.includes('void loadFastArchiveLibrary().catch(') ||
+      !libraryStoreSource.includes('messageCount: Number(conversation.messages?.length || 0)')) {
+    fail('saved archive library: show counts from lightweight metadata first and hydrate legacy details separately');
+  }
+  const popupStateStart = serviceWorkerSource.indexOf("case 'ARCHIVER_GET_STATE':");
+  const popupStateEnd = serviceWorkerSource.indexOf("case 'ARCHIVER_GET_DRAFT':", popupStateStart);
+  const popupStateBlock = serviceWorkerSource.slice(popupStateStart, popupStateEnd);
+  if (popupStateBlock.includes('compactCompatibleDrafts(') ||
+      popupStateBlock.includes('await registerArchive(archive)') ||
+      popupStateBlock.includes('savedArchives: await listLinkedArchives()')) {
+    fail('popup startup performance: state read must not mutate drafts or deserialize entire archive library');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||

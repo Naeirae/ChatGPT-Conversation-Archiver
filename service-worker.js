@@ -678,6 +678,60 @@ async function validatedArchiveDestination(archive, destination = null) {
   return docExportCoversArchive(exportRecord, archive) ? destination : null;
 }
 
+// Metadata-only library lookup for immediate popup rendering. Do not touch
+// archive:*/draft:* message bodies here; older cards have unknown counts until
+// the separate detail lookup completes.
+async function listLinkedArchivesFast() {
+  const meta = await chrome.storage.local.get([
+    STORAGE_KEYS.archiveIndex,
+    STORAGE_KEYS.archiveLibrary,
+    STORAGE_KEYS.lastArchiveId,
+    STORAGE_KEYS.archiveDestinations,
+    STORAGE_KEYS.docExports,
+    STORAGE_KEYS.docLinks,
+    'fragmentLatestId'
+  ]);
+  const library = meta[STORAGE_KEYS.archiveLibrary] || {};
+  const destinations = meta[STORAGE_KEYS.archiveDestinations] || {};
+  const docLinks = meta[STORAGE_KEYS.docLinks] || {};
+  const docExports = meta[STORAGE_KEYS.docExports] || {};
+  const ids = new Set([
+    ...Object.keys(library),
+    ...Object.values(meta[STORAGE_KEYS.archiveIndex] || {}),
+    meta[STORAGE_KEYS.lastArchiveId] || '',
+    meta.fragmentLatestId || '',
+    ...Object.keys(destinations)
+  ].filter(Boolean));
+  const rows = [];
+  for (const id of ids) {
+    const item = library[id];
+    if (!item?.sourceUrl || item.complete === false) continue;
+    const sourceKey = conversationKey(item.sourceUrl);
+    const linked = sourceKey && !item.isFragment ? docLinks[sourceKey] : null;
+    const destination = destinations[id] || null;
+    const matchingExport = Object.values(docExports).find(entry => entry?.archiveId === id);
+    const docUrl = destination?.url || matchingExport?.docUrl || '';
+    rows.push({
+      id,
+      title: item.title || 'Архив ChatGPT',
+      sourceUrl: item.sourceUrl,
+      capturedAt: item.capturedAt || '',
+      isFragment: Boolean(item.isFragment),
+      complete: true,
+      messageCount: Number.isFinite(item.messageCount) ? item.messageCount : null,
+      imageCount: Number.isFinite(item.imageCount) ? item.imageCount : null,
+      imageBinaryReady: Number.isFinite(item.imageBinaryReady) ? item.imageBinaryReady : null,
+      imageBinaryFailed: Number.isFinite(item.imageBinaryFailed) ? item.imageBinaryFailed : null,
+      docUrl,
+      linkedDocUrl: linked?.url || '',
+      destination,
+      updatedAt: destination?.updatedAt || item.capturedAt || ''
+    });
+  }
+  rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return rows;
+}
+
 async function listLinkedArchives() {
   // Never deserialize every archive just to render the popup. Large archives
   // contain thousands of messages and can stall both UI polling and capture.
@@ -6179,6 +6233,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const job = await refreshCaptureJobHealth();
         return { ok: true, job, unfinishedPass: liveUnfinishedSummary(job) };
       }
+      case 'ARCHIVER_GET_SAVED_ARCHIVES_FAST':
+        return { ok: true, savedArchives: await listLinkedArchivesFast() };
+      case 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS':
+        return { ok: true, savedArchives: await listLinkedArchives() };
       case 'ARCHIVER_GET_STATE': {
         let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
@@ -6213,13 +6271,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc = selectedArchive.isFragment
             ? null : await getLinkedDoc(selectedArchive.sourceUrl || '');
         }
-        if (archive?.id && !archive.partial && archive.complete !== false) {
-          await registerArchive(archive);
-        }
         if (!activeIsConversation && !linkedDoc && archive?.sourceUrl) {
           linkedDoc = await getLinkedDoc(archive.sourceUrl);
         }
-        const drafts = await compactCompatibleDrafts(await listDrafts());
+        // Popup state is read-only. Never compact/delete/rewrite large drafts
+        // on UI open or refresh; consolidation belongs to explicit recovery.
+        const drafts = await listDrafts();
         const unfinishedPasses = await buildUnfinishedCaptureGroups(drafts);
 
         let activeUnfinished = unfinishedPasses.find(item =>
@@ -6287,7 +6344,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           unfinishedPasses,
           linkedDoc,
           captureRange,
-          savedArchives: await listLinkedArchives(),
+          savedArchives: await listLinkedArchivesFast(),
           canContinue: Boolean(archive?.messages?.length && !archive.isFragment),
           history: await getRunHistory()
         };
