@@ -714,34 +714,66 @@ async function listLinkedArchivesFast() {
     meta.fragmentLatestId || '',
     ...Object.keys(destinations)
   ].filter(Boolean));
+  const exportsByArchive = new Map();
+  for (const entry of Object.values(docExports)) {
+    if (entry?.archiveId && !exportsByArchive.has(entry.archiveId)) {
+      exportsByArchive.set(entry.archiveId, entry);
+    }
+  }
   const rows = [];
   for (const id of ids) {
-    const item = library[id];
-    if (!item?.sourceUrl || item.complete === false) continue;
-    const sourceKey = conversationKey(item.sourceUrl);
-    const linked = sourceKey && !item.isFragment ? docLinks[sourceKey] : null;
+    const item = library[id] || null;
+    if (item?.complete === false) continue;
+    const sourceKey = conversationKey(item?.sourceUrl || '');
+    const linked = sourceKey && !item?.isFragment ? docLinks[sourceKey] : null;
     const destination = destinations[id] || null;
-    const matchingExport = Object.values(docExports).find(entry => entry?.archiveId === id);
+    const matchingExport = exportsByArchive.get(id) || null;
     const docUrl = destination?.url || matchingExport?.docUrl || '';
     rows.push({
       id,
-      title: item.title || 'Архив ChatGPT',
-      sourceUrl: item.sourceUrl,
-      capturedAt: item.capturedAt || '',
-      isFragment: Boolean(item.isFragment),
+      title: item?.title || 'Загружаю сведения об архиве…',
+      sourceUrl: item?.sourceUrl || '',
+      capturedAt: item?.capturedAt || '',
+      isFragment: Boolean(item?.isFragment),
       complete: true,
-      messageCount: Number.isFinite(item.messageCount) ? item.messageCount : null,
-      imageCount: Number.isFinite(item.imageCount) ? item.imageCount : null,
-      imageBinaryReady: Number.isFinite(item.imageBinaryReady) ? item.imageBinaryReady : null,
-      imageBinaryFailed: Number.isFinite(item.imageBinaryFailed) ? item.imageBinaryFailed : null,
+      messageCount: Number.isFinite(item?.messageCount) ? item.messageCount : null,
+      imageCount: Number.isFinite(item?.imageCount) ? item.imageCount : null,
+      imageBinaryReady: Number.isFinite(item?.imageBinaryReady) ? item.imageBinaryReady : null,
+      imageBinaryFailed: Number.isFinite(item?.imageBinaryFailed) ? item.imageBinaryFailed : null,
       docUrl,
       linkedDocUrl: linked?.url || '',
       destination,
-      updatedAt: destination?.updatedAt || item.capturedAt || ''
+      updatedAt: destination?.updatedAt || item?.capturedAt || ''
     });
   }
   rows.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   return rows;
+}
+
+// Upgrade legacy registry cards incrementally: only archives with missing
+// metadata are read. Never load all complete archives for a popup refresh.
+async function hydrateLegacyArchiveLibrary() {
+  const meta = await chrome.storage.local.get([
+    STORAGE_KEYS.archiveIndex, STORAGE_KEYS.archiveLibrary,
+    STORAGE_KEYS.lastArchiveId, STORAGE_KEYS.archiveDestinations, 'fragmentLatestId'
+  ]);
+  const library = meta[STORAGE_KEYS.archiveLibrary] || {};
+  const ids = new Set([
+    ...Object.keys(library),
+    ...Object.values(meta[STORAGE_KEYS.archiveIndex] || {}),
+    meta[STORAGE_KEYS.lastArchiveId] || '',
+    meta.fragmentLatestId || '',
+    ...Object.keys(meta[STORAGE_KEYS.archiveDestinations] || {})
+  ].filter(Boolean));
+  for (const id of ids) {
+    const card = library[id];
+    if (card?.sourceUrl && Number.isFinite(card.messageCount) &&
+        Number.isFinite(card.imageCount)) continue;
+    const archive = await getArchive(id);
+    if (!archive?.id || archive.partial || archive.complete === false) continue;
+    await registerArchive(archive);
+  }
+  return listLinkedArchivesFast();
 }
 
 async function listLinkedArchives() {
@@ -6248,7 +6280,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_GET_SAVED_ARCHIVES_FAST':
         return { ok: true, savedArchives: await listLinkedArchivesFast() };
       case 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS':
-        return { ok: true, savedArchives: await listLinkedArchives() };
+        return { ok: true, savedArchives: await hydrateLegacyArchiveLibrary() };
       case 'ARCHIVER_GET_STATE': {
         let job = await refreshCaptureJobHealth();
         const tab = await getActiveTab();
