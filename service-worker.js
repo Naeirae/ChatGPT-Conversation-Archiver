@@ -157,8 +157,10 @@ function unfinishedRangeKey(item) {
   const startKey = String(start.id || start.signature || '');
   const endKey = String(end.id || end.signature || '');
   if (!startKey && !endKey) return 'full-range';
+  // The same manually bounded pass can move through fragment -> resume-draft.
+  // Its capture mode is transport/recovery state, not an identity boundary.
   return [
-    mode || 'range',
+    'manual-range',
     'start:' + (startKey || 'open'),
     'end:' + (endKey || 'open')
   ].join(':');
@@ -252,6 +254,16 @@ function storedMessagesMatch(a, b) {
   );
 }
 
+// A common title, a common URL alone or a single repeated utterance cannot
+// establish that two drafts are interchangeable. Require a complete prefix
+// overlap with at least two messages, preserving the original order.
+function verifiedDraftPrefixOverlap(left, right) {
+  if (!left?.messages?.length || !right?.messages?.length) return false;
+  const overlap = Math.min(left.messages.length, right.messages.length);
+  return overlap >= 2 && Array.from({ length: overlap }, (_, i) => i)
+    .every(i => storedMessagesMatch(left.messages[i], right.messages[i]));
+}
+
 // Merge only verified chronological prefixes from the same conversation,
 // snapshot boundary and manual range. Once the merged canonical draft is
 // durably written, compatible technical retry copies are redundant and may
@@ -272,12 +284,9 @@ async function reconcileUnfinishedPrefix(draft) {
     item.messages?.length
   );
   const matchingMessage = storedMessagesMatch;
-  const compatible = [draft, ...others.filter(candidate => {
-    const n = Math.min(draft.messages.length, candidate.messages.length);
-    // Require at least two matching turns and all available overlap in order.
-    return n >= 2 && Array.from({ length: n }, (_, i) => i)
-      .every(i => matchingMessage(draft.messages[i], candidate.messages[i]));
-  })];
+  const compatible = [draft, ...others.filter(candidate =>
+    verifiedDraftPrefixOverlap(draft, candidate)
+  )];
   if (compatible.length < 2) return draft;
   const longest = compatible.reduce((best, item) =>
     item.messages.length > best.messages.length ? item : best, draft);
@@ -434,13 +443,27 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       recoveryTabUpdatedAt: Number(recoveryTab.record?.updatedAt || 0),
       canExportPrefix: ['walk', 'finalizing'].includes(item.capturePhase || '')
     };
-    const key = unfinishedGroupKey(item);
+    const baseKey = unfinishedGroupKey(item);
+    // Different passages of the same conversation may share an end marker and
+    // even a title. Only join drafts whose saved chronological overlap proves
+    // identity; divergent versions receive separate user-visible cards.
+    let key = '';
+    for (const [candidateKey, members] of groups) {
+      if (!candidateKey.startsWith(baseKey + '|prefix:')) continue;
+      const witness = members[0]?._draftWitness;
+      if (verifiedDraftPrefixOverlap(item, witness)) {
+        key = candidateKey;
+        break;
+      }
+    }
+    if (!key) key = baseKey + '|prefix:' + String(item.id);
     if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+    groups.get(key).push({ ...row, _draftWitness: item });
   }
 
   const result = [];
   for (const [groupKey, members] of groups.entries()) {
+    members.forEach(item => { delete item._draftWitness; });
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
 
