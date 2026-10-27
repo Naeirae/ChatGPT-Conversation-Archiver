@@ -263,36 +263,59 @@ function storedMessagesMatch(a, b) {
 async function reconcileUnfinishedPrefix(draft) {
   if (!draft?.id || !draft.messages?.length ||
       !['walk', 'finalizing'].includes(draft.capturePhase || '')) return draft;
-  const source = conversationKey(draft.sourceUrl || '');
-  const boundary = unfinishedBoundaryKey(draft);
-  const range = unfinishedRangeKey(draft);
-  if (!source || boundary === 'legacy') return draft;
+  if (!conversationKey(draft.sourceUrl || '') ||
+      unfinishedBoundaryKey(draft) === 'legacy') return draft;
+
+  // Snapshot boundaries, manual marks and real conversation IDs must agree.
+  // Titles are deliberately ignored. No original draft is overwritten.
   const others = (await listDrafts()).filter(item =>
     item?.id !== draft.id &&
     ['walk', 'finalizing'].includes(item.capturePhase || '') &&
-    conversationKey(item.sourceUrl || '') === source &&
-    unfinishedBoundaryKey(item) === boundary &&
-    unfinishedRangeKey(item) === range &&
-    item.messages?.length
+    item.messages?.length &&
+    sameDraftCaptureScope(draft, item)
   );
-  const matchingMessage = storedMessagesMatch;
-  const compatible = [draft, ...others.filter(candidate =>
-    verifiedDraftPrefixOverlap(draft, candidate)
-  )];
-  if (compatible.length < 2) return draft;
-  const longest = compatible.reduce((best, item) =>
-    item.messages.length > best.messages.length ? item : best, draft);
-  const messages = longest.messages.map((message, i) => {
-    let enriched = message;
-    for (const candidate of compatible) {
-      const alternate = candidate.messages[i];
-      if (!alternate || !matchingMessage(message, alternate)) continue;
-      enriched = mergeStoredMessageCapture(enriched, alternate);
+
+  let messages = draft.messages;
+  let frontier = draft;
+  let frontierEnd = messages.length - 1;
+  const compatible = [draft];
+  const usedIds = new Set([draft.id]);
+  let progress = true;
+  while (progress) {
+    progress = false;
+    for (const candidate of others) {
+      if (usedIds.has(candidate.id)) continue;
+      const alignment = verifiedChronologicalOverlap(messages, candidate.messages);
+      if (!alignment) continue;
+
+      const joined = mergeVerifiedTurns(
+        messages, candidate.messages, alignment, mergeStoredMessageCapture
+      );
+      const previousFrontierEnd = frontierEnd + joined.startShift;
+      if (joined.rightEndIndex > previousFrontierEnd) {
+        frontier = candidate;
+        frontierEnd = joined.rightEndIndex;
+      } else {
+        frontierEnd = previousFrontierEnd;
+      }
+      messages = joined.messages;
+      compatible.push(candidate);
+      usedIds.add(candidate.id);
+      progress = true;
     }
-    return enriched;
-  });
-  const imageReadyCount = message =>
-    (message?.images || []).filter(storedImageReady).length;
+  }
+  if (compatible.length < 2) return draft;
+
+  // Deterministic synthetic draft, never a destructive rewrite of a source
+  // snapshot. This also makes repeated retries of the same component reusable.
+  const originalIds = [...new Set(compatible.flatMap(item =>
+    Array.isArray(item.verifiedMergedFromDraftIds) && item.verifiedMergedFromDraftIds.length
+      ? item.verifiedMergedFromDraftIds
+      : [item.id]
+  ))].sort();
+  const mergeId = 'verified-merge:' + hashText(
+    unfinishedGroupKey(draft) + '|' + originalIds[0]
+  );
   const newest = [...compatible].sort((a, b) =>
     String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
   )[0] || draft;
@@ -306,6 +329,7 @@ async function reconcileUnfinishedPrefix(draft) {
 
   const updated = {
     ...draft,
+    id: mergeId,
     messages,
     chronologicalCount: messages.length,
     imageCount: messages.reduce((n, item) => n + (item.images?.length || 0), 0),
@@ -313,67 +337,60 @@ async function reconcileUnfinishedPrefix(draft) {
       n + (item.images || []).filter(storedImageReady).length, 0),
     imageBinaryFailed: messages.reduce((n, item) =>
       n + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
+    capturedAt: newest.capturedAt || draft.capturedAt || '',
     capturePhase: 'walk',
-    captureRange: longest.captureRange || newest.captureRange || draft.captureRange || null,
-    navigationHighWater: Math.max(...compatible.map(item => Number(item.navigationHighWater || 0)), 0),
-    resumeWindowSignatures: Array.isArray(longest.resumeWindowSignatures)
-      ? longest.resumeWindowSignatures
+    captureRange: draft.captureRange || frontier.captureRange || null,
+    navigationHighWater: Math.max(...compatible.map(item =>
+      Number(item.navigationHighWater || 0)), 0),
+    resumeWindowSignatures: Array.isArray(frontier.resumeWindowSignatures)
+      ? frontier.resumeWindowSignatures
       : (newest.resumeWindowSignatures || draft.resumeWindowSignatures || []),
-    lastScrollDirection:
-      longest.lastScrollDirection || newest.lastScrollDirection || draft.lastScrollDirection || 'down',
+    lastScrollDirection: frontier.lastScrollDirection || draft.lastScrollDirection || 'down',
+    lastMessageId: messages[messages.length - 1]?.id || '',
     pendingDocUrl: pendingDocSource?.pendingDocUrl || draft.pendingDocUrl || '',
     pendingDocMode: pendingDocSource?.pendingDocMode || draft.pendingDocMode || '',
-    partialSaveEnabled: Boolean(
-      draft.partialSaveEnabled || partialSource?.partialSaveEnabled
-    ),
-    partialArchiveId:
-      partialSource?.partialArchiveId || draft.partialArchiveId || '',
-    partialSavedAt:
-      partialSource?.partialSavedAt || draft.partialSavedAt || '',
+    partialSaveEnabled: Boolean(draft.partialSaveEnabled || partialSource?.partialSaveEnabled),
+    partialArchiveId: partialSource?.partialArchiveId || draft.partialArchiveId || '',
+    partialSavedAt: partialSource?.partialSavedAt || draft.partialSavedAt || '',
+    verifiedMerge: true,
+    verifiedMergedFromDraftIds: originalIds,
     recoveredFromDraftIds: [...new Set([
       ...(draft.recoveredFromDraftIds || []),
-      ...compatible.map(item => item.id)
+      ...originalIds
     ])]
   };
-  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + draft.id]: updated });
 
-  const redundantIds = compatible
-    .map(item => item.id)
-    .filter(id => id && id !== draft.id);
+  const existing = await getDraft(mergeId);
+  const sameSourceSet = existing?.verifiedMergedFromDraftIds?.length === originalIds.length &&
+    originalIds.every((id, index) => existing.verifiedMergedFromDraftIds[index] === id);
+  const sameContent = Boolean(existing &&
+    existing.messages?.length === messages.length &&
+    existing.messages.every((item, i) =>
+      storedMessagesMatch(item, messages[i]) &&
+      (item.images?.length || 0) === (messages[i].images?.length || 0) &&
+      (item.images || []).filter(storedImageReady).length ===
+        (messages[i].images || []).filter(storedImageReady).length
+    ));
+  if (sameSourceSet && sameContent) return existing;
 
-  if (redundantIds.length) {
-    const recoveryRecords = [];
-    const canonicalRecovery = await getDraftRecoveryTabRecord(draft.id);
-    if (canonicalRecovery) recoveryRecords.push(canonicalRecovery);
-    for (const id of redundantIds) {
-      const record = await getDraftRecoveryTabRecord(id);
-      if (record) recoveryRecords.push(record);
-    }
-    recoveryRecords.sort((a, b) => Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
-    const bestRecovery = recoveryRecords[0] || null;
-    if (bestRecovery?.tabId != null) {
-      await setDraftRecoveryTab(draft.id, {
-        tabId: bestRecovery.tabId,
-        sourceUrl: bestRecovery.sourceUrl || updated.sourceUrl || '',
-        sourceTabId: bestRecovery.sourceTabId,
-        captureTarget: bestRecovery.captureTarget || '',
-        jobId: bestRecovery.jobId || ''
-      });
-    }
+  await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated });
 
-    const activeJob = await getJob();
-    if (activeJob) {
-      const patch = {};
-      if (redundantIds.includes(activeJob.draftId)) patch.draftId = draft.id;
-      if (redundantIds.includes(activeJob.recoveryDraftId)) patch.recoveryDraftId = draft.id;
-      if (Object.keys(patch).length) await setJob(patch);
-    }
-
-    // Do not destroy original copies during reconciliation: a write succeeds
-    // before the merged result is behaviourally verified, and alternative
-    // image/source payloads may be the only recoverable copy. Keep originals
-    // available until an explicit user-confirmed cleanup operation.
-    // The merged candidate's recoveredFromDraftIds records provenance.
+  // A positioned recovery tab is useful only with a verified frontier.
+  // Prefer the last appended window; never move or close source tabs here.
+  const recoveryCandidates = [frontier, ...compatible.filter(item => item.id !== frontier.id)];
+  for (const item of recoveryCandidates) {
+    const record = await getDraftRecoveryTabRecord(item.id);
+    if (record?.tabId == null) continue;
+    if (conversationKey(record.sourceUrl || item.sourceUrl || '') !==
+        conversationKey(updated.sourceUrl || '')) continue;
+    await setDraftRecoveryTab(mergeId, {
+      tabId: record.tabId,
+      sourceUrl: updated.sourceUrl || '',
+      sourceTabId: record.sourceTabId,
+      captureTarget: record.captureTarget || 'current',
+      jobId: record.jobId || ''
+    });
+    break;
   }
 
   return updated;
