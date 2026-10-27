@@ -637,6 +637,17 @@ try {
       !serviceWorkerSource.includes('if (!actual.includes(sample))')) {
     fail('post-0.4.58 regressions: legacy archive continuation, per-chat selection, partial ID and Docs paste confirmation');
   }
+  if (!serviceWorkerSource.includes("return ['manual-range',") &&
+      !serviceWorkerSource.includes("'manual-range',\n    'start:'")) {
+    fail('draft grouping: manually bounded capture must retain the same range identity across resume modes');
+  }
+  if (!serviceWorkerSource.includes('function verifiedDraftPrefixOverlap(left, right)') ||
+      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(draft, candidate)') ||
+      !serviceWorkerSource.includes('verifiedDraftPrefixOverlap(item, witness)') ||
+      !serviceWorkerSource.includes("'|diverged:' + String(item.id)") ||
+      !serviceWorkerSource.includes('conversationKey(item.sourceUrl || \'\') === source')) {
+    fail('draft grouping: same chat title is not proof; only matching conversation ID, boundary, range and chronological prefix allow merging');
+  }
   if (!popupJs.includes('ARCHIVER_TOGGLE_MARKING_CURRENT') ||
       !popupJs.includes('ARCHIVER_CLEAR_MARKERS_CURRENT') ||
       !popupJs.includes('ARCHIVER_RECONCILE_CURRENT') ||
