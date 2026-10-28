@@ -264,7 +264,8 @@
         type: 'ARCHIVER_PHYSICAL_SCROLL',
         jobId,
         direction: normalizedDirection,
-        bursts
+        bursts,
+        wheelDelta
       });
       if (!result?.ok) {
         throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
@@ -3993,8 +3994,14 @@
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
+    const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
+      const windowKey = JSON.stringify(currentRefs.map(ref => [ref.strongId, ref.signature]));
+      // The same virtualized window on a second attempt means that reversing
+      // the wheel cannot recover the missing bridge. Stop the oscillation.
+      if (seenWindows.has(windowKey)) return false;
+      seenWindows.add(windowKey);
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
       await progress(
