@@ -12,6 +12,7 @@ const jsFiles = [
   'lib/text.mjs',
   'lib/urls.mjs',
   'lib/draft-overlap.mjs',
+  'lib/completed-archive-merge.mjs',
   'lib/capture-evidence.mjs',
   'lib/capture-viewport.mjs',
   'lib/capture-recovery.mjs',
@@ -1186,11 +1187,12 @@ for (const path of forbiddenArtifacts) {
 // Saved complete captures only merge after verified same-chat strong-ID overlap.
 // Never derive merge identity from the visible title or delete source bytes.
 const completedMergeSource = await readFile('lib/completed-archive-merge.mjs', 'utf8');
+const completedMergeWorker = await readFile('service-worker.js', 'utf8');
 if (!completedMergeSource.includes('verifiedChronologicalOverlap(') ||
     !completedMergeSource.includes('conversationKey(') ||
-    !serviceWorkerSource.includes("case 'ARCHIVER_CONSOLIDATE_SAVED_ARCHIVES':") ||
-    !serviceWorkerSource.includes('await putArchive(mergedArchive)') ||
-    !serviceWorkerSource.includes('mergedInto: archiveId')) {
+    !completedMergeWorker.includes("case 'ARCHIVER_CONSOLIDATE_SAVED_ARCHIVES':") ||
+    !completedMergeWorker.includes('await putArchive(mergedArchive)') ||
+    !completedMergeWorker.includes('mergedInto: archiveId')) {
   fail('completed archives: explicit non-destructive verified consolidation required');
 }
 
