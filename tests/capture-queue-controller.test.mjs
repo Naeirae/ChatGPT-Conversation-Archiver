@@ -16,13 +16,19 @@ const archive = (id, sourceUrl, ids, mode = 'full') => ({
   messages: ids.map(turn)
 });
 
-function fixture({ legacyActive = async () => false } = {}) {
+function fixture({
+  legacyActive = async () => false,
+  waitForDomReady = async () => {},
+  waitForInjection = async () => {}
+} = {}) {
   const data = new Map();
   let failFinalStateWrite = false;
   const failNextDoneStateWrite = () => { failFinalStateWrite = true; };
   const archives = new Map();
   const published = [];
   const launches = [];
+  const cancelledMessages = [];
+  const removedTabs = [];
   const pausedJobs = new Set();
   let nextTabId = 70;
   const storage = {
@@ -56,8 +62,12 @@ function fixture({ legacyActive = async () => false } = {}) {
       async create(options) { return { id: nextTabId++, url: options.url }; },
       async update(id) { return { id }; },
       async get(id) { return { id, url: chat(1), status:'complete' }; },
-      async remove() {},
+      async remove(id) { removedTabs.push(id); },
       async sendMessage(_id, message) {
+        if (message.type === 'ARCHIVER_CANCEL_CAPTURE') {
+          cancelledMessages.push({ tabId: _id, jobId: message.jobId });
+          return { ok: true };
+        }
         if (message.type === 'ARCHIVER_CAPTURE_HEALTH') return {
           ok: true, running: true, paused: pausedJobs.has(message.jobId),
           jobId: message.jobId
@@ -81,9 +91,10 @@ function fixture({ legacyActive = async () => false } = {}) {
     isConversationUrl: url => /^https:\/\/chatgpt\.com\/c\//.test(url),
     legacyCaptureActive: legacyActive,
     waitForChatTabComplete: async () => ({}),
-    waitForChatDomReady: async () => ({}),
+    waitForChatDomReady: waitForDomReady,
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
       launches.push({ tabId, jobId, opts });
+      await waitForInjection(tabId, jobId, opts);
     },
     getArchive: async id => archives.get(id),
     publishArchive: async value => { published.push(value); archives.set(value.id, value); },
@@ -100,6 +111,7 @@ function fixture({ legacyActive = async () => false } = {}) {
   }
   return {
     controller, chrome, storage, data, archives, published, launches, settled,
+    cancelledMessages, removedTabs,
     failNextDoneStateWrite,
     freshController: () => createCaptureQueueController(chrome, dependencies)
   };
@@ -512,4 +524,78 @@ test('navigation to a non-chat page retires just the affected worker', async () 
   const next=await f.controller.getState();
   assert.equal(next.workers[0].status,'error');
   assert.equal(next.workers[1].status,'running');
+});
+
+test('cancel during DOM readiness never launches a collector and releases its slot', async () => {
+  let releaseDom, markDomReached;
+  const domReached = new Promise(resolve => { markDomReached = resolve; });
+  const blocked = new Promise(resolve => { releaseDom = resolve; });
+  const f = fixture({
+    waitForDomReady: async () => { markDomReached(); await blocked; }
+  });
+  await f.controller.versionCheck('0.4.76');
+  await f.controller.enqueue({ sourceUrl: chat(71), mode: 'two-chats' });
+  await f.controller.enable(true);
+  await domReached;
+  let state = await f.controller.getState();
+  assert.equal(state.workers[0].status, 'starting');
+  assert.equal(state.workers[0].captureTabId, null);
+  await f.controller.cancel(state.items[0].id);
+  releaseDom();
+  state = await f.settled(s => s.items[0].status === 'cancelled');
+  assert.equal(state.workers[0].status, 'cancelled');
+  assert.equal(f.launches.length, 0);
+  assert.equal(f.removedTabs.length, 1);
+  assert.equal(f.published.length, 0);
+});
+
+test('cancel while content-script injection is pending is delivered after injection too', async () => {
+  let releaseInjection, markInjectionReached;
+  const injectionReached = new Promise(resolve => { markInjectionReached = resolve; });
+  const blocked = new Promise(resolve => { releaseInjection = resolve; });
+  const f = fixture({
+    waitForInjection: async () => { markInjectionReached(); await blocked; }
+  });
+  await f.controller.versionCheck('0.4.76');
+  await f.controller.enqueue({ sourceUrl: chat(72), mode: 'two-chats' });
+  await f.controller.enable(true);
+  await injectionReached;
+  const state = await f.controller.getState();
+  const worker = state.workers[0];
+  assert.equal(worker.status, 'starting');
+  assert.ok(worker.captureTabId != null);
+  await f.controller.cancel(worker.itemId);
+  releaseInjection();
+  await f.settled(s => f.cancelledMessages.length >= 2);
+  assert.equal(f.cancelledMessages[0].jobId, worker.jobId);
+  assert.equal(f.cancelledMessages[1].jobId, worker.jobId);
+  await f.controller.failed({
+    jobId:worker.jobId,status:'cancelled',error:'stopped'
+  },worker.captureTabId);
+  assert.equal((await f.controller.getState()).workers[0].status,'cancelled');
+  assert.equal(f.published.length,0);
+});
+
+test('a stranded starting slot with no working tab is retired without touching drafts', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.76');
+  const previousDraft = { id:'draft-old',messages:[{text:'save me'}] };
+  await f.storage.set({
+    'draft:draft-old':previousDraft,
+    archiverCaptureQueueV1:{
+      enabled:false,
+      items:[{id:'stuck-item',sourceUrl:chat(73),mode:'two-chats',status:'starting'}],
+      workers:[{
+        jobId:'stuck-worker', itemId:'stuck-item', sourceUrl:chat(73),
+        lane:'single', status:'starting', captureTabId:null,
+        updatedAt:Date.now()-600000,startedAt:Date.now()-700000,
+        draftId:'draft-old'
+      }]
+    }
+  });
+  await f.controller.tick();
+  const state=await f.controller.getState();
+  assert.equal(state.items[0].status,'error');
+  assert.equal(state.workers[0].status,'error');
+  assert.deepEqual((await f.storage.get('draft:draft-old'))['draft:draft-old'],previousDraft);
 });
