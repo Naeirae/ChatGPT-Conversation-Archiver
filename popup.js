@@ -2349,6 +2349,30 @@ async function refreshUpdateNotice() {
   }
 }
 
+$('consolidateSavedArchives').addEventListener('click', async () => {
+  const button = $('consolidateSavedArchives');
+  button.disabled = true;
+  setStatus('Сверяю реальные стыки сохранённых архивов…', false, true);
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_CONSOLIDATE_SAVED_ARCHIVES'
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось сверить архивы.');
+    if (result.mergedCount) {
+      setStatus('Подтверждённо объединено групп архивов: ' + result.mergedCount +
+        '. Исходные файлы сохранены без удаления.');
+    } else {
+      setStatus('Доказанного хронологического перекрытия не найдено. Архивы оставлены раздельно.');
+    }
+    await loadFastArchiveLibrary();
+    await hydrateSavedArchiveDetails();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $('localVersion').textContent = chrome.runtime.getManifest().version || '—';
 
 $('reloadExtension').addEventListener('click', () => {
