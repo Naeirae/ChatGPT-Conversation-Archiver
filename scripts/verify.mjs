@@ -178,6 +178,13 @@ try {
     fail('long turns: physical movement must override unchanged message count, while stalls still fail closed');
   }
 
+  if (!contentSource.includes('function checkpointDue(') ||
+      !contentSource.includes('return elapsed >= minInterval || grown >= minDelta') ||
+      !contentSource.includes('physicalScrollTop: physicalAfter?.top ?? null') ||
+      !contentSource.includes('physicalScrollDelta: Number.isFinite(physicalDelta)')) {
+    fail('long chat: time-based checkpoint and measurable physical-scroll diagnostics are required');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
