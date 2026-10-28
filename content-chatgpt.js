@@ -4143,6 +4143,76 @@
       after.scrollHeight > after.clientHeight;
   }
 
+  function createContinuityWatchdog({
+    maxSameFrontier = 2,
+    maxRecoveriesWithoutAdvance = 6,
+    maxStationarySteps = 8
+  } = {}) {
+    // Never use message count alone for progress: one legitimate turn may be
+    // thousands of pixels high. Track *measured* forward movement separately
+    // from attempts to restore overlapping DOM windows.
+    const retries = new Map();
+    let recoveriesWithoutAdvance = 0;
+    let stationarySteps = 0;
+    let forwardSteps = 0;
+    let recoveryAttempts = 0;
+    const fingerprint = (sample, refs = []) => {
+      const position = Number(sample?.top);
+      const height = Number(sample?.scrollHeight);
+      return JSON.stringify([
+        Number.isFinite(position) ? Math.round(position / 10) : null,
+        Number.isFinite(height) ? Math.round(height / 50) : null,
+        (refs || []).map(ref => String(ref?.strongId || ref?.signature || '')).slice(0, 8)
+      ]);
+    };
+    return {
+      noteStep({ before, after, beforeRefs = [], afterRefs = [],
+        adjacent = false, overlapping = false } = {}) {
+        const displacement = before?.element && before.element === after?.element
+          ? Number(after?.top) - Number(before?.top)
+          : NaN;
+        const verifiedMovement = (adjacent && Number.isFinite(displacement) && displacement >= 2) ||
+          (overlapping && Number.isFinite(displacement) && displacement >= 2);
+        if (verifiedMovement) {
+          forwardSteps++;
+          stationarySteps = 0;
+          recoveriesWithoutAdvance = 0;
+          retries.clear();
+        } else if (fingerprint(before, beforeRefs) === fingerprint(after, afterRefs)) {
+          stationarySteps++;
+        } else {
+          stationarySteps = 0;
+        }
+        if (stationarySteps >= maxStationarySteps) {
+          throw new Error(
+            'Прокрутка не продвигается: восемь последовательных окон без нового ' +
+            'физического положения или сообщения. Черновик сохранён вместо бесконечного прохода.'
+          );
+        }
+        return { forwardSteps, stationarySteps, verifiedMovement };
+      },
+      beforeRecovery(sample, refs) {
+        const key = fingerprint(sample, refs);
+        const repeats = (retries.get(key) || 0) + 1;
+        retries.set(key, repeats);
+        recoveriesWithoutAdvance++;
+        recoveryAttempts++;
+        if (repeats > maxSameFrontier ||
+            recoveriesWithoutAdvance > maxRecoveriesWithoutAdvance) {
+          throw new Error(
+            'Один и тот же стык сообщений повторно не подтверждается: ' +
+            'физический проход остановлен без циклических возвращений. ' +
+            'Неполный архив сохранён как черновик.'
+          );
+        }
+        return { repeats, recoveriesWithoutAdvance, recoveryAttempts, forwardSteps };
+      },
+      metrics() {
+        return { forwardSteps, stationarySteps, recoveryAttempts, recoveriesWithoutAdvance };
+      }
+    };
+  }
+
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
     const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -4188,6 +4258,7 @@
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
+    const watchdog = createContinuityWatchdog();
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4231,15 +4302,29 @@
       // Historical fast full traversal used three debugger bursts here.
       // Continuity is accepted only when the neighbouring virtual windows
       // retain a strong ID or an ordered multi-message overlap.
-      await physicalScroll('down', 3);
+      const physicalBefore = sampleCaptureScroller();
+      const wheel = await physicalScroll('down', 3);
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
 
       const afterRefs = visibleNavigationRefsLightweight();
-      if (!beforeRefs.length || !afterRefs.length ||
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+      const physicalAfter = sampleCaptureScroller();
+      const verifiedOverlap = navigationWindowsOverlap(beforeRefs, afterRefs);
+      watchdog.noteStep({
+        before: physicalBefore, after: physicalAfter, beforeRefs, afterRefs,
+        overlapping: verifiedOverlap,
+        adjacent: measuredAdjacentScroll(physicalBefore, physicalAfter, wheel)
+      });
+      if (!beforeRefs.length || !afterRefs.length || !verifiedOverlap) {
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs);
+        await progress(
+          'Восстанавливаю стык: попытка ' + retry.recoveriesWithoutAdvance +
+            ' без подтверждённого продвижения…',
+          map.size, { phase: 'walk', continuityRecovery: true,
+            continuityAttempt: retry.recoveryAttempts, force: true }
+        );
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4317,6 +4402,7 @@ if (boundaryIsVisible(boundary)) {
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
+    const watchdog = createContinuityWatchdog();
     let physicalStepCount = 0;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
@@ -4423,12 +4509,31 @@ if (boundaryIsVisible(boundary)) {
             physicalScrollHeight: physicalAfter?.scrollHeight ?? null,
             physicalScrollDelta: Number.isFinite(physicalDelta) ? physicalDelta : null,
             uniqueMessageCount: map.size,
+            ...watchdog.metrics(),
             force: true
           }
         );
       }
-      if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
-          !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
+      const overlapping = navigationWindowsOverlap(beforeRefs, afterRefs);
+      const adjacent = measuredAdjacentScroll(
+        physicalBefore, physicalAfter, downwardStep
+      );
+      const movement = watchdog.noteStep({
+        before: physicalBefore, after: physicalAfter, beforeRefs, afterRefs,
+        adjacent, overlapping
+      });
+      if (!overlapping && !adjacent) {
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs);
+        await progress(
+          'Стык не подтверждён · попытка восстановления ' +
+            retry.recoveriesWithoutAdvance +
+            ' без проверенного движения вперёд…',
+          map.size, {
+            phase: 'walk', continuityRecovery: true,
+            continuityAttempt: retry.recoveryAttempts,
+            continuityFrontierRepeat: retry.repeats, force: true
+          }
+        );
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
