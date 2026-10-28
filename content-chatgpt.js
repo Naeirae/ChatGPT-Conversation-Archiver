@@ -4055,7 +4055,7 @@
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
       await progress(
-        'Этап 2/3: слишком большой скачок вниз; возвращаюсь к последнему перекрывающемуся участку…',
+        'Этап 2/3: стык сообщений не подтверждён; осторожно проверяю предыдущий участок…',
         map.size,
         {
           phase: 'walk',
@@ -4778,6 +4778,8 @@ if (boundaryIsVisible(boundary)) {
       }
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      const rawCollectedCount = capturedMessages.length;
+      let trimmedBeforeMarkedStart = 0;
       if (mode === 'fragment') {
         const markedStart = trimMessagesFromMarkedStart(capturedMessages, selectedFragment?.start);
         if (!markedStart.found) {
@@ -4786,6 +4788,7 @@ if (boundaryIsVisible(boundary)) {
             'Архив не сохранён, чтобы не включить сообщения до диапазона.'
           );
         }
+        trimmedBeforeMarkedStart = markedStart.trimmed;
         capturedMessages = markedStart.messages;
       }
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
@@ -4803,6 +4806,23 @@ if (boundaryIsVisible(boundary)) {
         throw new Error('Метка конца снимка не найдена в итоговом проходе. Архив не сохранён, чтобы не смешать сообщения, появившиеся после запуска.');
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
+      if (mode === 'fragment') {
+        // Persist numerical provenance of any count shrinkage. This makes a
+        // 7-to-1 transition diagnosable without retaining private message text.
+        await progress(
+          'Этап 3/3: границы сверены · ' + capturedMessages.length +
+            ' сообщений из ' + rawCollectedCount + ' собранных…',
+          capturedMessages.length,
+          {
+            phase: 'finalizing',
+            captureMode: mode,
+            rawCollectedCount,
+            trimmedBeforeMarkedStart,
+            trimmedAfterMarkedEnd: bounded.trimmed || 0,
+            force: true
+          }
+        );
+      }
 
       if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile') {
         const reconciliation = reconcileNavigationCoverage(
