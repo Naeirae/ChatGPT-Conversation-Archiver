@@ -1038,8 +1038,21 @@
 
   function turnTrailingEdgeVisible(turn) {
     if (!turn?.isConnected) return false;
-    const root = contentRoot(turn, roleOf(turn)) || turn;
-    const rect = root.getBoundingClientRect();
+    const role = roleOf(turn);
+    const root = contentRoot(turn, role) || turn;
+    const rootRect = root.getBoundingClientRect();
+    // An attachment may be rendered beside the text root, under the logical
+    // message wrapper. Its lower edge is still part of the marked message.
+    const rect = turnImageNodes(turn, role).reduce((area, image) => {
+      const next = image.getBoundingClientRect();
+      if (next.width < 2 || next.height < 2) return area;
+      return {
+        left: Math.min(area.left, next.left),
+        right: Math.max(area.right, next.right),
+        top: Math.min(area.top, next.top),
+        bottom: Math.max(area.bottom, next.bottom)
+      };
+    }, rootRect);
     const scroller = findScrollContainer(turn);
     const documentRoot = !scroller ||
       scroller === document.documentElement ||
