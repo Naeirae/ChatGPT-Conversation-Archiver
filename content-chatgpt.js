@@ -4148,14 +4148,18 @@
   function createContinuityWatchdog({
     maxSameFrontier = 2,
     maxRecoveriesWithoutAdvance = 6,
-    maxStationarySteps = 8
+    maxStationarySteps = 8,
+    maxRevisitedSteps = 24
   } = {}) {
-    // Never use message count alone for progress: one legitimate turn may be
-    // thousands of pixels high. Track *measured* forward movement separately
-    // from attempts to restore overlapping DOM windows.
+    // A wheel delta is not necessarily *new* progress: recovering a missing
+    // seam can move up and then traverse the exact same 120px section again.
+    // Reset the retry budget only for a frontier never traversed before.
     const retries = new Map();
+    const maxTopByScroller = new WeakMap();
+    const seenStrongIds = new Set();
     let recoveriesWithoutAdvance = 0;
     let stationarySteps = 0;
+    let revisitedSteps = 0;
     let forwardSteps = 0;
     let recoveryAttempts = 0;
     const fingerprint = (sample, refs = []) => {
@@ -4167,19 +4171,54 @@
         (refs || []).map(ref => String(ref?.strongId || ref?.signature || '')).slice(0, 8)
       ]);
     };
+    const rememberStrongRefs = refs => {
+      for (const ref of refs || []) {
+        const id = String(ref?.strongId || '');
+        if (id) seenStrongIds.add(id);
+      }
+    };
     return {
       noteStep({ before, after, beforeRefs = [], afterRefs = [],
         adjacent = false, overlapping = false } = {}) {
-        const displacement = before?.element && before.element === after?.element
-          ? Number(after?.top) - Number(before?.top)
-          : NaN;
-        const verifiedMovement = (adjacent && Number.isFinite(displacement) && displacement >= 2) ||
-          (overlapping && Number.isFinite(displacement) && displacement >= 2);
+        const sameScroller = Boolean(before?.element && before.element === after?.element);
+        const beforeTop = Number(before?.top);
+        const afterTop = Number(after?.top);
+        const displacement = sameScroller ? afterTop - beforeTop : NaN;
+        const physicalForward = Number.isFinite(displacement) && displacement >= 2 &&
+          (adjacent || overlapping);
+
+        // The high-water mark is local to the physical scroll container.
+        // A repeated down-step below the maximum must NOT erase seam retries.
+        let topBeyondFrontier = false;
+        if (sameScroller && Number.isFinite(beforeTop) && Number.isFinite(afterTop) &&
+            typeof after.element === 'object') {
+          const highest = maxTopByScroller.has(after.element)
+            ? maxTopByScroller.get(after.element)
+            : beforeTop;
+          topBeyondFrontier = afterTop >= highest + 2;
+          if (afterTop > highest) maxTopByScroller.set(after.element, afterTop);
+        }
+        rememberStrongRefs(beforeRefs);
+        const newStrongId = (afterRefs || []).some(ref => {
+          const id = String(ref?.strongId || '');
+          return id && !seenStrongIds.has(id);
+        });
+        rememberStrongRefs(afterRefs);
+
+        // A truly new strong message in an adjacent/overlapping window is
+        // evidence of progress even if virtualized scrollTop has rebased.
+        const verifiedMovement = Boolean(physicalForward &&
+          (topBeyondFrontier || newStrongId));
+
         if (verifiedMovement) {
           forwardSteps++;
           stationarySteps = 0;
+          revisitedSteps = 0;
           recoveriesWithoutAdvance = 0;
           retries.clear();
+        } else if (physicalForward) {
+          revisitedSteps++;
+          stationarySteps = 0;
         } else if (fingerprint(before, beforeRefs) === fingerprint(after, afterRefs)) {
           stationarySteps++;
         } else {
@@ -4191,9 +4230,16 @@
             'физического положения или сообщения. Черновик сохранён вместо бесконечного прохода.'
           );
         }
-        return { forwardSteps, stationarySteps, verifiedMovement };
+        if (revisitedSteps >= maxRevisitedSteps) {
+          throw new Error(
+            'Архиватор снова проходит уже просмотренный участок, не достигая нового ' +
+            'хронологического рубежа. Сбор остановлен с сохранением черновика.'
+          );
+        }
+        return { forwardSteps, stationarySteps, revisitedSteps, verifiedMovement };
       },
       beforeRecovery(sample, refs) {
+        rememberStrongRefs(refs);
         const key = fingerprint(sample, refs);
         const repeats = (retries.get(key) || 0) + 1;
         retries.set(key, repeats);
@@ -4210,7 +4256,10 @@
         return { repeats, recoveriesWithoutAdvance, recoveryAttempts, forwardSteps };
       },
       metrics() {
-        return { forwardSteps, stationarySteps, recoveryAttempts, recoveriesWithoutAdvance };
+        return {
+          forwardSteps, stationarySteps, revisitedSteps,
+          recoveryAttempts, recoveriesWithoutAdvance
+        };
       }
     };
   }
