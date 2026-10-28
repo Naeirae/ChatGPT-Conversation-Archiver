@@ -30,7 +30,7 @@ test('offscreen end marker must not truncate mounted messages', () => {
   ];
   const fn = new Function(
     'orderedTurns', 'captureTurn', 'identityContextsCompatible', 'hashText',
-    'mergeRicherCapture', 'matchesBoundary', 'turnIntersectsCaptureViewport',
+    'mergeRicherCapture', 'matchesBoundary', 'turnTrailingEdgeVisible',
     extract('collect') + '; return collect;'
   )(
     () => turns,
@@ -52,7 +52,7 @@ test('visible end marker stops collection at its exact occurrence', () => {
   ];
   const fn = new Function(
     'orderedTurns', 'captureTurn', 'identityContextsCompatible', 'hashText',
-    'mergeRicherCapture', 'matchesBoundary', 'turnIntersectsCaptureViewport',
+    'mergeRicherCapture', 'matchesBoundary', 'turnTrailingEdgeVisible',
     extract('collect') + '; return collect;'
   )(
     () => turns,
