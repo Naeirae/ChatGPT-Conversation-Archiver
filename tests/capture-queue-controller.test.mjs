@@ -27,9 +27,13 @@ function fixture({ legacyActive = async () => false } = {}) {
   let nextTabId = 70;
   const storage = {
     async get(keys) {
-      if (keys == null) return Object.fromEntries(data);
+      if (keys == null) return Object.fromEntries(
+        [...data].map(([key, value]) => [key, structuredClone(value)])
+      );
       const names = typeof keys === 'string' ? [keys] : keys;
-      return Object.fromEntries(names.map(name => [name, data.get(name)]).filter(entry => entry[1] !== undefined));
+      return Object.fromEntries(names.map(name => [name, data.get(name)])
+        .filter(entry => entry[1] !== undefined)
+        .map(([key, value]) => [key, structuredClone(value)]));
     },
     async set(values) {
       const queueState = values.archiverCaptureQueueV1;
@@ -39,7 +43,9 @@ function fixture({ legacyActive = async () => false } = {}) {
         failFinalStateWrite = false;
         throw new Error('simulated MV3 service worker termination during final state write');
       }
-      for (const [key, value] of Object.entries(values)) data.set(key, value);
+      for (const [key, value] of Object.entries(values)) {
+        data.set(key, structuredClone(value));
+      }
     },
     async getBytesInUse(key) { return data.has(key) ? JSON.stringify(data.get(key)).length : 0; }
   };
