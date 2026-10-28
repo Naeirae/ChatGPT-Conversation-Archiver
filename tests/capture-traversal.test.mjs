@@ -219,3 +219,35 @@ test('different immutable IDs with identical text do not prove overlap', () => {
   ];
   assert.equal(overlap(before, after), false);
 });
+
+test('a measured small down-step can bridge adjacent tall single-message viewports', () => {
+  const bridge = new Function(
+    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+  )();
+  const before = [{ strongId: 'data-message-id:a', signature: 'first' }];
+  const after = [{ strongId: 'data-message-id:b', signature: 'second' }];
+  assert.equal(bridge(before, after, {
+    moved: true, direction: 'down', before: 1200, after: 1320
+  }), true);
+});
+
+test('single-message bridge rejects leaps, reverse steps, and missing movement proof', () => {
+  const bridge = new Function(
+    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+  )();
+  const a = [{ strongId: 'a' }];
+  const b = [{ strongId: 'b' }];
+  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 1200, after: 1900 }), false);
+  assert.equal(bridge(a,b,{ moved: true, direction: 'up', before: 1300, after: 1200 }), false);
+  assert.equal(bridge(a,b,{ moved: false, direction: 'down', before: 1200, after: 1320 }), false);
+  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: null, after: 120 }), false);
+});
+
+test('multiple disjoint message windows cannot claim continuity by pixel delta alone', () => {
+  const bridge = new Function(
+    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+  )();
+  const a = [{ strongId: 'a' }, { strongId: 'b' }];
+  const b = [{ strongId: 'c' }, { strongId: 'd' }];
+  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 100, after: 180 }), false);
+});
