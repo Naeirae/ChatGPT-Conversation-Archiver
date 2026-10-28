@@ -264,7 +264,8 @@
         type: 'ARCHIVER_PHYSICAL_SCROLL',
         jobId,
         direction: normalizedDirection,
-        bursts
+        bursts,
+        wheelDelta
       });
       if (!result?.ok) {
         throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
@@ -3993,8 +3994,14 @@
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
+    const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
+      const windowKey = JSON.stringify(currentRefs.map(ref => [ref.strongId, ref.signature]));
+      // The same virtualized window on a second attempt means that reversing
+      // the wheel cannot recover the missing bridge. Stop the oscillation.
+      if (seenWindows.has(windowKey)) return false;
+      seenWindows.add(windowKey);
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
       await progress(
@@ -4027,6 +4034,8 @@
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
+    let recoveryCyclesWithoutProgress = 0;
+    let recoveredAtCount = -1;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4093,6 +4102,15 @@
           );
         }
 
+        if (recoveredAtCount === map.size) recoveryCyclesWithoutProgress++;
+        else recoveryCyclesWithoutProgress = 1;
+        recoveredAtCount = map.size;
+        if (recoveryCyclesWithoutProgress >= 3) {
+          throw new Error(
+            'Восстановление перекрытия повторяется без новых сообщений. ' +
+            'Сбор остановлен; сохранённая часть доступна для восстановления.'
+          );
+        }
         stable = 0;
         previousSignature = '';
         previousSize = -1;
@@ -4155,6 +4173,8 @@ if (boundaryIsVisible(boundary)) {
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
+    let recoveryCyclesWithoutProgress = 0;
+    let recoveredAtCount = -1;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4255,6 +4275,15 @@ if (boundaryIsVisible(boundary)) {
           );
         }
 
+        if (recoveredAtCount === map.size) recoveryCyclesWithoutProgress++;
+        else recoveryCyclesWithoutProgress = 1;
+        recoveredAtCount = map.size;
+        if (recoveryCyclesWithoutProgress >= 3) {
+          throw new Error(
+            'Восстановление перекрытия повторяется без новых сообщений. ' +
+            'Сбор остановлен; сохранённая часть доступна для восстановления.'
+          );
+        }
         scrollRuntime().resetStabilityState(stability);
         await saveRecoveryCheckpoint(map, order, boundary);
         continue;

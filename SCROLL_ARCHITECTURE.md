@@ -1,3 +1,15 @@
+# 2026-10-28 — 0.4.66 Chrome regression: oscillating overlap recovery
+
+**Observed:** user screenshot of installed 0.4.66 shows marked-range capture 2/3, 7 messages, message “слишком большой скачок вниз; возвращаюсь к последнему перекрывающемуся участку…”, and repeated scrolling up/down. This is a failing live test, not a successful capture.
+
+**Root cause in source:** content `physicalScroll(..., {wheelDelta:320})` requests a small downward step and recovery uses `wheelDelta:180`, but the content-to-worker message did not carry `wheelDelta`; `physicalScrollTab` and fallback both hardcoded 860px wheel steps. Recovery thus reverses by excessive distance and can cycle indefinitely.
+
+**Fix under review:** PR #45, branch `fix/physical-wheel-delta-and-recovery-loop-0.4.67`, forwards requested delta from content to worker and both scroll backends; refuses repeat of the same recovery viewport and stops after three recovery cycles with no new messages, retaining recovery draft. Added repository source guard. `main` remains 0.4.66.
+
+**Acceptance before release:** CI green, then Chrome marked-range traversal with sustained count growth and confirmed end; verify no repeated up/down jumps, no omitted turns, preserved images and recoverable drafts. If live Chrome still fails, inspect actual wheel/viewport movement through run log and debugger metrics. Do not call this fixed on source inspection alone.
+
+---
+
 # Состояние на 2026-10-28 — сохранено перед остановкой
 
 **Завершено:** исходники патча для проблем короткого/неполного сбора по копии, включая физическую видимость границ, непрерывность виртуализованных окон, обрезку по началу и концу, неоднозначные повторяющиеся тексты и проверку fallback-скролла. 96 Node-тестов пройдены; последний проверенный GitHub Actions run [40602487947](https://github.com/Naeirae/ChatGPT-Conversation-Archiver/actions/runs/40602487947) — success. Состояние GitHub сравнено с `main`: ветка опережает `main` на 22 коммита, отставание 0; затронуты `content-chatgpt.js`, `service-worker.js`, `scripts/verify.mjs`, `tests/capture-traversal.test.mjs` и этот документ.

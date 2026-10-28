@@ -4505,12 +4505,12 @@ async function chatScrollMetrics(tabId, direction = 'down') {
   return results?.[0]?.result || null;
 }
 
-async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
+async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7, wheelDelta = 860) {
   const sign = direction === 'up' ? -1 : 1;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const results = await chrome.scripting.executeScript({
     target: { tabId },
-    func: (scrollSign, burstCount) => {
+    func: (scrollSign, burstCount, requestedDelta) => {
       const roleSelector = [
         '[data-chatgpt-search-unit-key$=":user"]',
         '[data-chatgpt-search-unit-key$=":assistant"]',
@@ -4567,7 +4567,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
             )[0]) || document.scrollingElement || document.documentElement;
       }
 
-      const amount = scrollSign * 860 * burstCount;
+      const amount = scrollSign * requestedDelta * burstCount;
       const before = Number(scroller?.scrollTop ?? window.scrollY ?? 0);
       if (
         scroller === document.documentElement ||
@@ -4587,7 +4587,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
         delta: after - before
       };
     },
-    args: [sign, count]
+    args: [sign, count, Math.max(60, Math.min(860, Number(wheelDelta) || 860))]
   });
   return results?.[0]?.result || {
     ok: true,
@@ -4595,7 +4595,7 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7) {
   };
 }
 
-async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
+async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDelta = 860) {
   let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
@@ -4635,7 +4635,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
         x,
         y,
         deltaX: 0,
-        deltaY: sign * 860
+        deltaY: sign * Math.max(60, Math.min(860, Number(wheelDelta) || 860))
       }, 4000);
       await sleep(70);
     }
@@ -4683,7 +4683,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7) {
     debuggerError ||
     'debugger wheel returned success without moving the chat scroller';
   const fallback = await withTimeout(
-    scriptedScrollChatTab(tabId, direction, count),
+    scriptedScrollChatTab(tabId, direction, count, wheelDelta),
     5000,
     'Резервная прокрутка ChatGPT'
   );
@@ -6669,7 +6669,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await physicalScrollTab(
           job.captureTabId,
           message.direction,
-          message.bursts
+          message.bursts,
+          message.wheelDelta
         );
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {

@@ -121,6 +121,16 @@ try {
     fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
   }
 
+  // The page requests 320px down and 180px recovery; the worker must not
+  // silently turn both into legacy 860px jumps.
+  if (!contentSource.includes('wheelDelta') ||
+      !serviceWorkerSource.includes('message.wheelDelta') ||
+      !serviceWorkerSource.includes('deltaY: sign * Math.max(60, Math.min(860, Number(wheelDelta) || 860))') ||
+      !serviceWorkerSource.includes('scriptedScrollChatTab(tabId, direction, count, wheelDelta)') ||
+      !contentSource.includes('seenWindows.has(windowKey)')) {
+    fail('wheel traversal: requested delta and finite recovery must be preserved end-to-end');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
@@ -162,7 +172,7 @@ try {
 
   if (!contentSource.includes("transport: 'cdp-wheel'") ||
       !serviceWorkerSource.includes("type: 'mouseWheel'") ||
-      !serviceWorkerSource.includes("deltaY: sign * 860")) {
+      !serviceWorkerSource.includes("deltaY: sign * Math.max(60, Math.min(860, Number(wheelDelta) || 860))")) {
     fail('scroll transport: debugger wheel must remain the primary traversal transport in this forensic candidate');
   }
 
@@ -970,7 +980,7 @@ try {
     fail('Retry recovery: only a real visible clickable local error Retry control may trigger click/backoff');
   }
 
-  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7)");
+  const physicalScrollStart = serviceWorkerSource.indexOf("async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDelta = 860)");
   const physicalScrollEnd = serviceWorkerSource.indexOf('async function withChatDebugger', physicalScrollStart);
   const physicalScrollBlock = physicalScrollStart >= 0 && physicalScrollEnd > physicalScrollStart
     ? serviceWorkerSource.slice(physicalScrollStart, physicalScrollEnd)
@@ -982,8 +992,8 @@ try {
       !physicalScrollBlock.includes('afterMetrics = await chatScrollMetrics') ||
       !physicalScrollBlock.includes('Math.round(width * 0.68)') ||
       !physicalScrollBlock.includes('Math.round(height * 0.48)') ||
-      !physicalScrollBlock.includes("deltaY: sign * 860") ||
-      !physicalScrollBlock.includes('scriptedScrollChatTab(tabId, direction, count)') ||
+      !physicalScrollBlock.includes("deltaY: sign * Math.max(60, Math.min(860, Number(wheelDelta) || 860))") ||
+      !physicalScrollBlock.includes('scriptedScrollChatTab(tabId, direction, count, wheelDelta)') ||
       !physicalScrollBlock.includes("method: moved ? 'debugger-wheel' : 'debugger-wheel-edge'")) {
     fail('full capture: debugger wheel must verify real movement and fall back to the live ChatGPT scroller on acknowledged no-op input');
   }
