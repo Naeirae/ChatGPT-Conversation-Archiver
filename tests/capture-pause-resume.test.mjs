@@ -233,3 +233,23 @@ test('content script writes a pause snapshot before acknowledging the live colle
   assert.equal(reply.checkpointSaved, true);
   assert.equal(reply.draftCount, 117);
 });
+
+test('paused UI summary retains the saved walk phase and offers export of its draft', () => {
+  const summary = between(
+    workerSource, 'function liveUnfinishedSummary(job) {',
+    '\nasync function deleteUnfinishedGroup('
+  );
+  const fn = new Function('unfinishedGroupKey',
+    summary + '\nreturn liveUnfinishedSummary;'
+  )(() => 'known-boundary');
+  const value = fn({
+    jobId: 'capture-117', status: 'paused', phase: 'paused', resumePhase: 'walk',
+    draftId: 'draft-capture-117', draftCount: 117,
+    imageCount: 42, imageBinaryReady: 17,
+    captureBoundary: { kind: 'stable', key: 'data-message-id:end' }
+  });
+  assert.equal(value.capturePhase, 'walk');
+  assert.equal(value.canExportCurrent, true);
+  assert.equal(value.exportPassId, 'draft-capture-117');
+  assert.equal(value.messageCount, 117);
+});
