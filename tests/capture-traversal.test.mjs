@@ -251,3 +251,33 @@ test('multiple disjoint message windows cannot claim continuity by pixel delta a
   const b = [{ strongId: 'c' }, { strongId: 'd' }];
   assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 100, after: 180 }), false);
 });
+
+test('end marker is not physically reached when its tall message extends below viewport', () => {
+  const check = new Function(
+    'rectIntersectsCaptureViewport',
+    extract('rectTrailingEdgeInsideCaptureViewport') +
+    '; return rectTrailingEdgeInsideCaptureViewport;'
+  )((rect, width, height, scrollportRect) => {
+    const top = Math.max(0, scrollportRect?.top ?? 0);
+    const bottom = Math.min(height, scrollportRect?.bottom ?? height);
+    return rect.right > 0 && rect.left < width && rect.bottom > top &&
+      rect.top < bottom;
+  });
+  assert.equal(check({ left: 0, right: 640, top: 110, bottom: 1800 }, 1280, 900), false);
+  assert.equal(check({ left: 0, right: 640, top: -700, bottom: 820 }, 1280, 900), true);
+});
+
+test('end marker trailing edge must enter nested scrollport, not only page viewport', () => {
+  const check = new Function(
+    'rectIntersectsCaptureViewport',
+    extract('rectTrailingEdgeInsideCaptureViewport') +
+    '; return rectTrailingEdgeInsideCaptureViewport;'
+  )((rect, width, height, port) =>
+    rect.left < width && rect.right > 0 &&
+    rect.bottom > Math.max(0, port?.top ?? 0) &&
+    rect.top < Math.min(height, port?.bottom ?? height)
+  );
+  const scrollport = { top: 100, bottom: 650 };
+  assert.equal(check({ left: 40, right: 800, top: 300, bottom: 820 }, 1280, 900, scrollport), false);
+  assert.equal(check({ left: 40, right: 800, top: -300, bottom: 645 }, 1280, 900, scrollport), true);
+});
