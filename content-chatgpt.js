@@ -1726,10 +1726,10 @@
     const img = renderedImageNode(src);
     if (!img) throw new Error('Картинка сейчас не видна в DOM.');
 
+    // Do not scroll to an image during hydration. An image fallback must not
+    // disturb the chronological viewport or simulate reaching a boundary.
     try {
-      img.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       if (img.decode) await Promise.race([img.decode(), sleep(1800)]).catch(() => {});
-      await sleep(120);
     } catch (_) {}
 
     const rect = img.getBoundingClientRect();
