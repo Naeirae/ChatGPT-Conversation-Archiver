@@ -1219,6 +1219,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-queue.test.mjs',
   'tests/capture-queue-controller.test.mjs',
   'tests/capture-pause-resume.test.mjs',
+  'tests/capture-continuity-watchdog.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
