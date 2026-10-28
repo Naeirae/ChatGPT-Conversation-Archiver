@@ -4397,7 +4397,15 @@ if (boundaryIsVisible(boundary)) {
             await saveRecoveryCheckpoint(map, order, boundary);
 
       const after = scrollObservation(map.size);
-      const stall = scrollRuntime().updateStabilityState(stability, before, after);
+      // No new message text is expected while crossing a 20-screen turn.
+      // Only a non-moving viewport contributes to the stall counter.
+      const physicallyAdvanced = measuredAdjacentScroll(
+        physicalBefore, physicalAfter, downwardStep
+      );
+      if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability);
+      const stall = physicallyAdvanced
+        ? { stable: 0 }
+        : scrollRuntime().updateStabilityState(stability, before, after);
 
       if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
