@@ -218,7 +218,7 @@ test('content script writes a pause snapshot before acknowledging the live colle
       if (key === 'draft:draft-capture-117') return { [key]: draft };
       return {};
     }
-  } };
+  } } };
   const handler = new Function('message', 'state', 'sendResponse', 'makePauseCheckpoint', 'chrome',
     source + '\nreturn false;');
   const reply = await new Promise(resolve => {
