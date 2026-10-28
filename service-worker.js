@@ -7035,6 +7035,8 @@ chrome.tabs.onRemoved.addListener(tabId => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   (async () => {
   await captureRuntimeReady;
+  await queueRuntimeReady;
+  await queueController.tabNavigated(tabId, tab.url || changeInfo.url || '');
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
