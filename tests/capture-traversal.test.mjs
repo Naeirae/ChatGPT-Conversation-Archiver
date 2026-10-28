@@ -220,36 +220,44 @@ test('different immutable IDs with identical text do not prove overlap', () => {
   assert.equal(overlap(before, after), false);
 });
 
-test('a measured small down-step can bridge adjacent tall single-message viewports', () => {
-  const bridge = new Function(
-    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+function measuredScrollerFixture() {
+  const advance = new Function(
+    extract('measuredAdjacentScroll') + '; return measuredAdjacentScroll;'
   )();
-  const before = [{ strongId: 'data-message-id:a', signature: 'first' }];
-  const after = [{ strongId: 'data-message-id:b', signature: 'second' }];
-  assert.equal(bridge(before, after, {
-    moved: true, direction: 'down', before: 1200, after: 1320
-  }), true);
+  const element = { isConnected: true };
+  const sample = top => ({
+    element, top, clientHeight: 800, scrollHeight: 25000
+  });
+  const moved = { moved: true, direction: 'down' };
+  return { advance, sample, moved };
+}
+
+test('physical motion through one very long message is progress without new messages', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  let top = 100;
+  for (let i = 0; i < 40; i++) {
+    assert.equal(advance(sample(top), sample(top + 120), moved), true);
+    top += 120;
+  }
 });
 
-test('single-message bridge rejects leaps, reverse steps, and missing movement proof', () => {
-  const bridge = new Function(
-    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
-  )();
-  const a = [{ strongId: 'a' }];
-  const b = [{ strongId: 'b' }];
-  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 1200, after: 1900 }), false);
-  assert.equal(bridge(a,b,{ moved: true, direction: 'up', before: 1300, after: 1200 }), false);
-  assert.equal(bridge(a,b,{ moved: false, direction: 'down', before: 1200, after: 1320 }), false);
-  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: null, after: 120 }), false);
+test('short measured movement bridges adjacent multiple-turn windows', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  assert.equal(advance(sample(1200), sample(1320), moved), true);
 });
 
-test('multiple disjoint message windows cannot claim continuity by pixel delta alone', () => {
-  const bridge = new Function(
-    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
-  )();
-  const a = [{ strongId: 'a' }, { strongId: 'b' }];
-  const b = [{ strongId: 'c' }, { strongId: 'd' }];
-  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 100, after: 180 }), false);
+test('physical evidence rejects jumps, reverse, missing motion and changed scroller', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  assert.equal(advance(sample(100), sample(780), moved), false);
+  assert.equal(advance(sample(200), sample(100), moved), false);
+  assert.equal(advance(sample(100), sample(120), { moved: false, direction: 'down' }), false);
+  const otherScroller = { ...sample(120), element: {} };
+  assert.equal(advance(sample(100), otherScroller, moved), false);
+});
+
+test('stationary long message is not mistaken for progress', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  assert.equal(advance(sample(100), sample(100), moved), false);
 });
 
 test('end marker is not physically reached when its tall message extends below viewport', () => {
