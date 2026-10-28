@@ -35,7 +35,8 @@
     manualTopConfirmed: false,
     boundarySearchActive: false,
     queueCapture: false,
-    pauseSnapshotWriter: null
+    pauseSnapshotWriter: null,
+    captureStartProof: null
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -4027,6 +4028,7 @@
         canonicalRecoveryDraft?.captureRange ||
         current.captureRange ||
         null,
+      captureStartProof: state.captureStartProof || canonicalRecoveryDraft?.captureStartProof || null,
       pendingDocUrl: current.pendingDocUrl || '',
       pendingDocMode: current.pendingDocMode || '',
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
@@ -4679,6 +4681,7 @@ if (boundaryIsVisible(boundary)) {
     state.cancel = false;
     state.paused = false;
     state.pauseSnapshotWriter = null;
+    state.captureStartProof = null;
     state.lastScrollDirection = '';
     state.manualTopConfirmed = false;
     state.boundarySearchActive = false;
@@ -4715,6 +4718,9 @@ if (boundaryIsVisible(boundary)) {
       const resumedDraft = (mode === 'resume-draft' && existingDraftId)
         ? (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId]
         : null;
+      if (resumedDraft?.captureStartProof?.startVerified) {
+        state.captureStartProof = { ...resumedDraft.captureStartProof };
+      }
       // Manual markers are the capture transport for the primary chat archive.
       // They do not change the archive's canonical identity.
       const manuallyBounded = mode === 'fragment' || Boolean(
@@ -4998,18 +5004,43 @@ if (boundaryIsVisible(boundary)) {
         );
       }
 
+      // Once the original start was proved, persist its evidence in every
+      // checkpoint. A resumed run may never infer completeness merely because
+      // its new walk reached the end.
+      if (mode === 'full' && verifiedFullStart?.verified && verifiedSnapshotEnd?.verified) {
+        state.captureStartProof = {
+          mode: 'full', startVerified: true,
+          startSource: verifiedFullStart.source || '',
+          snapshotEndVerified: true,
+          startTravelObserved: Boolean(verifiedFullStart.observedUpwardTravel),
+          startStableChecks: Number(verifiedFullStart.stableChecks || 0)
+        };
+      } else if (mode === 'fragment' && verifiedMarkedStart) {
+        state.captureStartProof = {
+          mode: 'fragment', startVerified: true,
+          startSource: 'user-marked-start',
+          markedStartId: selectedFragment.start.id,
+          markedEndId: selectedFragment.end.id,
+          snapshotEndVerified: true
+        };
+      }
+
       map.clear();
       order.length = 0;
       chronologicalStarted = true;
 
+      const resumedQueueMode = state.queueCapture && mode === 'resume-draft'
+        ? resumedDraft?.captureMode || '' : '';
+      const queueFragmentResume = resumedQueueMode === 'fragment';
       const walkResult = mode === 'full'
         ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
             bursts: 1,
-            requireBoundary: mode === 'fragment',
-            recoverLoadErrors: mode !== 'fragment',
-            hydrateImages: mode === 'fragment' || mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
-            hydrateVisibleImages: mode === 'fragment',
+            requireBoundary: mode === 'fragment' || queueFragmentResume,
+            recoverLoadErrors: mode !== 'fragment' && !queueFragmentResume,
+            hydrateImages: queueFragmentResume || mode === 'fragment' ||
+              mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            hydrateVisibleImages: queueFragmentResume || mode === 'fragment',
             attemptedImageSources: sequentialImageSources
           });
 
@@ -5516,18 +5547,21 @@ if (boundaryIsVisible(boundary)) {
         captureBoundaryTrimmedNewerCount: bounded.trimmed || 0,
         captureBoundaryReached: Boolean(bounded.found),
         captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd),
-        captureProof: (mode === 'full' || mode === 'fragment') ? {
-          mode,
-          startVerified: mode === 'fragment'
-            ? verifiedMarkedStart : Boolean(verifiedFullStart?.verified),
+        captureProof: (mode === 'full' || mode === 'fragment' ||
+          (state.queueCapture && mode === 'resume-draft' &&
+            ['full', 'fragment'].includes(resumedDraft?.captureMode))) ? {
+          mode: state.queueCapture && mode === 'resume-draft'
+            ? resumedDraft.captureMode : mode,
+          startVerified: Boolean(state.captureStartProof?.startVerified),
           endVerified: Boolean(bounded.found && walkResult?.boundaryReached &&
-            (mode === 'fragment' || verifiedSnapshotEnd?.verified)),
-          startSource: mode === 'fragment'
-            ? 'user-marked-start' : (verifiedFullStart?.source || ''),
-          startTravelObserved: Boolean(verifiedFullStart?.observedUpwardTravel),
-          startStableChecks: Number(verifiedFullStart?.stableChecks || 0),
-          endSource: mode === 'fragment'
-            ? 'user-marked-end' : (verifiedSnapshotEnd?.source || '')
+            ((state.queueCapture && mode === 'resume-draft')
+              ? state.captureStartProof?.snapshotEndVerified
+              : (mode === 'fragment' || verifiedSnapshotEnd?.verified))),
+          startSource: state.captureStartProof?.startSource || '',
+          startTravelObserved: Boolean(state.captureStartProof?.startTravelObserved),
+          startStableChecks: Number(state.captureStartProof?.startStableChecks || 0),
+          endSource: (mode === 'fragment' || resumedDraft?.captureMode === 'fragment')
+            ? 'user-marked-end' : (verifiedSnapshotEnd?.source || 'saved-snapshot-end')
         } : undefined
       };
 
@@ -5715,7 +5749,9 @@ if (boundaryIsVisible(boundary)) {
           // failed network path must not delay or defeat saving the draft.
           // A resumed capture continues one logical unfinished pass. Reuse the
           // canonical draft ID instead of exposing every retry as a new draft.
-          draftId = current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId);
+          draftId = current.draftId ||
+            (state.queueCapture && mode === 'resume-draft' ? ('draft-' + jobId) :
+              (existingDraftId || current.recoveryDraftId || ('draft-' + jobId)));
           draftCount = draftMessages.length;
           const recoveryCapturePhase = chronologicalStarted
             ? 'walk'
@@ -5747,6 +5783,7 @@ if (boundaryIsVisible(boundary)) {
               ((mode === 'fragment') ? selectedFragment : null) ||
               current.captureRange ||
               null,
+            captureStartProof: state.captureStartProof || existingRecoveryDraft?.captureStartProof || null,
             pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
             pendingDocMode: existingRecoveryDraft?.pendingDocMode || current.pendingDocMode || '',
             complete: false,
@@ -5795,6 +5832,7 @@ if (boundaryIsVisible(boundary)) {
       state.cancel = false;
       state.paused = false;
       state.pauseSnapshotWriter = null;
+      state.captureStartProof = null;
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
       state.lastScrollDirection = '';
