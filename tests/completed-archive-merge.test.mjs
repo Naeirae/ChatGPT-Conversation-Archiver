@@ -47,13 +47,12 @@ test('same text with distinct strong IDs cannot be silently collapsed', () => {
 
 test('verified bridge can join several saved segments', () => {
   const results = planVerifiedCompletedMerges([
-    archive('a', [msg(1), msg(2), msg(3)]),
-    archive('b', [msg(3), msg(4), msg(5)]),
-    archive('c', [msg(5), msg(6), msg(7)]),
-    archive('d', [msg(4), msg(5), msg(6)])
+    archive('a', [msg(1), msg(2), msg(3), msg(4)]),
+    archive('b', [msg(3), msg(4), msg(5), msg(6)]),
+    archive('c', [msg(7), msg(8), msg(9), msg(10)]),
+    archive('d', [msg(5), msg(6), msg(7), msg(8)])
   ]);
-  // The two-message overlaps a<->b and b<->d are enough to establish a
-  // multi-window chain; c joins after the extended overlap.
   assert.equal(results.length, 1);
-  assert.deepEqual(results[0].messages.map(m=>m.id),[1,2,3,4,5,6,7].map(n=>'data-message-id:'+n));
+  assert.deepEqual(results[0].messages.map(m=>m.id),
+    [1,2,3,4,5,6,7,8,9,10].map(n=>'data-message-id:'+n));
 });
