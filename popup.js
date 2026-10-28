@@ -306,7 +306,11 @@ function renderUnfinishedPasses(items = []) {
     const saveCurrent = document.createElement('button');
     saveCurrent.className = 'unfinished-save';
     saveCurrent.textContent = 'Сохранить текущую часть в документ Google Docs';
-    saveCurrent.disabled = Boolean(busy || !item.canExportCurrent || !item.exportPassId);
+    // A paused collector cannot mutate its saved checkpoint. Let the user
+    // export that immutable prefix before risking an extension update.
+    const exportBlocked = Boolean(state?.job &&
+      ['starting', 'running'].includes(state.job.status));
+    saveCurrent.disabled = Boolean(exportBlocked || !item.canExportCurrent || !item.exportPassId);
     if (!item.canExportCurrent || !item.exportPassId) {
       saveCurrent.title = 'Сохранение станет доступно, когда начнётся проход сверху вниз и появится непрерывная сохранённая часть.';
     }
