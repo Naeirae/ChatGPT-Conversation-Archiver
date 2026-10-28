@@ -1020,11 +1020,57 @@
     );
   }
 
+  function rectTrailingEdgeInsideCaptureViewport(
+    rect, viewportWidth, viewportHeight, scrollportRect = null
+  ) {
+    if (!rectIntersectsCaptureViewport(rect, viewportWidth, viewportHeight, scrollportRect)) {
+      return false;
+    }
+    const top = Math.max(0, scrollportRect ? Number(scrollportRect.top) : 0);
+    const bottom = Math.min(
+      Number(viewportHeight),
+      scrollportRect ? Number(scrollportRect.bottom) : Number(viewportHeight)
+    );
+    // The turn may be taller than the entire viewport. Seeing its first
+    // pixels does not mean that its trailing attachments have been visited.
+    return rect.bottom >= top + 2 && rect.bottom <= bottom + 8;
+  }
+
+  function turnTrailingEdgeVisible(turn) {
+    if (!turn?.isConnected) return false;
+    const role = roleOf(turn);
+    const root = contentRoot(turn, role) || turn;
+    const rootRect = root.getBoundingClientRect();
+    // An attachment may be rendered beside the text root, under the logical
+    // message wrapper. Its lower edge is still part of the marked message.
+    const rect = turnImageNodes(turn, role).reduce((area, image) => {
+      const next = image.getBoundingClientRect();
+      if (next.width < 2 || next.height < 2) return area;
+      return {
+        left: Math.min(area.left, next.left),
+        right: Math.max(area.right, next.right),
+        top: Math.min(area.top, next.top),
+        bottom: Math.max(area.bottom, next.bottom)
+      };
+    }, rootRect);
+    const scroller = findScrollContainer(turn);
+    const documentRoot = !scroller ||
+      scroller === document.documentElement ||
+      scroller === document.body ||
+      scroller === document.scrollingElement;
+    return rectTrailingEdgeInsideCaptureViewport(
+      rect,
+      window.innerWidth || document.documentElement.clientWidth,
+      window.innerHeight || document.documentElement.clientHeight,
+      documentRoot ? null : scroller.getBoundingClientRect()
+    );
+  }
+
   function boundaryIsVisible(boundary) {
-    // Querying a present DOM turn is not enough: virtualized ChatGPT can keep
-    // the marked end mounted well outside the physical scroll viewport.
+    // Reaching the end marker requires the trailing edge of that message to
+    // enter the physical scrollport, not merely its first visible pixels.
     return Boolean(boundary && orderedTurns().some(turn =>
-      matchesBoundary(turn, boundary) && turnIntersectsCaptureViewport(turn)
+      matchesBoundary(turn, boundary) && turnTrailingEdgeVisible(turn)
     ));
   }
 
@@ -1693,10 +1739,10 @@
     const img = renderedImageNode(src);
     if (!img) throw new Error('Картинка сейчас не видна в DOM.');
 
+    // Do not scroll to an image during hydration. An image fallback must not
+    // disturb the chronological viewport or simulate reaching a boundary.
     try {
-      img.scrollIntoView({ block: 'nearest', inline: 'nearest' });
       if (img.decode) await Promise.race([img.decode(), sleep(1800)]).catch(() => {});
-      await sleep(120);
     } catch (_) {}
 
     const rect = img.getBoundingClientRect();
@@ -1846,8 +1892,29 @@
     return { embedded, failed, unique: total };
   }
 
-  async function hydrateSequentialImages(messages, attemptedSources) {
+  function physicallyVisibleImageSources() {
+    const result = new Set();
+    for (const image of document.querySelectorAll('img')) {
+      const src = imageSource(image);
+      if (!src) continue;
+      const scroller = findScrollContainer(image);
+      const documentRoot = !scroller ||
+        scroller === document.documentElement ||
+        scroller === document.body ||
+        scroller === document.scrollingElement;
+      if (rectIntersectsCaptureViewport(
+        image.getBoundingClientRect(),
+        window.innerWidth || document.documentElement.clientWidth,
+        window.innerHeight || document.documentElement.clientHeight,
+        documentRoot ? null : scroller.getBoundingClientRect()
+      )) result.add(src);
+    }
+    return result;
+  }
+
+  async function hydrateSequentialImages(messages, attemptedSources, { visibleOnly = false } = {}) {
     const attempted = attemptedSources instanceof Set ? attemptedSources : new Set();
+    const visibleSources = visibleOnly ? physicallyVisibleImageSources() : null;
     const targets = [];
     const targetSources = new Set();
 
@@ -1855,7 +1922,7 @@
       const pending = [];
       for (const image of message?.images || []) {
         const src = String(image?.src || '');
-        if (!src || attempted.has(src)) continue;
+        if (!src || attempted.has(src) || (visibleSources && !visibleSources.has(src))) continue;
         pending.push(image);
         targetSources.add(src);
       }
@@ -1944,7 +2011,7 @@
       // walking back down.
       // A mounted offscreen end marker must not truncate the current window.
       if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
-          turnIntersectsCaptureViewport(turn)) break;
+          turnTrailingEdgeVisible(turn)) break;
     }
 
     return [...new Set(touchedIds)];
@@ -2598,16 +2665,18 @@
     if (now - lastProgressAt < 1500 && !(extra && extra.force)) return;
     lastProgressAt = now;
     const patch = Object.assign({ status: 'running', message, count }, extra || {});
-    const strictFinalization = Boolean(extra?.finalizationStep);
+    const strictFinalization = Boolean(extra?.finalizationStep || extra?.phase === 'finalizing');
     try {
       const request = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_PROGRESS',
         jobId: state.jobId,
         patch
       });
-      const result = strictFinalization
-        ? await withCaptureOperationTimeout(request, 30000, 'Сохранение состояния Архиватора')
-        : await request;
+      const result = await withCaptureOperationTimeout(
+        request,
+        strictFinalization ? 30000 : 12000,
+        strictFinalization ? 'Завершение сбора' : 'Обновление прогресса'
+      );
       if (result?.ok) return result;
       if (result && result.ok === false) {
         throw new Error(result.error || 'Фоновый процесс остановил этот сбор.');
@@ -3993,6 +4062,21 @@
     return false;
   }
 
+  function smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, scrollResult) {
+    // In image-heavy conversations a single tall turn may occupy the whole
+    // viewport; scrolling a short distance can replace the sole visible turn
+    // without an overlapping message. Accept only a measured small downward
+    // movement, not merely a CDP acknowledgement or a signature change.
+    if (!beforeRefs?.length || !afterRefs?.length) return false;
+    if (beforeRefs.length !== 1 && afterRefs.length !== 1) return false;
+    if (!scrollResult?.moved || scrollResult.direction !== 'down') return false;
+    if (scrollResult.before == null || scrollResult.after == null) return false;
+    const before = Number(scrollResult.before);
+    const after = Number(scrollResult.after);
+    const step = after - before;
+    return Number.isFinite(step) && step >= 2 && step <= 160;
+  }
+
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
     const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -4005,7 +4089,7 @@
       if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
 
       await progress(
-        'Этап 2/3: слишком большой скачок вниз; возвращаюсь к последнему перекрывающемуся участку…',
+        'Этап 2/3: стык сообщений не подтверждён; осторожно проверяю предыдущий участок…',
         map.size,
         {
           phase: 'walk',
@@ -4169,6 +4253,7 @@ if (boundaryIsVisible(boundary)) {
       requireBoundary = false,
       recoverLoadErrors = true,
       hydrateImages = false,
+      hydrateVisibleImages = false,
       attemptedImageSources = new Set()
     } = {}
   ) {
@@ -4194,7 +4279,8 @@ if (boundaryIsVisible(boundary)) {
       if (hydrateImages) {
         await hydrateSequentialImages(
           firstTouchedIds.map(id => map.get(id)).filter(Boolean),
-          attemptedImageSources
+          attemptedImageSources,
+          { visibleOnly: hydrateVisibleImages }
         );
       }
       const beforeRefs = visibleNavigationRefsLightweight();
@@ -4242,10 +4328,10 @@ if (boundaryIsVisible(boundary)) {
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
+      const downwardStep = await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
         settleTimeout: 1800,
         quietWindow: 300,
-        wheelDelta: 320
+        wheelDelta: 120
       });
 
       await expandVisible();
@@ -4254,13 +4340,14 @@ if (boundaryIsVisible(boundary)) {
       if (hydrateImages) {
         await hydrateSequentialImages(
           secondTouchedIds.map(id => map.get(id)).filter(Boolean),
-          attemptedImageSources
+          attemptedImageSources,
+          { visibleOnly: hydrateVisibleImages }
         );
       }
 
       const afterRefs = visibleNavigationRefsLightweight();
-      if (!beforeRefs.length || !afterRefs.length ||
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+      if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
+          !smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)) {
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4687,7 +4774,8 @@ if (boundaryIsVisible(boundary)) {
             bursts: 1,
             requireBoundary: mode === 'fragment',
             recoverLoadErrors: mode !== 'fragment',
-            hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            hydrateImages: mode === 'fragment' || mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            hydrateVisibleImages: mode === 'fragment',
             attemptedImageSources: sequentialImageSources
           });
 
@@ -4728,6 +4816,8 @@ if (boundaryIsVisible(boundary)) {
       }
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
+      const rawCollectedCount = capturedMessages.length;
+      let trimmedBeforeMarkedStart = 0;
       if (mode === 'fragment') {
         const markedStart = trimMessagesFromMarkedStart(capturedMessages, selectedFragment?.start);
         if (!markedStart.found) {
@@ -4736,6 +4826,7 @@ if (boundaryIsVisible(boundary)) {
             'Архив не сохранён, чтобы не включить сообщения до диапазона.'
           );
         }
+        trimmedBeforeMarkedStart = markedStart.trimmed;
         capturedMessages = markedStart.messages;
       }
       const bounded = trimMessagesThroughBoundary(capturedMessages, boundary);
@@ -4753,6 +4844,23 @@ if (boundaryIsVisible(boundary)) {
         throw new Error('Метка конца снимка не найдена в итоговом проходе. Архив не сохранён, чтобы не смешать сообщения, появившиеся после запуска.');
       }
       capturedMessages = bounded.found ? bounded.messages : capturedMessages;
+      if (mode === 'fragment') {
+        // Persist numerical provenance of any count shrinkage. This makes a
+        // 7-to-1 transition diagnosable without retaining private message text.
+        await progress(
+          'Этап 3/3: границы сверены · ' + capturedMessages.length +
+            ' сообщений из ' + rawCollectedCount + ' собранных…',
+          capturedMessages.length,
+          {
+            phase: 'finalizing',
+            captureMode: mode,
+            rawCollectedCount,
+            trimmedBeforeMarkedStart,
+            trimmedAfterMarkedEnd: bounded.trimmed || 0,
+            force: true
+          }
+        );
+      }
 
       if (mode === 'images' || mode === 'images-draft' || mode === 'reconcile') {
         const reconciliation = reconcileNavigationCoverage(
@@ -5084,7 +5192,7 @@ if (boundaryIsVisible(boundary)) {
         : [];
 
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
+        onlyMissing: mode === 'full' || mode === 'fragment' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
       });
 
       if ((mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length) {
@@ -5203,9 +5311,13 @@ if (boundaryIsVisible(boundary)) {
       );
       // Only the worker may publish lastArchiveId after it validates the
       // result. Keep a rejected archive under its private key for recovery.
-      await chrome.storage.local.set({
-        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId })
-      });
+      await withCaptureOperationTimeout(
+        chrome.storage.local.set({
+          ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId })
+        }),
+        30000,
+        'Запись локального архива'
+      );
       await progress(
         'Этап 3/3: локальная запись завершена · подтверждаю архив…',
         messages.length,

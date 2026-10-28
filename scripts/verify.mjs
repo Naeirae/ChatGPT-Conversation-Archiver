@@ -77,7 +77,7 @@ try {
   }
   // The end marker may be DOM-mounted offscreen, and after a scroll
   // continuity must be checked before accepting its arrival.
-  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\n          turnIntersectsCaptureViewport(turn)')) {
+  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\n          turnTrailingEdgeVisible(turn)')) {
     fail('capture: do not trim at an offscreen DOM-mounted end marker');
   }
   for (const [startToken, endToken] of [
@@ -116,12 +116,15 @@ try {
 
   // Never silently skip the overlap check when virtualized DOM exposes no
   // physically visible navigable turns before or after scrolling.
-  const emptyEvidenceGuardCount = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
-  if (emptyEvidenceGuardCount !== 2) {
-    fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
+  const legacyEmptyWindowGuard = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
+  const measuredSingleTurnGuard = contentSource.includes(
+    '!smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)'
+  );
+  if (legacyEmptyWindowGuard !== 1 || !measuredSingleTurnGuard) {
+    fail('traversal: missing viewport evidence cannot bypass legacy continuity or measured single-turn validation');
   }
 
-  // The page requests 320px down and 180px recovery; the worker must not
+  // The page requests short down/recovery steps; the worker must not
   // silently turn both into legacy 860px jumps.
   if (!contentSource.includes('wheelDelta') ||
       !serviceWorkerSource.includes('message.wheelDelta') ||
@@ -129,6 +132,41 @@ try {
       !serviceWorkerSource.includes('scriptedScrollChatTab(tabId, direction, count, wheelDelta)') ||
       !contentSource.includes('seenWindows.has(windowKey)')) {
     fail('wheel traversal: requested delta and finite recovery must be preserved end-to-end');
+  }
+
+  // Large image messages may occupy the entire visible scrollport.
+  // A strictly measured small step can bridge such single-turn windows,
+  // but a missing scroll measurement and multi-turn leaps still fail closed.
+  if (!contentSource.includes('function smallPhysicalStepCanBridgeSingleTurn(') ||
+      !contentSource.includes('wheelDelta: 120') ||
+      !contentSource.includes('smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)') ||
+      !contentSource.includes("extra?.phase === 'finalizing'") ||
+      !contentSource.includes("strictFinalization ? 30000 : 12000") ||
+      !contentSource.includes("'Запись локального архива'")) {
+    fail('marked capture: small measured adjacency and bounded image/finalization progress are required');
+  }
+
+  // A tall marked message must be traversed through its trailing edge;
+  // fetching an image must not reposition the scroll independently.
+  const endEdgeSource = contentSource.slice(
+    contentSource.indexOf('function rectTrailingEdgeInsideCaptureViewport('),
+    contentSource.indexOf('function findScrollContainer(', contentSource.indexOf('function rectTrailingEdgeInsideCaptureViewport('))
+  );
+  const imageFallbackSource = contentSource.slice(
+    contentSource.indexOf('async function captureRenderedImageBlob('),
+    contentSource.indexOf('async function fetchImageBinary(')
+  );
+  if (!endEdgeSource.includes('rect.bottom <= bottom + 8') ||
+      !endEdgeSource.includes('turnTrailingEdgeVisible(turn)') ||
+      !imageFallbackSource || imageFallbackSource.includes('scrollIntoView(')) {
+    fail('long marked images: end must enter scrollport and image hydration must not change scroll position');
+  }
+
+  if (!contentSource.includes('function physicallyVisibleImageSources()') ||
+      !contentSource.includes("hydrateVisibleImages: mode === 'fragment'") ||
+      !contentSource.includes('visibleOnly: hydrateVisibleImages') ||
+      !contentSource.includes("onlyMissing: mode === 'full' || mode === 'fragment'")) {
+    fail('manual range: hydrate images only when physically visible and do not refetch ready binaries');
   }
 
   // Physical marker arrival must be distinguishable from DOM presence.

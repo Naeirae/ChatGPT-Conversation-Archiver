@@ -30,7 +30,7 @@ test('offscreen end marker must not truncate mounted messages', () => {
   ];
   const fn = new Function(
     'orderedTurns', 'captureTurn', 'identityContextsCompatible', 'hashText',
-    'mergeRicherCapture', 'matchesBoundary', 'turnIntersectsCaptureViewport',
+    'mergeRicherCapture', 'matchesBoundary', 'turnTrailingEdgeVisible',
     extract('collect') + '; return collect;'
   )(
     () => turns,
@@ -52,7 +52,7 @@ test('visible end marker stops collection at its exact occurrence', () => {
   ];
   const fn = new Function(
     'orderedTurns', 'captureTurn', 'identityContextsCompatible', 'hashText',
-    'mergeRicherCapture', 'matchesBoundary', 'turnIntersectsCaptureViewport',
+    'mergeRicherCapture', 'matchesBoundary', 'turnTrailingEdgeVisible',
     extract('collect') + '; return collect;'
   )(
     () => turns,
@@ -218,4 +218,113 @@ test('different immutable IDs with identical text do not prove overlap', () => {
     { strongId: 'data-message-id:four', signature: 'repeat' }
   ];
   assert.equal(overlap(before, after), false);
+});
+
+test('a measured small down-step can bridge adjacent tall single-message viewports', () => {
+  const bridge = new Function(
+    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+  )();
+  const before = [{ strongId: 'data-message-id:a', signature: 'first' }];
+  const after = [{ strongId: 'data-message-id:b', signature: 'second' }];
+  assert.equal(bridge(before, after, {
+    moved: true, direction: 'down', before: 1200, after: 1320
+  }), true);
+});
+
+test('single-message bridge rejects leaps, reverse steps, and missing movement proof', () => {
+  const bridge = new Function(
+    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+  )();
+  const a = [{ strongId: 'a' }];
+  const b = [{ strongId: 'b' }];
+  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 1200, after: 1900 }), false);
+  assert.equal(bridge(a,b,{ moved: true, direction: 'up', before: 1300, after: 1200 }), false);
+  assert.equal(bridge(a,b,{ moved: false, direction: 'down', before: 1200, after: 1320 }), false);
+  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: null, after: 120 }), false);
+});
+
+test('multiple disjoint message windows cannot claim continuity by pixel delta alone', () => {
+  const bridge = new Function(
+    extract('smallPhysicalStepCanBridgeSingleTurn') + '; return smallPhysicalStepCanBridgeSingleTurn;'
+  )();
+  const a = [{ strongId: 'a' }, { strongId: 'b' }];
+  const b = [{ strongId: 'c' }, { strongId: 'd' }];
+  assert.equal(bridge(a,b,{ moved: true, direction: 'down', before: 100, after: 180 }), false);
+});
+
+test('end marker is not physically reached when its tall message extends below viewport', () => {
+  const check = new Function(
+    'rectIntersectsCaptureViewport',
+    extract('rectTrailingEdgeInsideCaptureViewport') +
+    '; return rectTrailingEdgeInsideCaptureViewport;'
+  )((rect, width, height, scrollportRect) => {
+    const top = Math.max(0, scrollportRect?.top ?? 0);
+    const bottom = Math.min(height, scrollportRect?.bottom ?? height);
+    return rect.right > 0 && rect.left < width && rect.bottom > top &&
+      rect.top < bottom;
+  });
+  assert.equal(check({ left: 0, right: 640, top: 110, bottom: 1800 }, 1280, 900), false);
+  assert.equal(check({ left: 0, right: 640, top: -700, bottom: 820 }, 1280, 900), true);
+});
+
+test('end marker trailing edge must enter nested scrollport, not only page viewport', () => {
+  const check = new Function(
+    'rectIntersectsCaptureViewport',
+    extract('rectTrailingEdgeInsideCaptureViewport') +
+    '; return rectTrailingEdgeInsideCaptureViewport;'
+  )((rect, width, height, port) =>
+    rect.left < width && rect.right > 0 &&
+    rect.bottom > Math.max(0, port?.top ?? 0) &&
+    rect.top < Math.min(height, port?.bottom ?? height)
+  );
+  const scrollport = { top: 100, bottom: 650 };
+  assert.equal(check({ left: 40, right: 800, top: 300, bottom: 820 }, 1280, 900, scrollport), false);
+  assert.equal(check({ left: 40, right: 800, top: -300, bottom: 645 }, 1280, 900, scrollport), true);
+});
+
+test('unresponsive image/finalization acknowledgment is bounded by timeout', async () => {
+  const withTimeout = new Function(
+    'async ' + extract('withCaptureOperationTimeout') +
+    '; return withCaptureOperationTimeout;'
+  )();
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 10, 'Подтверждение обработки изображения'),
+    /не получен ответ/
+  );
+});
+
+test('end marker waits for sibling attachment beneath text root', () => {
+  const doc = {
+    documentElement: { clientWidth: 1280, clientHeight: 900 },
+    body: {},
+    scrollingElement: {}
+  };
+  const fakeWindow = { innerWidth: 1280, innerHeight: 900 };
+  const root = { getBoundingClientRect: () => ({
+    left: 0, right: 700, top: 100, bottom: 360
+  }) };
+  let imageBottom = 1400;
+  const image = { getBoundingClientRect: () => ({
+    left: 0, right: 700, top: 400, bottom: imageBottom,
+    width: 700, height: imageBottom - 400
+  }) };
+  const turn = { isConnected: true };
+  const reachesEnd = new Function(
+    'contentRoot', 'roleOf', 'turnImageNodes', 'findScrollContainer',
+    'rectIntersectsCaptureViewport', 'window', 'document',
+    extract('rectTrailingEdgeInsideCaptureViewport') +
+    extract('turnTrailingEdgeVisible') +
+    '; return turnTrailingEdgeVisible;'
+  )(
+    () => root,
+    () => 'assistant',
+    () => [image],
+    () => null,
+    (rect, width, height) => rect.right > 0 && rect.left < width &&
+      rect.bottom > 0 && rect.top < height,
+    fakeWindow, doc
+  );
+  assert.equal(reachesEnd(turn), false);
+  imageBottom = 800;
+  assert.equal(reachesEnd(turn), true);
 });
