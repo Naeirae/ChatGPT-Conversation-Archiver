@@ -1912,17 +1912,27 @@
     return result;
   }
 
-  async function hydrateSequentialImages(messages, attemptedSources, { visibleOnly = false } = {}) {
-    const attempted = attemptedSources instanceof Set ? attemptedSources : new Set();
+  async function hydrateSequentialImages(messages, attemptState, { visibleOnly = false, walkStep = 0 } = {}) {
+    // Failed sources must not re-block every 120px movement through a long
+    // message. Retry once in a later viewport; finalization still gets an
+    // independent last attempt for every missing image.
+    const attempts = attemptState instanceof Map ? attemptState : new Map();
     const visibleSources = visibleOnly ? physicallyVisibleImageSources() : null;
     const targets = [];
     const targetSources = new Set();
+    const step = Number(walkStep) || 0;
 
     for (const message of messages || []) {
       const pending = [];
       for (const image of message?.images || []) {
         const src = String(image?.src || '');
-        if (!src || attempted.has(src) || (visibleSources && !visibleSources.has(src))) continue;
+        if (!src || (visibleSources && !visibleSources.has(src))) continue;
+        const previous = attempts.get(src);
+        if (previous?.ready || (image.binaryStatus === 'ready' && image.dataUrl)) {
+          attempts.set(src, { ready: true, count: previous?.count || 1, lastStep: step });
+          continue;
+        }
+        if (previous && (previous.count >= 2 || step - previous.lastStep < 8)) continue;
         pending.push(image);
         targetSources.add(src);
       }
@@ -1935,19 +1945,18 @@
       reportProgress: false
     });
 
-    // Only successful sources become final. A failed image may simply have
-    // been half-loaded in this viewport; let the next physical window retry it.
     for (const src of targetSources) {
       const refs = targets.flatMap(message =>
         (message.images || []).filter(image => String(image?.src || '') === src)
       );
-      if (refs.some(image => image?.binaryStatus === 'ready' && image.dataUrl)) {
-        attempted.add(src);
-      } else {
-        attempted.delete(src);
-      }
+      const previous = attempts.get(src);
+      const ready = refs.some(image => image?.binaryStatus === 'ready' && image.dataUrl);
+      attempts.set(src, {
+        ready,
+        count: (previous?.count || 0) + 1,
+        lastStep: step
+      });
     }
-
     return result;
   }
 
@@ -4268,7 +4277,7 @@ if (boundaryIsVisible(boundary)) {
       recoverLoadErrors = true,
       hydrateImages = false,
       hydrateVisibleImages = false,
-      attemptedImageSources = new Set()
+      attemptedImageSources = new Map()
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
@@ -4293,7 +4302,7 @@ if (boundaryIsVisible(boundary)) {
         await hydrateSequentialImages(
           firstTouchedIds.map(id => map.get(id)).filter(Boolean),
           attemptedImageSources,
-          { visibleOnly: hydrateVisibleImages }
+          { visibleOnly: hydrateVisibleImages, walkStep: i }
         );
       }
       const beforeRefs = visibleNavigationRefsLightweight();
@@ -4355,7 +4364,7 @@ if (boundaryIsVisible(boundary)) {
         await hydrateSequentialImages(
           secondTouchedIds.map(id => map.get(id)).filter(Boolean),
           attemptedImageSources,
-          { visibleOnly: hydrateVisibleImages }
+          { visibleOnly: hydrateVisibleImages, walkStep: i }
         );
       }
 
@@ -4514,7 +4523,7 @@ if (boundaryIsVisible(boundary)) {
     let navigationSequence = [];
     let firstPassCount = 0;
     let secondPassCount = 0;
-    const sequentialImageSources = new Set();
+    const sequentialImageSources = new Map();
     let matchedAnchorId = resumeAnchorId;
     let matchedAnchorSignature = resumeAnchorSignature;
 
@@ -5506,14 +5515,9 @@ if (boundaryIsVisible(boundary)) {
         }
 
         if (draftMessages.length) {
-          if (status !== 'cancelled') {
-            const withImages = draftMessages.filter(item => (item.images || []).some(image =>
-              image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
-            ));
-            if (withImages.length) {
-              await hydrateMessageImages(withImages, { onlyMissing: true }).catch(() => {});
-            }
-          }
+          // Error recovery must persist the collected text immediately.
+          // Retry missing binaries only through explicit image recovery; a
+          // failed network path must not delay or defeat saving the draft.
           // A resumed capture continues one logical unfinished pass. Reuse the
           // canonical draft ID instead of exposing every retry as a new draft.
           draftId = current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId);
