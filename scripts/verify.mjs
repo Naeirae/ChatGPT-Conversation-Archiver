@@ -121,6 +121,16 @@ try {
     fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
   }
 
+  // The page requests 320px down and 180px recovery; the worker must not
+  // silently turn both into legacy 860px jumps.
+  if (!contentSource.includes('bursts,\\n        wheelDelta') ||
+      !serviceWorkerSource.includes('message.wheelDelta') ||
+      !serviceWorkerSource.includes('deltaY: sign * Math.max(60, Math.min(860, Number(wheelDelta) || 860))') ||
+      !serviceWorkerSource.includes('scriptedScrollChatTab(tabId, direction, count, wheelDelta)') ||
+      !contentSource.includes('seenWindows.has(windowKey)')) {
+    fail('wheel traversal: requested delta and finite recovery must be preserved end-to-end');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
