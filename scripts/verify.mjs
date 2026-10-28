@@ -1213,6 +1213,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-evidence.test.mjs',
   'tests/capture-viewport.test.mjs',
   'tests/capture-traversal.test.mjs',
+  'tests/capture-image-retry.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
