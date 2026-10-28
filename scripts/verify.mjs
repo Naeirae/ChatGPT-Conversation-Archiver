@@ -118,7 +118,7 @@ try {
   // physically visible navigable turns before or after scrolling.
   const legacyEmptyWindowGuard = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
   const measuredSingleTurnGuard = contentSource.includes(
-    '!smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)'
+    '!measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)'
   );
   if (legacyEmptyWindowGuard !== 1 || !measuredSingleTurnGuard) {
     fail('traversal: missing viewport evidence cannot bypass legacy continuity or measured single-turn validation');
@@ -137,9 +137,9 @@ try {
   // Large image messages may occupy the entire visible scrollport.
   // A strictly measured small step can bridge such single-turn windows,
   // but a missing scroll measurement and multi-turn leaps still fail closed.
-  if (!contentSource.includes('function smallPhysicalStepCanBridgeSingleTurn(') ||
+  if (!contentSource.includes('function measuredAdjacentScroll(') ||
       !contentSource.includes('wheelDelta: 120') ||
-      !contentSource.includes('smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)') ||
+      !contentSource.includes('measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)') ||
       !contentSource.includes("extra?.phase === 'finalizing'") ||
       !contentSource.includes("strictFinalization ? 30000 : 12000") ||
       !contentSource.includes("'Запись локального архива'")) {
@@ -167,6 +167,14 @@ try {
       !contentSource.includes('visibleOnly: hydrateVisibleImages') ||
       !contentSource.includes("onlyMissing: mode === 'full' || mode === 'fragment'")) {
     fail('manual range: hydrate images only when physically visible and do not refetch ready binaries');
+  }
+
+  if (!contentSource.includes('function sampleCaptureScroller()') ||
+      !contentSource.includes('before.element !== after.element') ||
+      !contentSource.includes('if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability)') ||
+      contentSource.includes('recoveryCyclesWithoutProgress') ||
+      contentSource.includes('recoveredAtCount === map.size')) {
+    fail('long turns: physical movement must override unchanged message count, while stalls still fail closed');
   }
 
   // Physical marker arrival must be distinguishable from DOM presence.
