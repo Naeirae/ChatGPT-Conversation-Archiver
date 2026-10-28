@@ -281,3 +281,14 @@ test('end marker trailing edge must enter nested scrollport, not only page viewp
   assert.equal(check({ left: 40, right: 800, top: 300, bottom: 820 }, 1280, 900, scrollport), false);
   assert.equal(check({ left: 40, right: 800, top: -300, bottom: 645 }, 1280, 900, scrollport), true);
 });
+
+test('unresponsive image/finalization acknowledgment is bounded by timeout', async () => {
+  const withTimeout = new Function(
+    'async ' + extract('withCaptureOperationTimeout') +
+    '; return withCaptureOperationTimeout;'
+  )();
+  await assert.rejects(
+    withTimeout(new Promise(() => {}), 10, 'Подтверждение обработки изображения'),
+    /не получен ответ/
+  );
+});
