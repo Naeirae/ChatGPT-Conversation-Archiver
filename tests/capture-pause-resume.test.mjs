@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 
 const workerSource = readFileSync(new URL('../service-worker.js', import.meta.url), 'utf8');
 const pageSource = readFileSync(new URL('../content-chatgpt.js', import.meta.url), 'utf8');
+const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 function between(source, start, end, last = false) {
   const a = last ? source.lastIndexOf(start) : source.indexOf(start);
   const b = source.indexOf(end, a + start.length);
@@ -119,7 +120,7 @@ test('worker acknowledges buffered progress after pause without changing status'
     "      case 'ARCHIVER_PHYSICAL_SCROLL': {", true
   );
   let writes = 0;
-  const exec = new Function('message', 'sender', 'getJob', 'setJob', 'appendRunLog',
+  const exec = new AsyncFunction('message', 'sender', 'getJob', 'setJob', 'appendRunLog',
     'switch(message.type) {\n' + source + '\n}\nreturn null;');
   const current = {
     status: 'paused', jobId: 'capture-117', captureTabId: 40
@@ -141,7 +142,7 @@ test('paused worker identifies a wheel race distinctly without moving the page',
     "      case 'ARCHIVER_PHYSICAL_CLICK': {", true
   );
   let scrolled = 0;
-  const exec = new Function('message', 'sender', 'getJob', 'chrome',
+  const exec = new AsyncFunction('message', 'sender', 'getJob', 'chrome',
     'conversationKey', 'setJob', 'physicalScrollTab',
     'switch(message.type) {\n' + source + '\n}\nreturn null;');
   const reply = await exec({
