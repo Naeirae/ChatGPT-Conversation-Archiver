@@ -10,9 +10,9 @@ const markers = {
   end: anchor('h')
 };
 const turn = id => ({ id: 'data-message-id:' + id, role: 'assistant', text: 'turn ' + id, identityStrong: true });
-const archive = (id, sourceUrl, ids) => ({
+const archive = (id, sourceUrl, ids, mode = 'full') => ({
   id, sourceUrl, title: 'Capture', capturedAt: '2026-10-28T12:00:00Z',
-  captureBoundaryReached: true, captureProof: { startVerified: true, endVerified: true },
+  captureBoundaryReached: true, captureProof: { mode, startVerified: true, endVerified: true },
   messages: ids.map(turn)
 });
 
@@ -103,7 +103,7 @@ test('two independent chats run at once and publish without cross-job progress c
   assert.equal((await f.storage.get('archiverQueueJob:' + first.jobId))['archiverQueueJob:' + first.jobId].draftCount, 1);
   assert.equal((await f.storage.get('archiverQueueJob:' + second.jobId))['archiverQueueJob:' + second.jobId].draftId, '');
 
-  const a = archive('arc1', chat(1), ['a', 'b']);
+  const a = archive('arc1-q-' + first.jobId, chat(1), ['a', 'b']);
   f.archives.set(a.id, a);
   assert.equal((await f.controller.complete({ jobId: first.jobId, archiveId: a.id }, first.captureTabId)).ok, true);
   state = await f.controller.getState();
@@ -111,10 +111,10 @@ test('two independent chats run at once and publish without cross-job progress c
   assert.equal(state.workers.find(w => w.jobId === second.jobId).status, 'running');
   state = await f.settled(s => s.workers.length === 3 && s.workers[2].status === 'running');
   assert.equal(state.workers[2].sourceUrl, chat(3));
-  const b = archive('arc2', chat(2), ['a','b','c']);
+  const b = archive('arc2-q-' + second.jobId, chat(2), ['a','b','c']);
   f.archives.set(b.id, b);
   assert.equal((await f.controller.complete({ jobId: second.jobId, archiveId: b.id }, second.captureTabId)).ok, true);
-  assert.deepEqual(f.published.map(a => a.id), ['arc1','arc2']);
+  assert.deepEqual(f.published.map(a => a.id), [a.id,b.id]);
 });
 
 test('one experimental split reserves both slots and publishes only a verified overlap', async () => {
@@ -130,8 +130,8 @@ test('one experimental split reserves both slots and publishes only a verified o
   const second = state.workers.find(w => w.lane === 'second');
   assert.equal(f.launches[0].opts.queueCapture, true);
   assert.equal(f.launches[1].opts.seekMarkedStart, true);
-  const a = archive('part1', chat(8), ['a','b','c','d','e']);
-  const b = archive('part2', chat(8), ['c','d','e','f','g','h']);
+  const a = archive('part1-q-' + first.jobId, chat(8), ['a','b','c','d','e'], 'fragment');
+  const b = archive('part2-q-' + second.jobId, chat(8), ['c','d','e','f','g','h'], 'fragment');
   f.archives.set(a.id, a); f.archives.set(b.id, b);
   const x = await f.controller.complete({ jobId:first.jobId, archiveId:a.id }, first.captureTabId);
   assert.equal(x.ok, true);
@@ -155,17 +155,19 @@ test('unverified split leaves both original parts recoverable, never publishes a
   const state = await f.settled(s => s.workers.length === 2 && s.workers.every(w => w.status === 'running'));
   const first = state.workers.find(w => w.lane === 'first');
   const second = state.workers.find(w => w.lane === 'second');
-  f.archives.set('broken1', archive('broken1',chat(9), ['a','b','c','d','e']));
-  f.archives.set('broken2', archive('broken2',chat(9), ['c','z','e','f','g','h']));
-  await f.controller.complete({ jobId:first.jobId, archiveId:'broken1' }, first.captureTabId);
-  await f.controller.complete({ jobId:second.jobId, archiveId:'broken2' }, second.captureTabId);
+  const part1 = archive('broken1-q-' + first.jobId, chat(9), ['a','b','c','d','e'], 'fragment');
+  const part2 = archive('broken2-q-' + second.jobId, chat(9), ['c','z','e','f','g','h'], 'fragment');
+  f.archives.set(part1.id, part1);
+  f.archives.set(part2.id, part2);
+  await f.controller.complete({ jobId:first.jobId, archiveId:part1.id }, first.captureTabId);
+  await f.controller.complete({ jobId:second.jobId, archiveId:part2.id }, second.captureTabId);
   const result = await f.settled(s => s.items[0].status === 'error');
   assert.equal(f.published.length, 0);
   assert.match(result.items[0].error, /стык/);
   const keys = [...f.data.keys()].filter(k => k.startsWith('draft:queue-split:'));
   assert.equal(keys.length, 2);
-  assert.equal(f.archives.get('broken1').messages.length, 5);
-  assert.equal(f.archives.get('broken2').messages.length, 6);
+  assert.equal(f.archives.get(part1.id).messages.length, 5);
+  assert.equal(f.archives.get(part2.id).messages.length, 6);
 });
 
 test('legacy job is not touched by the queue and blocks queue launches until available', async () => {
