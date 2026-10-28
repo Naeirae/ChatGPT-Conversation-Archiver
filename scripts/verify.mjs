@@ -77,7 +77,7 @@ try {
   }
   // The end marker may be DOM-mounted offscreen, and after a scroll
   // continuity must be checked before accepting its arrival.
-  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\n          turnIntersectsCaptureViewport(turn)')) {
+  if (!contentSource.includes('matchesBoundary(turn, stopBoundary) &&\n          turnTrailingEdgeVisible(turn)')) {
     fail('capture: do not trim at an offscreen DOM-mounted end marker');
   }
   for (const [startToken, endToken] of [
@@ -143,6 +143,22 @@ try {
       !contentSource.includes("extra?.phase === 'finalizing'") ||
       !contentSource.includes("strictFinalization ? 30000 : 12000")) {
     fail('marked capture: small measured adjacency and bounded image/finalization progress are required');
+  }
+
+  // A tall marked message must be traversed through its trailing edge;
+  // fetching an image must not reposition the scroll independently.
+  const endEdgeSource = contentSource.slice(
+    contentSource.indexOf('function rectTrailingEdgeInsideCaptureViewport('),
+    contentSource.indexOf('function findScrollContainer(', contentSource.indexOf('function rectTrailingEdgeInsideCaptureViewport('))
+  );
+  const imageFallbackSource = contentSource.slice(
+    contentSource.indexOf('async function captureRenderedImageBlob('),
+    contentSource.indexOf('async function fetchImageBinary(')
+  );
+  if (!endEdgeSource.includes('rect.bottom <= bottom + 8') ||
+      !endEdgeSource.includes('turnTrailingEdgeVisible(turn)') ||
+      !imageFallbackSource || imageFallbackSource.includes('scrollIntoView(')) {
+    fail('long marked images: end must enter scrollport and image hydration must not change scroll position');
   }
 
   // Physical marker arrival must be distinguishable from DOM presence.
