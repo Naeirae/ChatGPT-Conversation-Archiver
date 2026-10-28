@@ -1490,15 +1490,15 @@ async function pauseCapture() {
     pauseReason: 'user',
     resumePhase: current.phase === 'paused' ? (current.resumePhase || 'top') : (current.phase || 'top'),
     phase: 'paused',
-    pauseCheckpointSaved: Boolean(result.checkpointSaved),
+    pauseCheckpointSaved: Boolean(result.checkpointSaved && !result.snapshotError),
     pauseCheckpointCount: Number(result.draftCount || 0),
-    message: result.checkpointSaved
-      ? 'Сбор поставлен на паузу. Контрольная точка записана.'
+    message: result.checkpointSaved && !result.snapshotError
+      ? 'Сбор поставлен на паузу. Контрольная точка доступна.'
       : 'Сбор поставлен на паузу. Новая контрольная точка не подтверждена; прежние черновики сохранены.'
   }, {
-    level: result.checkpointSaved ? 'info' : 'warn',
-    code: result.checkpointSaved ? 'RUN_PAUSED_WITH_CHECKPOINT' : 'RUN_PAUSED_NO_FRESH_CHECKPOINT',
-    message: result.checkpointSaved
+    level: result.checkpointSaved && !result.snapshotError ? 'info' : 'warn',
+    code: result.checkpointSaved && !result.snapshotError ? 'RUN_PAUSED_WITH_CHECKPOINT' : 'RUN_PAUSED_NO_FRESH_CHECKPOINT',
+    message: result.checkpointSaved && !result.snapshotError
       ? 'Вкладка подтвердила паузу и запись контрольной точки (' +
           Number(result.draftCount || 0) + ' сообщений).'
       : 'Вкладка подтвердила паузу, но запись нового черновика не подтверждена.',
