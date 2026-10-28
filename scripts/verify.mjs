@@ -131,6 +131,17 @@ try {
     fail('wheel traversal: requested delta and finite recovery must be preserved end-to-end');
   }
 
+  // Large image messages may occupy the entire visible scrollport.
+  // A strictly measured small step can bridge such single-turn windows,
+  // but a missing scroll measurement and multi-turn leaps still fail closed.
+  if (!contentSource.includes('function smallPhysicalStepCanBridgeSingleTurn(') ||
+      !contentSource.includes('wheelDelta: 120') ||
+      !contentSource.includes('smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)') ||
+      !contentSource.includes("extra?.phase === 'finalizing'") ||
+      !contentSource.includes("strictFinalization ? 30000 : 12000")) {
+    fail('marked capture: small measured adjacency and bounded image/finalization progress are required');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
