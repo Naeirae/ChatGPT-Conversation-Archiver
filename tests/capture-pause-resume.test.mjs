@@ -4,8 +4,8 @@ import { readFileSync } from 'node:fs';
 
 const workerSource = readFileSync(new URL('../service-worker.js', import.meta.url), 'utf8');
 const pageSource = readFileSync(new URL('../content-chatgpt.js', import.meta.url), 'utf8');
-function between(source, start, end) {
-  const a = source.indexOf(start);
+function between(source, start, end, last = false) {
+  const a = last ? source.lastIndexOf(start) : source.indexOf(start);
   const b = source.indexOf(end, a + start.length);
   assert.ok(a >= 0 && b > a, 'Could not isolate real executable source: ' + start);
   return source.slice(a, b);
@@ -116,7 +116,7 @@ test('already-running content script reconciles an outdated paused worker status
 test('worker acknowledges buffered progress after pause without changing status', async () => {
   const source = between(
     workerSource, "      case 'ARCHIVER_CAPTURE_PROGRESS': {",
-    "      case 'ARCHIVER_PHYSICAL_SCROLL': {"
+    "      case 'ARCHIVER_PHYSICAL_SCROLL': {", true
   );
   let writes = 0;
   const exec = new Function('message', 'sender', 'getJob', 'setJob', 'appendRunLog',
@@ -138,7 +138,7 @@ test('worker acknowledges buffered progress after pause without changing status'
 test('paused worker identifies a wheel race distinctly without moving the page', async () => {
   const source = between(
     workerSource, "      case 'ARCHIVER_PHYSICAL_SCROLL': {",
-    "      case 'ARCHIVER_PHYSICAL_CLICK': {"
+    "      case 'ARCHIVER_PHYSICAL_CLICK': {", true
   );
   let scrolled = 0;
   const exec = new Function('message', 'sender', 'getJob', 'chrome',
