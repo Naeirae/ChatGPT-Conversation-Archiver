@@ -162,6 +162,13 @@ try {
     fail('long marked images: end must enter scrollport and image hydration must not change scroll position');
   }
 
+  if (!contentSource.includes('function physicallyVisibleImageSources()') ||
+      !contentSource.includes("hydrateVisibleImages: mode === 'fragment'") ||
+      !contentSource.includes('visibleOnly: hydrateVisibleImages') ||
+      !contentSource.includes("onlyMissing: mode === 'full' || mode === 'fragment'")) {
+    fail('manual range: hydrate images only when physically visible and do not refetch ready binaries');
+  }
+
   // Physical marker arrival must be distinguishable from DOM presence.
   // A large or virtualized chat may keep the marked end mounted off screen.
   const viewportModule = await readFile('lib/capture-viewport.mjs', 'utf8');
