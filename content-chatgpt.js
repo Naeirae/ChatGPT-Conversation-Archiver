@@ -6130,10 +6130,12 @@ if (boundaryIsVisible(boundary)) {
           snapshotError
         });
       })().catch(error => {
+        const alive = Boolean(state.running && state.jobId === pausedJobId);
         sendResponse({
-          ok: true, paused: true, running: true, jobId: pausedJobId,
+          ok: alive, paused: alive, running: alive, jobId: pausedJobId,
           checkpointSaved: false, draftCount: 0,
-          snapshotError: error?.message || String(error)
+          snapshotError: error?.message || String(error),
+          error: alive ? '' : 'Сборщик завершился во время подтверждения паузы.'
         });
       });
       return true;
