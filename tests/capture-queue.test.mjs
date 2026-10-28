@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   QUEUE_MODES, queueLanePlan, splitLanePlan, chooseRunnableQueueItems,
-  queueItemStatus, joinVerifiedSplitCapture
+  queueItemStatus, joinVerifiedSplitCapture, queueResumePlan
 } from '../lib/capture-queue.mjs';
 const url = 'https://chatgpt.com/c/4e156f31-0000-4000-8000-111111111111';
 const other = 'https://chatgpt.com/c/4e156f31-0000-4000-8000-222222222222';
@@ -77,4 +77,55 @@ test('queue status distinguishes failure from partial or complete work', () => {
   assert.equal(queueItemStatus(split, [{itemId:'split',status:'done'},{itemId:'split',status:'running'}]), 'running');
   assert.equal(queueItemStatus(split, [{itemId:'split',status:'done'},{itemId:'split',status:'error'}]), 'error');
   assert.equal(queueItemStatus(split, [{itemId:'split',status:'done'},{itemId:'split',status:'done'}]), 'done');
+});
+
+test('queue resume accepts only a saved chronological draft with original start proof', () => {
+  const full = {
+    id: 'old-full', sourceUrl: url, captureMode: 'full',
+    capturePhase: 'walk', captureBoundary: { kind: 'stable', key: anchor('h').id },
+    captureStartProof: {
+      mode: 'full', startVerified: true, snapshotEndVerified: true,
+      startSource: 'visible-first-turn'
+    },
+    messages: ['a','b','c'].map(turn), resumeWindowSignatures: ['sig-b','sig-c']
+  };
+  const plan = queueLanePlan(item('single', QUEUE_MODES.TWO_CHATS))[0];
+  const resume = queueResumePlan(full, url, plan);
+  assert.equal(resume?.mode, 'resume-draft');
+  assert.equal(resume?.existingDraftId, full.id);
+  assert.equal(resume?.resumeAnchorId, anchor('c').id);
+  assert.deepEqual(resume.resumeTailSignatures, ['sig-b','sig-c']);
+  assert.equal(queueResumePlan({ ...full, captureStartProof: null }, url, plan), null);
+  assert.equal(queueResumePlan({ ...full, capturePhase: 'top' }, url, plan), null);
+  assert.equal(queueResumePlan({ ...full, sourceUrl: other }, url, plan), null);
+  assert.equal(queueResumePlan({ ...full, messages: [{ id: 'turn:weak' }] }, url, plan), null);
+});
+
+test('split lane resume rejects a changed or unproved range, but can retain an earlier visible prefix', () => {
+  const [plan] = splitLanePlan(markers);
+  const draft = {
+    id: 'old-fragment', sourceUrl: url, captureMode: 'fragment',
+    capturePhase: 'walk',
+    captureBoundary: { kind: 'stable', key: plan.captureRange.end.id },
+    captureStartProof: {
+      mode: 'fragment', startVerified: true, snapshotEndVerified: true,
+      markedStartId: plan.captureRange.start.id,
+      markedEndId: plan.captureRange.end.id
+    },
+    captureRange: plan.captureRange,
+    messages: ['x','a','b','c'].map(turn)
+  };
+  assert.ok(queueResumePlan(draft, url, plan));
+  assert.equal(queueResumePlan({ ...draft, captureBoundary: { kind:'stable',key:anchor('f').id } },url,plan),null);
+  assert.equal(queueResumePlan({ ...draft, captureRange: { ...draft.captureRange, start: anchor('f') } },url,plan),null);
+  assert.equal(queueResumePlan({ ...draft, messages:['x','b','c'].map(turn) },url,plan),null);
+});
+
+test('split queue with one verified lane already done needs only one free slot', () => {
+  const split = item('split', QUEUE_MODES.SPLIT_CHAT);
+  const active = [
+    { itemId:'split',lane:'first',status:'done',sourceUrl:url },
+    { itemId:'other',lane:'single',status:'running',sourceUrl:other }
+  ];
+  assert.deepEqual(chooseRunnableQueueItems([split],active).map(v=>v.id),['split']);
 });
