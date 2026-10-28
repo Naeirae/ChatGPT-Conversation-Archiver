@@ -336,3 +336,27 @@ test('end marker waits for sibling attachment beneath text root', () => {
   imageBottom = 800;
   assert.equal(reachesEnd(turn), true);
 });
+
+test('long single message produces a checkpoint on elapsed time alone', () => {
+  const due = new Function(
+    extract('checkpointDue') + '; return checkpointDue;'
+  )();
+  const last = { at: 1000, count: 3 };
+  assert.equal(due(last, 30999, 3, 30000, 35), false);
+  assert.equal(due(last, 31000, 3, 30000, 35), true);
+});
+
+test('new messages may trigger checkpoint before timed interval', () => {
+  const due = new Function(
+    extract('checkpointDue') + '; return checkpointDue;'
+  )();
+  assert.equal(due({ at: 1000, count: 3 }, 1200, 38, 30000, 35), true);
+  assert.equal(due({ at: 1000, count: 3 }, 1200, 4, 30000, 35), false);
+});
+
+test('forced checkpoint is allowed despite stationary message count', () => {
+  const due = new Function(
+    extract('checkpointDue') + '; return checkpointDue;'
+  )();
+  assert.equal(due({ at: 1000, count: 3 }, 1100, 3, 30000, 35, true), true);
+});
