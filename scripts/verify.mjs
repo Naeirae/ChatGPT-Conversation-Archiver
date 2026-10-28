@@ -123,7 +123,7 @@ try {
 
   // The page requests 320px down and 180px recovery; the worker must not
   // silently turn both into legacy 860px jumps.
-  if (!contentSource.includes('bursts,\\n        wheelDelta') ||
+  if (!contentSource.includes('wheelDelta\n      });') ||
       !serviceWorkerSource.includes('message.wheelDelta') ||
       !serviceWorkerSource.includes('deltaY: sign * Math.max(60, Math.min(860, Number(wheelDelta) || 860))') ||
       !serviceWorkerSource.includes('scriptedScrollChatTab(tabId, direction, count, wheelDelta)') ||
