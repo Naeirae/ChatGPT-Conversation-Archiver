@@ -4062,26 +4062,42 @@
     return false;
   }
 
-  function smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, scrollResult) {
-    // In image-heavy conversations a single tall turn may occupy the whole
-    // viewport; scrolling a short distance can replace the sole visible turn
-    // without an overlapping message. Accept only a measured small downward
-    // movement, not merely a CDP acknowledgement or a signature change.
-    if (!beforeRefs?.length || !afterRefs?.length) return false;
-    if (beforeRefs.length !== 1 && afterRefs.length !== 1) return false;
-    if (!scrollResult?.moved || scrollResult.direction !== 'down') return false;
-    if (scrollResult.before == null || scrollResult.after == null) return false;
-    const before = Number(scrollResult.before);
-    const after = Number(scrollResult.after);
-    const step = after - before;
-    return Number.isFinite(step) && step >= 2 && step <= 160;
+  function sampleCaptureScroller() {
+    const turn = orderedTurns().find(item => turnIntersectsCaptureViewport(item));
+    if (!turn) return null;
+    const scroller = findScrollContainer(turn);
+    if (!scroller?.isConnected) return null;
+    return {
+      element: scroller,
+      top: Number(scroller.scrollTop),
+      clientHeight: Number(scroller.clientHeight),
+      scrollHeight: Number(scroller.scrollHeight)
+    };
+  }
+
+  function measuredAdjacentScroll(before, after, transport, maxPixels = 200) {
+    // A message may span many screens. Chronological progress is physical
+    // displacement in the SAME scroll container, not a rising message count
+    // or a fresh message ID in each viewport.
+    if (!before?.element || !after?.element || before.element !== after.element) return false;
+    if (!transport?.moved || transport.direction !== 'down') return false;
+    const delta = Number(after.top) - Number(before.top);
+    const limit = Math.min(maxPixels, Math.max(20, Number(before.clientHeight) * 0.35));
+    return Number.isFinite(delta) && delta >= 2 && delta <= limit &&
+      Number.isFinite(before.scrollHeight) && Number.isFinite(after.scrollHeight) &&
+      before.scrollHeight > before.clientHeight &&
+      after.scrollHeight > after.clientHeight;
   }
 
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
     const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
       const currentRefs = visibleNavigationRefsLightweight();
-      const windowKey = JSON.stringify(currentRefs.map(ref => [ref.strongId, ref.signature]));
+      const sample = sampleCaptureScroller();
+      const windowKey = JSON.stringify({
+        top: sample?.top ?? null,
+        refs: currentRefs.map(ref => [ref.strongId, ref.signature])
+      });
       // The same virtualized window on a second attempt means that reversing
       // the wheel cannot recover the missing bridge. Stop the oscillation.
       if (seenWindows.has(windowKey)) return false;
@@ -4118,8 +4134,6 @@
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
-    let recoveryCyclesWithoutProgress = 0;
-    let recoveredAtCount = -1;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4186,15 +4200,6 @@
           );
         }
 
-        if (recoveredAtCount === map.size) recoveryCyclesWithoutProgress++;
-        else recoveryCyclesWithoutProgress = 1;
-        recoveredAtCount = map.size;
-        if (recoveryCyclesWithoutProgress >= 3) {
-          throw new Error(
-            'Восстановление перекрытия повторяется без новых сообщений. ' +
-            'Сбор остановлен; сохранённая часть доступна для восстановления.'
-          );
-        }
         stable = 0;
         previousSignature = '';
         previousSize = -1;
@@ -4258,8 +4263,6 @@ if (boundaryIsVisible(boundary)) {
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
-    let recoveryCyclesWithoutProgress = 0;
-    let recoveredAtCount = -1;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4307,6 +4310,7 @@ if (boundaryIsVisible(boundary)) {
         return { boundaryReached: true, physicalEndReached: false };
       }
 
+      const physicalBefore = sampleCaptureScroller();
       const before = scrollObservation(map.size);
       const walkImageStats = capturedImageStats([...map.values()]);
       await progress(
@@ -4346,8 +4350,9 @@ if (boundaryIsVisible(boundary)) {
       }
 
       const afterRefs = visibleNavigationRefsLightweight();
+      const physicalAfter = sampleCaptureScroller();
       if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
-          !smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)) {
+          !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4362,15 +4367,6 @@ if (boundaryIsVisible(boundary)) {
           );
         }
 
-        if (recoveredAtCount === map.size) recoveryCyclesWithoutProgress++;
-        else recoveryCyclesWithoutProgress = 1;
-        recoveredAtCount = map.size;
-        if (recoveryCyclesWithoutProgress >= 3) {
-          throw new Error(
-            'Восстановление перекрытия повторяется без новых сообщений. ' +
-            'Сбор остановлен; сохранённая часть доступна для восстановления.'
-          );
-        }
         scrollRuntime().resetStabilityState(stability);
         await saveRecoveryCheckpoint(map, order, boundary);
         continue;
@@ -4401,7 +4397,15 @@ if (boundaryIsVisible(boundary)) {
             await saveRecoveryCheckpoint(map, order, boundary);
 
       const after = scrollObservation(map.size);
-      const stall = scrollRuntime().updateStabilityState(stability, before, after);
+      // No new message text is expected while crossing a 20-screen turn.
+      // Only a non-moving viewport contributes to the stall counter.
+      const physicallyAdvanced = measuredAdjacentScroll(
+        physicalBefore, physicalAfter, downwardStep
+      );
+      if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability);
+      const stall = physicallyAdvanced
+        ? { stable: 0 }
+        : scrollRuntime().updateStabilityState(stability, before, after);
 
       if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
