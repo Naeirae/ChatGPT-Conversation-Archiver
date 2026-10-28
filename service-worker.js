@@ -6547,6 +6547,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const tabId = sender?.tab?.id;
       const worker = await queueController.authorized(message.jobId || '', tabId);
       if (!worker) return { ok: false, error: 'Проход очереди не принадлежит этой вкладке.' };
+      const physicalTypes = new Set([
+        'ARCHIVER_PHYSICAL_SCROLL', 'ARCHIVER_PHYSICAL_CLICK',
+        'ARCHIVER_PHYSICAL_COPY_SELECTION', 'ARCHIVER_CAPTURE_RENDERED_IMAGE'
+      ]);
+      if (physicalTypes.has(message.type) && worker.status === 'paused') {
+        return { ok: false, paused: true, error: 'CAPTURE_PAUSED' };
+      }
+      if (physicalTypes.has(message.type) && worker.status === 'stopping') {
+        return { ok: false, error: 'Сборщик останавливается.' };
+      }
       switch (message.type) {
         case 'ARCHIVER_CAPTURE_PROGRESS':
           return await queueController.progress(message, tabId);
@@ -6579,6 +6589,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return await queueController.remove(message.itemId || '');
       case 'ARCHIVER_QUEUE_RETRY':
         return await queueController.retry(message.itemId || '');
+      case 'ARCHIVER_QUEUE_PAUSE':
+        return await queueController.pause(message.itemId || '', message.lane || '');
+      case 'ARCHIVER_QUEUE_RESUME':
+        return await queueController.resume(message.itemId || '', message.lane || '');
       case 'ARCHIVER_QUEUE_ENABLE':
         return await queueController.enable(message.enabled !== false);
       case 'ARCHIVER_QUEUE_CANCEL':
