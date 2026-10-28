@@ -49,6 +49,7 @@ import {
 } from './lib/document-parts.mjs';
 
 import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mjs';
+import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
 
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const RUN_HISTORY_KEY = 'captureRunHistory';
@@ -798,7 +799,7 @@ async function listLinkedArchivesFast() {
   const rows = [];
   for (const id of ids) {
     const item = library[id] || null;
-    if (item?.complete === false) continue;
+    if (item?.complete === false || item?.mergedInto) continue;
     const sourceKey = conversationKey(item?.sourceUrl || '');
     const linked = sourceKey && !item?.isFragment ? docLinks[sourceKey] : null;
     const destination = destinations[id] || null;
@@ -889,7 +890,7 @@ async function listLinkedArchives() {
 
   for (const id of ids) {
     const archive = stored[STORAGE_KEYS.archivePrefix + id];
-    if (!archive?.id || !archive?.sourceUrl) continue;
+    if (!archive?.id || !archive?.sourceUrl || library[id]?.mergedInto) continue;
     if (archive.partial && archive.complete !== true) continue;
 
     const sourceKey = conversationKey(archive.sourceUrl || '');
@@ -3550,6 +3551,90 @@ async function reconcilePartialArchive(draftId, completed) {
   };
   await putArchive(merged);
   return { applied: true, archiveId: partialId, messageCount: merged.messages.length };
+}
+
+// Existing complete archives are never rewritten or deleted. Only a verified
+// same-URL chronological overlap with immutable message IDs can produce a
+// combined archive; unrelated or unanchored captures remain distinct.
+async function consolidateSavedArchives() {
+  const meta = await chrome.storage.local.get([
+    STORAGE_KEYS.archiveLibrary,
+    STORAGE_KEYS.archiveIndex,
+    STORAGE_KEYS.lastArchiveId
+  ]);
+  const library = meta[STORAGE_KEYS.archiveLibrary] || {};
+  const candidateIds = [...new Set([
+    ...Object.keys(library).filter(id => !library[id]?.mergedInto),
+    ...Object.values(meta[STORAGE_KEYS.archiveIndex] || {}),
+    meta[STORAGE_KEYS.lastArchiveId] || ''
+  ].filter(Boolean))];
+  const byKey = new Map();
+  for (const id of candidateIds) {
+    const item = library[id];
+    if (item?.mergedInto) continue;
+    const key = conversationKey(item?.sourceUrl || '');
+    if (!key || item?.isFragment) continue;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(id);
+  }
+  const relevant = [...byKey.values()].filter(ids => ids.length >= 2).flat();
+  const archives = [];
+  for (const id of relevant) {
+    const archive = await getArchive(id);
+    if (archive?.id) archives.push(archive);
+  }
+  const proposals = planVerifiedCompletedMerges(
+    archives, (oldTurn, freshTurn) => mergeStoredMessageCapture(oldTurn, freshTurn)
+  );
+  const merged = [];
+  for (const proposal of proposals) {
+    const newest = [...proposal.sources].sort((a, b) =>
+      String(b.capturedAt || '').localeCompare(String(a.capturedAt || ''))
+    )[0];
+    const archiveId = 'verified-archive-merge:' + hashText(
+      proposal.sourceKey + '|' + proposal.sourceIds.join('|')
+    );
+    const images = proposal.messages.flatMap(item => item.images || []);
+    const mergedArchive = {
+      ...newest,
+      id: archiveId,
+      messages: proposal.messages,
+      complete: true,
+      partial: false,
+      isFragment: false,
+      lastCaptureMode: 'verified-merge',
+      captureProof: undefined,
+      captureBoundaryReached: undefined,
+      mergedFromArchiveIds: proposal.sourceIds,
+      mergedVerifiedOverlap: true,
+      imageCount: images.length,
+      imageBinaryReady: images.filter(storedImageReady).length,
+      imageBinaryFailed: images.filter(image => image?.binaryStatus === 'failed').length,
+      lastMessageId: proposal.messages[proposal.messages.length - 1]?.id || ''
+    };
+    // Commit the complete synthetic archive before changing any library card.
+    await putArchive(mergedArchive);
+    await registerArchive(mergedArchive);
+    const refreshed = (await chrome.storage.local.get(STORAGE_KEYS.archiveLibrary))[
+      STORAGE_KEYS.archiveLibrary
+    ] || {};
+    for (const id of proposal.sourceIds) {
+      if (refreshed[id]) refreshed[id] = { ...refreshed[id], mergedInto: archiveId };
+    }
+    await chrome.storage.local.set({ [STORAGE_KEYS.archiveLibrary]: refreshed });
+    const indexedId = (meta[STORAGE_KEYS.archiveIndex] || {})[proposal.sourceKey];
+    if (proposal.sourceIds.includes(indexedId)) await indexArchive(mergedArchive);
+    if (proposal.sourceIds.includes(meta[STORAGE_KEYS.lastArchiveId])) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.lastArchiveId]: archiveId });
+    }
+    merged.push({ archiveId, sourceCount: proposal.sourceIds.length, messageCount: proposal.messages.length });
+  }
+  return {
+    merged,
+    mergedCount: merged.length,
+    skipped: Math.max(0, byKey.size - merged.length),
+    noVerifiedOverlap: merged.length === 0
+  };
 }
 
 async function handleCaptureComplete(message) {
@@ -6756,6 +6841,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_DRAFT_IMAGES_COMPLETE':
         await handleDraftImagesComplete(message);
         return { ok: true };
+      case 'ARCHIVER_CONSOLIDATE_SAVED_ARCHIVES': {
+        const job = await getJob();
+        if (job && ['starting', 'running', 'paused'].includes(job.status)) {
+          throw new Error('Остановите активный сбор перед объединением.');
+        }
+        return { ok: true, ...(await consolidateSavedArchives()) };
+      }
       case 'ARCHIVER_CAPTURE_COMPLETE': {
         await handleCaptureComplete(message);
         const result = await getJob();
