@@ -5861,6 +5861,7 @@ if (boundaryIsVisible(boundary)) {
     const hasTurn = Boolean(selectedFragmentTurn?.isConnected && fragmentAnchor(selectedFragmentTurn));
     const marked = [
       fragmentMarkers.start ? 'начало ✓' : 'начало —',
+      fragmentMarkers.middle ? 'середина ✓' : 'середина —',
       fragmentMarkers.end ? 'конец ✓' : 'конец —'
     ].join(' · ');
     selectionStatus.textContent = hasTurn
@@ -5878,13 +5879,15 @@ if (boundaryIsVisible(boundary)) {
     }
   }
 
-  for (const [kind, label] of [['start', '⟦ Начало'], ['end', 'Конец ⟧']]) {
+  for (const [kind, label] of [['start', '⟦ Начало'], ['middle', 'Середина ⋮'], ['end', 'Конец ⟧']]) {
     const button = document.createElement('button');
     button.type = 'button';
     button.textContent = label;
     button.title = kind === 'start'
       ? 'Сделать выбранную реплику началом диапазона'
-      : 'Сделать выбранную реплику концом диапазона';
+      : kind === 'middle'
+        ? 'Третья отметка для экспериментального сбора одного чата двумя потоками'
+        : 'Сделать выбранную реплику концом диапазона';
     button.style.cssText =
       'font:12px system-ui;background:#fff;color:#222;border:0;border-radius:5px;padding:7px 9px;cursor:pointer';
     button.addEventListener('click', async event => {
@@ -5897,6 +5900,25 @@ if (boundaryIsVisible(boundary)) {
       const old = fragmentMarkers[kind];
       if (old && markerIdentityMatches(old, anchor)) {
         delete fragmentMarkers[kind];
+      } else if (kind === 'middle') {
+        const turns = orderedTurns();
+        const index = turns.indexOf(selectedFragmentTurn);
+        const before = index > 0 ? turns[index - 1] : null;
+        const after = index >= 0 ? turns[index + 1] : null;
+        const stable = turn => isStrongMessageId(turnStableKey(turn));
+        if (!stable(selectedFragmentTurn) || !stable(before) || !stable(after)) {
+          selectionStatus.textContent =
+            'Для двух потоков выберите середину с устойчивыми ID и соседними репликами. ' +
+            'Сдвиньте чат так, чтобы обе соседние реплики были загружены.';
+          return;
+        }
+        const captureNeighbor = turn => ({
+          id: turnStableKey(turn), signature: turnTextSignature(turn),
+          role: roleOf(turn) || ''
+        });
+        fragmentMarkers[kind] = {
+          ...anchor, previous: captureNeighbor(before), next: captureNeighbor(after)
+        };
       } else {
         fragmentMarkers[kind] = anchor;
       }
