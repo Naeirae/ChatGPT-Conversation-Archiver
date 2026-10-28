@@ -33,7 +33,8 @@
     resumeFailure: '',
     lastScrollDirection: '',
     manualTopConfirmed: false,
-    boundarySearchActive: false
+    boundarySearchActive: false,
+    queueCapture: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -262,6 +263,7 @@
       const normalizedDirection = direction === 'down' ? 'down' : 'up';
       const result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_PHYSICAL_SCROLL',
+        queueCapture: state.queueCapture,
         jobId,
         direction: normalizedDirection,
         bursts,
@@ -414,6 +416,7 @@
 
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_PHYSICAL_CLICK',
+      queueCapture: state.queueCapture,
       jobId: state.jobId,
       point
     });
@@ -464,6 +467,7 @@
     try {
       const result = await chrome.runtime.sendMessage({
         type: 'ARCHIVER_PHYSICAL_COPY_SELECTION',
+        queueCapture: state.queueCapture,
         jobId: state.jobId
       });
       let text = normalizeDisplayText(result?.text || '');
@@ -1759,6 +1763,8 @@
 
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE',
+      queueCapture: state.queueCapture,
+      jobId: state.jobId,
       src,
       rect: {
         left: visibleLeft,
@@ -2678,6 +2684,7 @@
     try {
       const request = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_PROGRESS',
+        queueCapture: state.queueCapture,
         jobId: state.jobId,
         patch
       });
@@ -3920,7 +3927,8 @@
       checkpointSize >= 500 ? 70 : 35;
     if (!checkpointDue(last, now, order.length, minInterval, minDelta, force)) return;
 
-    const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
+    const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
+    const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
     if (current.jobId !== jobId) return;
     // Image-only repair of an unfinished draft must be transactional: do not
     // overwrite the canonical saved text with intermediate DOM snapshots.
@@ -4005,6 +4013,7 @@
     await chrome.storage.local.set({ ['draft:' + draftId]: draft });
     await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CHECKPOINT_SAVED',
+      queueCapture: state.queueCapture,
       jobId,
       draftId,
       draftCount: messages.length
@@ -4488,12 +4497,53 @@ if (boundaryIsVisible(boundary)) {
     );
   }
 
+  async function seekQueueMarkedStart(marker) {
+    if (!marker?.id || !isStrongMessageId(marker.id)) {
+      throw new Error('Экспериментальному потоку нужна устойчивая начальная отметка.');
+    }
+    const visible = () => orderedTurns().some(turn =>
+      turnStableKey(turn) === marker.id && turnIntersectsCaptureViewport(turn)
+    );
+    if (visible()) return;
+    const deadline = Date.now() + 4 * 60 * 60 * 1000;
+    for (const direction of ['up', 'down']) {
+      let atEdge = 0;
+      for (let step = 0; step < 20000 && Date.now() < deadline; step++) {
+        await waitIfPaused();
+        if (visible()) return;
+        if (step === 0 || step % 24 === 0) {
+          await progress('Экспериментальный поток: ищу отмеченное начало · ' +
+            direction + ' · шаг ' + (step + 1), 0,
+            { phase: 'boundary', force: true });
+        }
+        const before = sampleCaptureScroller();
+        const movement = await physicalScroll(direction, 1, {
+          wheelDelta: 120, settleTimeout: 1800, quietWindow: 260
+        });
+        if (visible()) return;
+        const after = sampleCaptureScroller();
+        const edge = direction === 'up'
+          ? physicalScrollStartVisible() : physicalScrollEndVisible();
+        const unchanged = before?.element === after?.element &&
+          Number(before.top) === Number(after.top);
+        if (edge && unchanged && !movement.moved) atEdge++;
+        else atEdge = 0;
+        if (atEdge >= 3) break;
+      }
+    }
+    throw new Error(
+      'Не удалось физически найти начальную отметку экспериментального потока. ' +
+      'Чужие сообщения не будут включены в архив.'
+    );
+  }
+
   async function captureConversation(jobId, options = {}) {
     if (state.running) return;
     state.running = true;
     // Remove our marker controls before any message signatures or text are read.
     document.querySelectorAll('.archiver-fragment-buttons').forEach(node => node.remove());
     state.jobId = jobId;
+    state.queueCapture = Boolean(options.queueCapture);
     state.cancel = false;
     state.paused = false;
     state.lastScrollDirection = '';
@@ -4675,6 +4725,9 @@ if (boundaryIsVisible(boundary)) {
             timeoutMs: 20 * 60 * 1000
           });
         } else if (mode === 'fragment') {
+          if (options.seekMarkedStart && state.queueCapture) {
+            await seekQueueMarkedStart(selectedFragment.start);
+          }
           // Manual range is authoritative. Do not search upward or visit the
           // lower boundary first. The user positions the current tab at the
           // marked start; collection then moves only downward to the marked end.
@@ -5033,7 +5086,8 @@ if (boundaryIsVisible(boundary)) {
       }
 
       let messages = capturedMessages;
-      const archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href));
+      const archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href) +
+        (state.queueCapture ? '-q-' + jobId : ''));
       let addedCount = capturedMessages.length;
       let previousCount = 0;
       let recoveredImageRefs = [];
@@ -5191,6 +5245,7 @@ if (boundaryIsVisible(boundary)) {
         try {
           await chrome.runtime.sendMessage({
             type: 'ARCHIVER_CAPTURE_COMPLETE',
+            queueCapture: state.queueCapture,
             jobId,
             archiveId: existingArchiveId,
             count: comparisonCount,
@@ -5283,6 +5338,7 @@ if (boundaryIsVisible(boundary)) {
         try {
           await chrome.runtime.sendMessage({
             type: 'ARCHIVER_DRAFT_IMAGES_COMPLETE',
+            queueCapture: state.queueCapture,
             jobId,
             draftId: existingDraftId,
             count: messages.length,
@@ -5369,6 +5425,7 @@ if (boundaryIsVisible(boundary)) {
       );
       const completionRequest = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_COMPLETE',
+        queueCapture: state.queueCapture,
         jobId,
         archiveId,
         count: messages.length,
@@ -5391,7 +5448,8 @@ if (boundaryIsVisible(boundary)) {
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
-      const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
+      const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
+      const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
 
       let draftId = '';
       let draftCount = 0;
@@ -5585,6 +5643,7 @@ if (boundaryIsVisible(boundary)) {
       try {
         await chrome.runtime.sendMessage({
           type: 'ARCHIVER_CAPTURE_FAILED',
+          queueCapture: state.queueCapture,
           jobId,
           error: message,
           draftId,
@@ -5595,6 +5654,7 @@ if (boundaryIsVisible(boundary)) {
     } finally {
       state.running = false;
       state.jobId = null;
+      state.queueCapture = false;
       state.cancel = false;
       state.paused = false;
       state.pauseCheckpoint = null;
@@ -5952,7 +6012,9 @@ if (boundaryIsVisible(boundary)) {
         resumeAnchorSignature: message.resumeAnchorSignature,
         resumeTailSignatures: message.resumeTailSignatures,
         resumeNavigation: Boolean(message.resumeNavigation),
-        captureRange: message.captureRange || null
+        captureRange: message.captureRange || null,
+        queueCapture: Boolean(message.queueCapture),
+        seekMarkedStart: Boolean(message.seekMarkedStart)
       }).catch(() => {});
       sendResponse({ ok: true, running: true, jobId: message.jobId, version: EXTENSION_VERSION });
       return false;
