@@ -5399,6 +5399,25 @@ if (boundaryIsVisible(boundary)) {
         messages = existing.messages.concat(delta);
       }
 
+      if (state.queueCapture && mode === 'resume-draft' &&
+          resumedDraft?.captureMode === 'fragment') {
+        const selected = resumedDraft.captureRange || {};
+        const startId = String(selected.start?.id || '');
+        const endId = String(selected.end?.id || '');
+        const starts = messages.flatMap((message, i) =>
+          message.id === startId ? [i] : []);
+        const ends = messages.flatMap((message, i) =>
+          message.id === endId ? [i] : []);
+        if (!isStrongMessageId(startId) || !isStrongMessageId(endId) ||
+            starts.length !== 1 || ends.length !== 1 || starts[0] > ends[0]) {
+          throw new Error(
+            'После восстановления не удалось доказать исходные начало и конец ' +
+            'ручного диапазона. Исходные черновики сохранены отдельно.'
+          );
+        }
+        messages = messages.slice(starts[0], ends[0] + 1);
+      }
+
       const reasoningMessageCount = messages.filter(item =>
         Boolean(normalizeDisplayText(item?.reasoningText || ''))
       ).length;
