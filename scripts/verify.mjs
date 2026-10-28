@@ -91,7 +91,7 @@ try {
     const end = contentSource.indexOf(endToken, start + startToken.length);
     const body = start >= 0 && end > start ? contentSource.slice(start, end) : '';
     const scroll = body.indexOf("await physicalScroll('down',");
-    const continuity = body.indexOf('!navigationWindowsOverlap(beforeRefs, afterRefs)', scroll);
+    const continuity = body.indexOf('watchdog.beforeRecovery(', scroll);
     const postScrollBoundary = body.indexOf('if (boundaryIsVisible(boundary))', scroll);
     if (scroll < 0 || continuity < scroll || postScrollBoundary < continuity) {
       fail('traversal: check continuity before accepting a newly arrived end marker');
@@ -121,8 +121,8 @@ try {
   // physically visible navigable turns before or after scrolling.
   const legacyEmptyWindowGuard = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
   const measuredSingleTurnGuard = contentSource.includes(
-    '!measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)'
-  );
+    'if (!overlapping && !adjacent)'
+  ) && /measuredAdjacentScroll\(\s*physicalBefore,\s*physicalAfter,\s*downwardStep\s*\)/.test(contentSource);
   if (legacyEmptyWindowGuard !== 1 || !measuredSingleTurnGuard) {
     fail('traversal: missing viewport evidence cannot bypass legacy continuity or measured single-turn validation');
   }
@@ -142,7 +142,7 @@ try {
   // but a missing scroll measurement and multi-turn leaps still fail closed.
   if (!contentSource.includes('function measuredAdjacentScroll(') ||
       !contentSource.includes('wheelDelta: 120') ||
-      !contentSource.includes('measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)') ||
+      !/measuredAdjacentScroll\(\s*physicalBefore,\s*physicalAfter,\s*downwardStep\s*\)/.test(contentSource) ||
       !contentSource.includes("extra?.phase === 'finalizing'") ||
       !contentSource.includes("strictFinalization ? 30000 : 12000") ||
       !contentSource.includes("'Запись локального архива'")) {
@@ -166,7 +166,7 @@ try {
   }
 
   if (!contentSource.includes('function physicallyVisibleImageSources()') ||
-      !contentSource.includes("hydrateVisibleImages: mode === 'fragment'") ||
+      !contentSource.includes("hydrateVisibleImages: queueFragmentResume || mode === 'fragment'") ||
       !contentSource.includes('visibleOnly: hydrateVisibleImages') ||
       !contentSource.includes("onlyMissing: mode === 'full' || mode === 'fragment'")) {
     fail('manual range: hydrate images only when physically visible and do not refetch ready binaries');
@@ -242,7 +242,7 @@ try {
       !contentSource.includes('verifiedSnapshotEnd = await reachSnapshotEndWithoutCapture()') ||
       !contentSource.includes('verifiedFullStart = await reachTopWithoutCapture(') ||
       !contentSource.includes('verifiedMarkedStart = true') ||
-      !contentSource.includes('captureProof: (mode === \'full\' || mode === \'fragment\')') ||
+      !contentSource.includes("captureProof: (mode === 'full' || mode === 'fragment' ||") ||
       !contentSource.includes('if (!observedUpwardTravel)') ||
       !contentSource.includes("kind: isStrongMessageId(selectedFragment.end.id) ? 'stable' : 'signature'") ||
       !serviceWorkerSource.includes('const top = message.mode === \'full\' ? fullTopEvidence(') ||
@@ -387,7 +387,7 @@ try {
       !serviceWorkerSource.includes('verifiedMergedFromDraftIds: originalIds') ||
       !serviceWorkerSource.includes("const mergeId = 'verified-merge:'") ||
       !serviceWorkerSource.includes('await chrome.storage.local.set({ [STORAGE_KEYS.draftPrefix + mergeId]: updated })') ||
-      !contentSource.includes("current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId)") ||
+      !contentSource.includes("state.queueCapture && mode === 'resume-draft' ? ('draft-' + jobId)") ||
       !contentSource.includes('canonicalRecoveryDraft?.captureMode') ||
       !contentSource.includes('canonicalRecoveryDraft?.captureRange')) {
     fail('unfinished recovery: retries must use a separate provenance-tracked merged draft and preserve original capture identity');
@@ -1219,6 +1219,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-queue.test.mjs',
   'tests/capture-queue-controller.test.mjs',
   'tests/capture-pause-resume.test.mjs',
+  'tests/capture-continuity-watchdog.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',

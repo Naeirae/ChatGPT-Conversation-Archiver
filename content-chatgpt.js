@@ -35,7 +35,8 @@
     manualTopConfirmed: false,
     boundarySearchActive: false,
     queueCapture: false,
-    pauseSnapshotWriter: null
+    pauseSnapshotWriter: null,
+    captureStartProof: null
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -4027,6 +4028,7 @@
         canonicalRecoveryDraft?.captureRange ||
         current.captureRange ||
         null,
+      captureStartProof: state.captureStartProof || canonicalRecoveryDraft?.captureStartProof || null,
       pendingDocUrl: current.pendingDocUrl || '',
       pendingDocMode: current.pendingDocMode || '',
       partialSaveEnabled: Boolean(current.partialSaveEnabled),
@@ -4143,6 +4145,76 @@
       after.scrollHeight > after.clientHeight;
   }
 
+  function createContinuityWatchdog({
+    maxSameFrontier = 2,
+    maxRecoveriesWithoutAdvance = 6,
+    maxStationarySteps = 8
+  } = {}) {
+    // Never use message count alone for progress: one legitimate turn may be
+    // thousands of pixels high. Track *measured* forward movement separately
+    // from attempts to restore overlapping DOM windows.
+    const retries = new Map();
+    let recoveriesWithoutAdvance = 0;
+    let stationarySteps = 0;
+    let forwardSteps = 0;
+    let recoveryAttempts = 0;
+    const fingerprint = (sample, refs = []) => {
+      const position = Number(sample?.top);
+      const height = Number(sample?.scrollHeight);
+      return JSON.stringify([
+        Number.isFinite(position) ? Math.round(position / 10) : null,
+        Number.isFinite(height) ? Math.round(height / 50) : null,
+        (refs || []).map(ref => String(ref?.strongId || ref?.signature || '')).slice(0, 8)
+      ]);
+    };
+    return {
+      noteStep({ before, after, beforeRefs = [], afterRefs = [],
+        adjacent = false, overlapping = false } = {}) {
+        const displacement = before?.element && before.element === after?.element
+          ? Number(after?.top) - Number(before?.top)
+          : NaN;
+        const verifiedMovement = (adjacent && Number.isFinite(displacement) && displacement >= 2) ||
+          (overlapping && Number.isFinite(displacement) && displacement >= 2);
+        if (verifiedMovement) {
+          forwardSteps++;
+          stationarySteps = 0;
+          recoveriesWithoutAdvance = 0;
+          retries.clear();
+        } else if (fingerprint(before, beforeRefs) === fingerprint(after, afterRefs)) {
+          stationarySteps++;
+        } else {
+          stationarySteps = 0;
+        }
+        if (stationarySteps >= maxStationarySteps) {
+          throw new Error(
+            'Прокрутка не продвигается: восемь последовательных окон без нового ' +
+            'физического положения или сообщения. Черновик сохранён вместо бесконечного прохода.'
+          );
+        }
+        return { forwardSteps, stationarySteps, verifiedMovement };
+      },
+      beforeRecovery(sample, refs) {
+        const key = fingerprint(sample, refs);
+        const repeats = (retries.get(key) || 0) + 1;
+        retries.set(key, repeats);
+        recoveriesWithoutAdvance++;
+        recoveryAttempts++;
+        if (repeats > maxSameFrontier ||
+            recoveriesWithoutAdvance > maxRecoveriesWithoutAdvance) {
+          throw new Error(
+            'Один и тот же стык сообщений повторно не подтверждается: ' +
+            'физический проход остановлен без циклических возвращений. ' +
+            'Неполный архив сохранён как черновик.'
+          );
+        }
+        return { repeats, recoveriesWithoutAdvance, recoveryAttempts, forwardSteps };
+      },
+      metrics() {
+        return { forwardSteps, stationarySteps, recoveryAttempts, recoveriesWithoutAdvance };
+      }
+    };
+  }
+
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
     const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -4188,6 +4260,7 @@
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
+    const watchdog = createContinuityWatchdog();
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4231,15 +4304,29 @@
       // Historical fast full traversal used three debugger bursts here.
       // Continuity is accepted only when the neighbouring virtual windows
       // retain a strong ID or an ordered multi-message overlap.
-      await physicalScroll('down', 3);
+      const physicalBefore = sampleCaptureScroller();
+      const wheel = await physicalScroll('down', 3);
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
 
       const afterRefs = visibleNavigationRefsLightweight();
-      if (!beforeRefs.length || !afterRefs.length ||
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+      const physicalAfter = sampleCaptureScroller();
+      const verifiedOverlap = navigationWindowsOverlap(beforeRefs, afterRefs);
+      watchdog.noteStep({
+        before: physicalBefore, after: physicalAfter, beforeRefs, afterRefs,
+        overlapping: verifiedOverlap,
+        adjacent: measuredAdjacentScroll(physicalBefore, physicalAfter, wheel)
+      });
+      if (!beforeRefs.length || !afterRefs.length || !verifiedOverlap) {
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs);
+        await progress(
+          'Восстанавливаю стык: попытка ' + retry.recoveriesWithoutAdvance +
+            ' без подтверждённого продвижения…',
+          map.size, { phase: 'walk', continuityRecovery: true,
+            continuityAttempt: retry.recoveryAttempts, force: true }
+        );
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4317,6 +4404,7 @@ if (boundaryIsVisible(boundary)) {
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
+    const watchdog = createContinuityWatchdog();
     let physicalStepCount = 0;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
@@ -4423,12 +4511,31 @@ if (boundaryIsVisible(boundary)) {
             physicalScrollHeight: physicalAfter?.scrollHeight ?? null,
             physicalScrollDelta: Number.isFinite(physicalDelta) ? physicalDelta : null,
             uniqueMessageCount: map.size,
+            ...watchdog.metrics(),
             force: true
           }
         );
       }
-      if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
-          !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
+      const overlapping = navigationWindowsOverlap(beforeRefs, afterRefs);
+      const adjacent = measuredAdjacentScroll(
+        physicalBefore, physicalAfter, downwardStep
+      );
+      const movement = watchdog.noteStep({
+        before: physicalBefore, after: physicalAfter, beforeRefs, afterRefs,
+        adjacent, overlapping
+      });
+      if (!overlapping && !adjacent) {
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs);
+        await progress(
+          'Стык не подтверждён · попытка восстановления ' +
+            retry.recoveriesWithoutAdvance +
+            ' без проверенного движения вперёд…',
+          map.size, {
+            phase: 'walk', continuityRecovery: true,
+            continuityAttempt: retry.recoveryAttempts,
+            continuityFrontierRepeat: retry.repeats, force: true
+          }
+        );
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
@@ -4574,6 +4681,7 @@ if (boundaryIsVisible(boundary)) {
     state.cancel = false;
     state.paused = false;
     state.pauseSnapshotWriter = null;
+    state.captureStartProof = null;
     state.lastScrollDirection = '';
     state.manualTopConfirmed = false;
     state.boundarySearchActive = false;
@@ -4610,6 +4718,9 @@ if (boundaryIsVisible(boundary)) {
       const resumedDraft = (mode === 'resume-draft' && existingDraftId)
         ? (await chrome.storage.local.get('draft:' + existingDraftId))['draft:' + existingDraftId]
         : null;
+      if (resumedDraft?.captureStartProof?.startVerified) {
+        state.captureStartProof = { ...resumedDraft.captureStartProof };
+      }
       // Manual markers are the capture transport for the primary chat archive.
       // They do not change the archive's canonical identity.
       const manuallyBounded = mode === 'fragment' || Boolean(
@@ -4893,18 +5004,43 @@ if (boundaryIsVisible(boundary)) {
         );
       }
 
+      // Once the original start was proved, persist its evidence in every
+      // checkpoint. A resumed run may never infer completeness merely because
+      // its new walk reached the end.
+      if (mode === 'full' && verifiedFullStart?.verified && verifiedSnapshotEnd?.verified) {
+        state.captureStartProof = {
+          mode: 'full', startVerified: true,
+          startSource: verifiedFullStart.source || '',
+          snapshotEndVerified: true,
+          startTravelObserved: Boolean(verifiedFullStart.observedUpwardTravel),
+          startStableChecks: Number(verifiedFullStart.stableChecks || 0)
+        };
+      } else if (mode === 'fragment' && verifiedMarkedStart) {
+        state.captureStartProof = {
+          mode: 'fragment', startVerified: true,
+          startSource: 'user-marked-start',
+          markedStartId: selectedFragment.start.id,
+          markedEndId: selectedFragment.end.id,
+          snapshotEndVerified: true
+        };
+      }
+
       map.clear();
       order.length = 0;
       chronologicalStarted = true;
 
+      const resumedQueueMode = state.queueCapture && mode === 'resume-draft'
+        ? resumedDraft?.captureMode || '' : '';
+      const queueFragmentResume = resumedQueueMode === 'fragment';
       const walkResult = mode === 'full'
         ? await walkDownFullLegacy(map, order, settings, boundary)
         : await walkDown(map, order, settings, boundary, {
             bursts: 1,
-            requireBoundary: mode === 'fragment',
-            recoverLoadErrors: mode !== 'fragment',
-            hydrateImages: mode === 'fragment' || mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
-            hydrateVisibleImages: mode === 'fragment',
+            requireBoundary: mode === 'fragment' || queueFragmentResume,
+            recoverLoadErrors: mode !== 'fragment' && !queueFragmentResume,
+            hydrateImages: queueFragmentResume || mode === 'fragment' ||
+              mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            hydrateVisibleImages: queueFragmentResume || mode === 'fragment',
             attemptedImageSources: sequentialImageSources
           });
 
@@ -5263,6 +5399,25 @@ if (boundaryIsVisible(boundary)) {
         messages = existing.messages.concat(delta);
       }
 
+      if (state.queueCapture && mode === 'resume-draft' &&
+          resumedDraft?.captureMode === 'fragment') {
+        const selected = resumedDraft.captureRange || {};
+        const startId = String(selected.start?.id || '');
+        const endId = String(selected.end?.id || '');
+        const starts = messages.flatMap((message, i) =>
+          message.id === startId ? [i] : []);
+        const ends = messages.flatMap((message, i) =>
+          message.id === endId ? [i] : []);
+        if (!isStrongMessageId(startId) || !isStrongMessageId(endId) ||
+            starts.length !== 1 || ends.length !== 1 || starts[0] > ends[0]) {
+          throw new Error(
+            'После восстановления не удалось доказать исходные начало и конец ' +
+            'ручного диапазона. Исходные черновики сохранены отдельно.'
+          );
+        }
+        messages = messages.slice(starts[0], ends[0] + 1);
+      }
+
       const reasoningMessageCount = messages.filter(item =>
         Boolean(normalizeDisplayText(item?.reasoningText || ''))
       ).length;
@@ -5411,18 +5566,21 @@ if (boundaryIsVisible(boundary)) {
         captureBoundaryTrimmedNewerCount: bounded.trimmed || 0,
         captureBoundaryReached: Boolean(bounded.found),
         captureEndedAtPhysicalBottom: Boolean(acceptedPhysicalEnd),
-        captureProof: (mode === 'full' || mode === 'fragment') ? {
-          mode,
-          startVerified: mode === 'fragment'
-            ? verifiedMarkedStart : Boolean(verifiedFullStart?.verified),
+        captureProof: (mode === 'full' || mode === 'fragment' ||
+          (state.queueCapture && mode === 'resume-draft' &&
+            ['full', 'fragment'].includes(resumedDraft?.captureMode))) ? {
+          mode: state.queueCapture && mode === 'resume-draft'
+            ? resumedDraft.captureMode : mode,
+          startVerified: Boolean(state.captureStartProof?.startVerified),
           endVerified: Boolean(bounded.found && walkResult?.boundaryReached &&
-            (mode === 'fragment' || verifiedSnapshotEnd?.verified)),
-          startSource: mode === 'fragment'
-            ? 'user-marked-start' : (verifiedFullStart?.source || ''),
-          startTravelObserved: Boolean(verifiedFullStart?.observedUpwardTravel),
-          startStableChecks: Number(verifiedFullStart?.stableChecks || 0),
-          endSource: mode === 'fragment'
-            ? 'user-marked-end' : (verifiedSnapshotEnd?.source || '')
+            ((state.queueCapture && mode === 'resume-draft')
+              ? state.captureStartProof?.snapshotEndVerified
+              : (mode === 'fragment' || verifiedSnapshotEnd?.verified))),
+          startSource: state.captureStartProof?.startSource || '',
+          startTravelObserved: Boolean(state.captureStartProof?.startTravelObserved),
+          startStableChecks: Number(state.captureStartProof?.startStableChecks || 0),
+          endSource: (mode === 'fragment' || resumedDraft?.captureMode === 'fragment')
+            ? 'user-marked-end' : (verifiedSnapshotEnd?.source || 'saved-snapshot-end')
         } : undefined
       };
 
@@ -5610,7 +5768,9 @@ if (boundaryIsVisible(boundary)) {
           // failed network path must not delay or defeat saving the draft.
           // A resumed capture continues one logical unfinished pass. Reuse the
           // canonical draft ID instead of exposing every retry as a new draft.
-          draftId = current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId);
+          draftId = current.draftId ||
+            (state.queueCapture && mode === 'resume-draft' ? ('draft-' + jobId) :
+              (existingDraftId || current.recoveryDraftId || ('draft-' + jobId)));
           draftCount = draftMessages.length;
           const recoveryCapturePhase = chronologicalStarted
             ? 'walk'
@@ -5642,6 +5802,7 @@ if (boundaryIsVisible(boundary)) {
               ((mode === 'fragment') ? selectedFragment : null) ||
               current.captureRange ||
               null,
+            captureStartProof: state.captureStartProof || existingRecoveryDraft?.captureStartProof || null,
             pendingDocUrl: existingRecoveryDraft?.pendingDocUrl || current.pendingDocUrl || '',
             pendingDocMode: existingRecoveryDraft?.pendingDocMode || current.pendingDocMode || '',
             complete: false,
@@ -5690,6 +5851,7 @@ if (boundaryIsVisible(boundary)) {
       state.cancel = false;
       state.paused = false;
       state.pauseSnapshotWriter = null;
+      state.captureStartProof = null;
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
       state.lastScrollDirection = '';

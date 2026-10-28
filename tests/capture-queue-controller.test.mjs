@@ -21,6 +21,7 @@ function fixture({ legacyActive = async () => false } = {}) {
   const archives = new Map();
   const published = [];
   const launches = [];
+  const pausedJobs = new Set();
   let nextTabId = 70;
   const storage = {
     async get(keys) {
@@ -40,8 +41,19 @@ function fixture({ legacyActive = async () => false } = {}) {
       async remove() {},
       async sendMessage(_id, message) {
         if (message.type === 'ARCHIVER_CAPTURE_HEALTH') return {
-          ok: true, running: true, jobId: message.jobId
+          ok: true, running: true, paused: pausedJobs.has(message.jobId),
+          jobId: message.jobId
         };
+        if (message.type === 'ARCHIVER_PAUSE_CAPTURE') {
+          pausedJobs.add(message.jobId);
+          return { ok: true, running: true, paused: true,
+            jobId: message.jobId, checkpointSaved: true, draftCount: 12 };
+        }
+        if (message.type === 'ARCHIVER_RESUME_CAPTURE') {
+          pausedJobs.delete(message.jobId);
+          return { ok: true, running: true, resumed: true,
+            jobId: message.jobId };
+        }
         return { ok: true };
       }
     },
@@ -225,4 +237,135 @@ test('the legacy capture blocks new queue slots without being overwritten', asyn
   await f.controller.tick();
   await f.settled(s => s.workers.length === 1 && s.workers[0].status === 'running');
   assert.equal((await f.storage.get('activeCaptureJob')).activeCaptureJob.jobId, 'legacy');
+});
+
+test('independent queue lane pauses without freezing its sibling or losing a checkpoint', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.75');
+  await f.controller.enqueue({ sourceUrl: chat(41), mode: 'two-chats' });
+  await f.controller.enqueue({ sourceUrl: chat(42), mode: 'two-chats' });
+  await f.controller.enable(true);
+  let state = await f.settled(s => s.workers.length === 2 &&
+    s.workers.every(w => w.status === 'running'));
+  const [first, second] = state.workers;
+  await f.storage.set({ ['draft:draft-' + first.jobId]: {
+    id:'draft-' + first.jobId, messages:Array.from({length:12}, (_,i)=>({id:i}))
+  } });
+  await f.controller.checkpoint({
+    jobId:first.jobId, draftId:'draft-' + first.jobId, draftCount:12
+  },first.captureTabId);
+  assert.equal((await f.controller.pause(first.itemId, first.lane)).ok, true);
+  state = await f.controller.getState();
+  assert.equal(state.workers[0].status, 'paused');
+  assert.equal(state.workers[1].status, 'running');
+  assert.equal(state.workers[0].draftCount, 12);
+  assert.equal(state.items[0].status, 'paused');
+  assert.equal(state.items[1].status, 'running');
+
+  // In-flight progress from the paused page must not resurrect it.
+  assert.equal((await f.controller.progress({
+    jobId:first.jobId, patch: { phase:'walk', count:50 }
+  },first.captureTabId)).ok, true);
+  state = await f.controller.getState();
+  assert.equal(state.workers[0].status, 'paused');
+  assert.equal(state.workers[0].count, 0);
+  await f.controller.progress({
+    jobId:second.jobId, patch: { phase:'walk', count:40 }
+  },second.captureTabId);
+  assert.equal((await f.controller.getState()).workers[1].count,40);
+  assert.equal((await f.controller.resume(first.itemId, first.lane)).ok,true);
+  state = await f.controller.getState();
+  assert.equal(state.workers[0].status,'running');
+  assert.equal(state.workers[0].phase,'top');
+});
+
+test('retry one failed full chat reuses its saved draft without modifying the original', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.75');
+  await f.controller.enqueue({ sourceUrl: chat(43), mode: 'two-chats' });
+  await f.controller.enable(true);
+  const before = await f.settled(s=>s.workers.length===1 && s.workers[0].status==='running');
+  const worker = before.workers[0];
+  const savedId = 'draft-' + worker.jobId;
+  const saved = {
+    id:savedId, sourceUrl:chat(43), captureMode:'full', capturePhase:'walk',
+    captureBoundary:{kind:'stable',key:'data-message-id:final'},
+    captureStartProof:{
+      mode:'full',startVerified:true,snapshotEndVerified:true,startSource:'visible-first-turn'
+    },
+    messages:['a','b','c'].map(turn)
+  };
+  await f.storage.set({ ['draft:'+savedId]: saved });
+  await f.controller.checkpoint({
+    jobId:worker.jobId,draftId:savedId,draftCount:3
+  },worker.captureTabId);
+  await f.controller.failed({jobId:worker.jobId,error:'connection',draftId:savedId},worker.captureTabId);
+  await f.controller.retry(worker.itemId);
+  const after = await f.settled(s=>s.workers.length===1 &&
+    s.workers[0].jobId!==worker.jobId && s.workers[0].status==='running');
+  const next = after.workers[0];
+  assert.equal(f.launches.length,2);
+  assert.equal(f.launches[1].opts.mode,'resume-draft');
+  assert.equal(f.launches[1].opts.existingDraftId,savedId);
+  assert.deepEqual(f.launches[1].opts.fixedCaptureBoundary,saved.captureBoundary);
+  assert.equal(next.recoveryDraftId,savedId);
+  assert.deepEqual((await f.storage.get('draft:'+savedId))['draft:'+savedId],saved);
+});
+
+test('failed split lane resumes independently while verified completed lane is retained', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.75');
+  const sourceUrl=chat(44);
+  const key='archiverFragmentMarkers:'+new URL(sourceUrl).origin+new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:markers});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enable(true);
+  const start=await f.settled(s=>s.workers.length===2 &&
+    s.workers.every(w=>w.status==='running'));
+  const first=start.workers.find(w=>w.lane==='first');
+  const second=start.workers.find(w=>w.lane==='second');
+  const part=archive('part-q-'+first.jobId,sourceUrl,['a','b','c','d','e'],'fragment');
+  f.archives.set(part.id,part);
+  assert.equal((await f.controller.complete({
+    jobId:first.jobId,archiveId:part.id
+  },first.captureTabId)).ok,true);
+  const savedId='draft-'+second.jobId;
+  const last=['c','d','e','f'].map(turn);
+  const checkpoint={
+    id:savedId,sourceUrl,captureMode:'fragment',capturePhase:'walk',
+    captureRange:{start:markers.middle.previous,end:markers.end},
+    captureBoundary:{kind:'stable',key:markers.end.id},
+    captureStartProof:{
+      mode:'fragment',startVerified:true,snapshotEndVerified:true,
+      markedStartId:markers.middle.previous.id,markedEndId:markers.end.id
+    },
+    messages:last
+  };
+  await f.storage.set({['draft:'+savedId]:checkpoint});
+  await f.controller.checkpoint({
+    jobId:second.jobId,draftId:savedId,draftCount:last.length
+  },second.captureTabId);
+  await f.controller.failed({
+    jobId:second.jobId,error:'offline',draftId:savedId
+  },second.captureTabId);
+  assert.equal((await f.controller.getState()).items[0].status,'error');
+  await f.controller.retry(second.itemId);
+  const resumed=await f.settled(s=>s.workers.length===2 &&
+    s.workers.some(w=>w.lane==='second'&&w.jobId!==second.jobId&&w.status==='running'));
+  assert.equal(resumed.workers.find(w=>w.lane==='first').jobId,first.jobId);
+  assert.equal(f.launches.length,3);
+  assert.equal(f.launches[2].opts.existingDraftId,savedId);
+  assert.equal(f.launches[2].opts.mode,'resume-draft');
+  const newer=resumed.workers.find(w=>w.lane==='second');
+  const continued=archive('resumed-q-'+newer.jobId,sourceUrl,
+    ['c','d','e','f','g','h'],'fragment');
+  f.archives.set(continued.id,continued);
+  assert.equal((await f.controller.complete({
+    jobId:newer.jobId,archiveId:continued.id
+  },newer.captureTabId)).ok,true);
+  const result=await f.settled(s=>s.items[0].status==='done');
+  assert.equal(result.items[0].archiveId,f.published[0].id);
+  assert.deepEqual(f.published[0].messages.map(t=>t.text),
+    ['a','b','c','d','e','f','g','h'].map(t=>'turn '+t));
+  assert.equal((await f.storage.get('draft:'+savedId))['draft:'+savedId].messages.length,4);
 });
