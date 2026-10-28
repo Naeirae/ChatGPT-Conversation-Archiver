@@ -622,7 +622,11 @@ function liveUnfinishedSummary(job) {
     sourceUrl: job.sourceUrl || '',
     captureBoundary: boundary
   });
-  const canExport = ['walk', 'finalizing'].includes(job.phase || '');
+  // The worker sets phase=paused while retaining the actual capture phase
+  // in resumePhase. A stored chronological checkpoint remains exportable.
+  const capturePhase = job.status === 'paused'
+    ? (job.resumePhase || 'top') : (job.phase || '');
+  const canExport = ['walk', 'finalizing'].includes(capturePhase);
   return {
     id: job.draftId,
     logicalGroupId: groupKey,
@@ -639,7 +643,7 @@ function liveUnfinishedSummary(job) {
     imageBinaryReady: Number(job.imageBinaryReady || 0),
     imageBinaryFailed: Number(job.imageBinaryFailed || 0),
     captureMode: job.captureMode || '',
-    capturePhase: job.phase || '',
+    capturePhase,
     hasBoundary: Boolean(boundary?.kind && boundary?.key),
     boundaryKind: boundary?.kind || '',
     boundaryKey: boundary?.key || '',
