@@ -1148,17 +1148,20 @@ function renderQueue(queue) {
 
     const actions = document.createElement('div');
     actions.className = 'queue-row-actions';
-    if (item.status === 'queued' || ['done', 'error', 'cancelled'].includes(item.status)) {
+    const liveLanes = matching.filter(worker =>
+      ['starting', 'running', 'paused', 'stopping'].includes(worker.status));
+    if (!liveLanes.length &&
+        (item.status === 'queued' || ['done', 'error', 'cancelled'].includes(item.status))) {
       actions.appendChild(queueButton('Убрать из очереди', () =>
         queueCall('ARCHIVER_QUEUE_REMOVE', { itemId: item.id })));
     }
-    if (['starting', 'running', 'paused', 'stopping'].includes(item.status)) {
+    if (liveLanes.length) {
       const stop = queueButton('Остановить это задание', () =>
         queueCall('ARCHIVER_QUEUE_CANCEL', { itemId: item.id }), { danger: true });
-      stop.disabled = item.status === 'stopping';
+      stop.disabled = liveLanes.every(worker => worker.status === 'stopping');
       actions.appendChild(stop);
     }
-    if (['error', 'cancelled', 'done'].includes(item.status)) {
+    if (!liveLanes.length && ['error', 'cancelled', 'done'].includes(item.status)) {
       actions.appendChild(queueButton('Повторить', () =>
         queueCall('ARCHIVER_QUEUE_RETRY', { itemId: item.id })));
     }
