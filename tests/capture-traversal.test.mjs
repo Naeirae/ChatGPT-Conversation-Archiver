@@ -292,3 +292,39 @@ test('unresponsive image/finalization acknowledgment is bounded by timeout', asy
     /не получен ответ/
   );
 });
+
+test('end marker waits for sibling attachment beneath text root', () => {
+  const doc = {
+    documentElement: { clientWidth: 1280, clientHeight: 900 },
+    body: {},
+    scrollingElement: {}
+  };
+  const fakeWindow = { innerWidth: 1280, innerHeight: 900 };
+  const root = { getBoundingClientRect: () => ({
+    left: 0, right: 700, top: 100, bottom: 360
+  }) };
+  let imageBottom = 1400;
+  const image = { getBoundingClientRect: () => ({
+    left: 0, right: 700, top: 400, bottom: imageBottom,
+    width: 700, height: imageBottom - 400
+  }) };
+  const turn = { isConnected: true };
+  const reachesEnd = new Function(
+    'contentRoot', 'roleOf', 'turnImageNodes', 'findScrollContainer',
+    'rectIntersectsCaptureViewport', 'window', 'document',
+    extract('rectTrailingEdgeInsideCaptureViewport') +
+    extract('turnTrailingEdgeVisible') +
+    '; return turnTrailingEdgeVisible;'
+  )(
+    () => root,
+    () => 'assistant',
+    () => [image],
+    () => null,
+    (rect, width, height) => rect.right > 0 && rect.left < width &&
+      rect.bottom > 0 && rect.top < height,
+    fakeWindow, doc
+  );
+  assert.equal(reachesEnd(turn), false);
+  imageBottom = 800;
+  assert.equal(reachesEnd(turn), true);
+});
