@@ -1437,59 +1437,135 @@ async function confirmCaptureTop() {
 
 async function pauseCapture() {
   const job = await getJob();
-  if (!job || !['starting', 'running'].includes(job.status)) return { ok: true, job };
+  if (!job || !['starting', 'running'].includes(job.status)) {
+    throw new Error('Активный сбор для постановки на паузу не найден. Проверьте незавершённые сборы.');
+  }
+  if (job.captureTabId == null) {
+    throw new Error('Вкладка сбора недоступна. Не меняю состояние задания на «Пауза».');
+  }
 
-  if (job.captureTabId != null) {
-    const result = await chrome.tabs.sendMessage(job.captureTabId, {
-      type: 'ARCHIVER_PAUSE_CAPTURE',
-      jobId: job.jobId
-    }).catch(() => ({ ok: false }));
-    if (result && result.ok === false) throw new Error(result.error || 'Не удалось поставить сбор на паузу.');
+  // A content script can respond ok:true even after its collector has died.
+  // Never turn that response into a ghost "paused" job.
+  const result = await chrome.tabs.sendMessage(job.captureTabId, {
+    type: 'ARCHIVER_PAUSE_CAPTURE',
+    jobId: job.jobId
+  }).catch(() => ({ ok: false, error: 'Рабочая вкладка не ответила на паузу.' }));
+
+  if (!result?.ok || result.paused !== true || result.running !== true ||
+      result.jobId !== job.jobId) {
+    const health = await probeLiveCapture(job, 3500);
+    const draftId = job.draftId || job.recoveryDraftId || '';
+    if (health?.ok && health.jobId === job.jobId && health.running === false) {
+      const draft = draftId ? await getDraft(draftId) : null;
+      await finishJobWithError(
+        job.jobId, job.sourceTabId ?? job.tabId,
+        'Вкладка ответила, но сбор уже завершил работу до запроса паузы. ' +
+          'Незавершённая часть сохранена, если была контрольная точка.',
+        draft?.id || draftId,
+        draft?.messages?.length || Number(job.draftCount || 0),
+        'error'
+      );
+    }
+    throw new Error(
+      result?.error ||
+      'Пауза не подтверждена работающим сборщиком. ' +
+        'Не помечаю неактивное задание как приостановленное. Проверьте черновики.'
+    );
+  }
+
+  // A late failure might have made this job terminal while the page was
+  // writing its pause checkpoint. Don't overwrite the error or draft.
+  const current = await getJob();
+  if (current?.jobId !== job.jobId ||
+      !['starting', 'running'].includes(current.status)) {
+    throw new Error('Во время паузы сбор уже завершился. Проверьте сохранённую часть.');
   }
 
   const next = await appendRunLog({
     status: 'paused',
     pauseReason: 'user',
-    resumePhase: job.phase === 'paused' ? (job.resumePhase || 'top') : (job.phase || 'top'),
+    resumePhase: current.phase === 'paused' ? (current.resumePhase || 'top') : (current.phase || 'top'),
     phase: 'paused',
-    message: 'Сбор поставлен на паузу.'
+    pauseCheckpointSaved: Boolean(result.checkpointSaved),
+    pauseCheckpointCount: Number(result.draftCount || 0),
+    message: result.checkpointSaved
+      ? 'Сбор поставлен на паузу. Контрольная точка записана.'
+      : 'Сбор поставлен на паузу. Новая контрольная точка не подтверждена; прежние черновики сохранены.'
   }, {
-    level: 'info',
-    code: 'RUN_PAUSED_BY_USER',
-    message: 'Сбор поставлен на паузу пользователем.',
-    phase: job.phase || '',
-    count: Number(job.count || 0)
+    level: result.checkpointSaved ? 'info' : 'warn',
+    code: result.checkpointSaved ? 'RUN_PAUSED_WITH_CHECKPOINT' : 'RUN_PAUSED_NO_FRESH_CHECKPOINT',
+    message: result.checkpointSaved
+      ? 'Вкладка подтвердила паузу и запись контрольной точки (' +
+          Number(result.draftCount || 0) + ' сообщений).'
+      : 'Вкладка подтвердила паузу, но запись нового черновика не подтверждена.',
+    phase: current.phase || '',
+    count: Number(current.count || 0)
   });
   return { ok: true, job: next };
 }
 
 async function resumeCapture() {
   const job = await getJob();
-  if (!job || job.status !== 'paused') return { ok: true, job };
+  if (!job || job.status !== 'paused') {
+    throw new Error('Нет приостановленного задания. Откройте «Незавершённые сборы» для восстановления.');
+  }
   if (job.pauseReason && job.pauseReason !== 'user') {
-    throw new Error('Сбор приостановлен браузером. Дождитесь, пока рабочая вкладка снова станет доступна.');
+    throw new Error('Сбор приостановлен браузером. Проверьте доступность рабочей вкладки.');
+  }
+  if (job.captureTabId == null) {
+    throw new Error('Рабочая вкладка отсутствует; продолжение возможно из сохранённого черновика.');
   }
 
-  if (job.captureTabId != null) {
+  const health = await probeLiveCapture(job, 3500);
+  if (!health?.ok || health.jobId !== job.jobId || health.running !== true) {
+    // Explicitly dead collectors are terminal. A timeout alone is not proof:
+    // keep the paused job and retry its health check instead of discarding it.
+    if (health?.ok && health.jobId === job.jobId && health.running === false) {
+      const draftId = job.draftId || job.recoveryDraftId || '';
+      const draft = draftId ? await getDraft(draftId) : null;
+      await finishJobWithError(
+        job.jobId, job.sourceTabId ?? job.tabId,
+        'Вкладка больше не выполняет приостановленный сбор. ' +
+          'Продолжение из памяти невозможно; используйте сохранённый незавершённый сбор.',
+        draft?.id || draftId,
+        draft?.messages?.length || Number(job.draftCount || 0),
+        'error'
+      );
+      throw new Error('Сборщик завершил работу. Контрольная точка оставлена в «Незавершённых сборах».');
+    }
+    throw new Error('Рабочая вкладка не подтвердила живой сбор. Статус и черновики не изменены.');
+  }
+
+  if (health.paused) {
     const result = await chrome.tabs.sendMessage(job.captureTabId, {
       type: 'ARCHIVER_RESUME_CAPTURE',
       jobId: job.jobId
-    }).catch(() => ({ ok: false }));
-    if (result && result.ok === false) throw new Error(result.error || 'Не удалось продолжить сбор.');
+    }).catch(() => ({ ok: false, error: 'Рабочая вкладка не ответила на продолжение.' }));
+    if (!result?.ok || result.running !== true || result.resumed !== true ||
+        result.jobId !== job.jobId) {
+      throw new Error(result?.error || 'Вкладка не подтвердила продолжение. Контрольная точка сохранена.');
+    }
   }
 
-  const resumePhase = job.resumePhase || 'top';
+  const current = await getJob();
+  if (current?.jobId !== job.jobId || current.status !== 'paused') {
+    throw new Error('Состояние задания изменилось во время продолжения; не перезаписываю его.');
+  }
+
+  const resumePhase = current.resumePhase || 'top';
   const next = await appendRunLog({
     status: 'running',
     pauseReason: '',
     phase: resumePhase,
-    message: 'Место остановки найдено. Сбор продолжен.'
+    message: 'Вкладка подтвердила выполнение. Сбор продолжен.'
   }, {
     level: 'info',
     code: 'RUN_RESUMED_BY_USER',
-    message: 'Сбор продолжен пользователем.',
+    message: health.paused
+      ? 'Живой сборщик подтвердил продолжение из паузы.'
+      : 'Живой сборщик уже продолжил работу; согласовано состояние фонового процесса.',
     phase: resumePhase,
-    count: Number(job.count || 0)
+    count: Number(current.count || 0)
   });
   return { ok: true, job: next };
 }
@@ -6766,11 +6842,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_CAPTURE_PROGRESS': {
         const job = await getJob();
-        if (!job || !['starting', 'running'].includes(job.status) || job.jobId !== message.jobId) return { ok: false, error: 'Сбор уже неактуален.' };
+        if (!job || job.jobId !== message.jobId ||
+            !['starting', 'running', 'paused'].includes(job.status)) {
+          return { ok: false, error: 'Сбор уже неактуален.' };
+        }
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId != null && senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Прогресс пришел не из вкладки сбора.' };
         }
+        // An in-flight progress request may complete after the pause handshake.
+        // Acknowledge it without undoing the pause or killing the collector.
+        if (job.status === 'paused') return { ok: true, paused: true };
         const phaseChanged = message.patch?.phase && message.patch.phase !== job.phase;
         const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
         if (notable) {
@@ -6795,6 +6877,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_PHYSICAL_SCROLL': {
         const job = await getJob();
+        if (job?.jobId === message.jobId && job.status === 'paused') {
+          return { ok: false, paused: true, error: 'CAPTURE_PAUSED' };
+        }
         if (!job || job.jobId !== message.jobId ||
             !['starting', 'running'].includes(job.status)) {
           return { ok: false, error: 'Сбор уже остановлен или неактуален.' };
