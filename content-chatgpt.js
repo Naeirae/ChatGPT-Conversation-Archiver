@@ -1892,8 +1892,29 @@
     return { embedded, failed, unique: total };
   }
 
-  async function hydrateSequentialImages(messages, attemptedSources) {
+  function physicallyVisibleImageSources() {
+    const result = new Set();
+    for (const image of document.querySelectorAll('img')) {
+      const src = imageSource(image);
+      if (!src) continue;
+      const scroller = findScrollContainer(image);
+      const documentRoot = !scroller ||
+        scroller === document.documentElement ||
+        scroller === document.body ||
+        scroller === document.scrollingElement;
+      if (rectIntersectsCaptureViewport(
+        image.getBoundingClientRect(),
+        window.innerWidth || document.documentElement.clientWidth,
+        window.innerHeight || document.documentElement.clientHeight,
+        documentRoot ? null : scroller.getBoundingClientRect()
+      )) result.add(src);
+    }
+    return result;
+  }
+
+  async function hydrateSequentialImages(messages, attemptedSources, { visibleOnly = false } = {}) {
     const attempted = attemptedSources instanceof Set ? attemptedSources : new Set();
+    const visibleSources = visibleOnly ? physicallyVisibleImageSources() : null;
     const targets = [];
     const targetSources = new Set();
 
@@ -1901,7 +1922,7 @@
       const pending = [];
       for (const image of message?.images || []) {
         const src = String(image?.src || '');
-        if (!src || attempted.has(src)) continue;
+        if (!src || attempted.has(src) || (visibleSources && !visibleSources.has(src))) continue;
         pending.push(image);
         targetSources.add(src);
       }
@@ -4232,6 +4253,7 @@ if (boundaryIsVisible(boundary)) {
       requireBoundary = false,
       recoverLoadErrors = true,
       hydrateImages = false,
+      hydrateVisibleImages = false,
       attemptedImageSources = new Set()
     } = {}
   ) {
@@ -4257,7 +4279,8 @@ if (boundaryIsVisible(boundary)) {
       if (hydrateImages) {
         await hydrateSequentialImages(
           firstTouchedIds.map(id => map.get(id)).filter(Boolean),
-          attemptedImageSources
+          attemptedImageSources,
+          { visibleOnly: hydrateVisibleImages }
         );
       }
       const beforeRefs = visibleNavigationRefsLightweight();
@@ -4317,7 +4340,8 @@ if (boundaryIsVisible(boundary)) {
       if (hydrateImages) {
         await hydrateSequentialImages(
           secondTouchedIds.map(id => map.get(id)).filter(Boolean),
-          attemptedImageSources
+          attemptedImageSources,
+          { visibleOnly: hydrateVisibleImages }
         );
       }
 
@@ -4751,6 +4775,7 @@ if (boundaryIsVisible(boundary)) {
             requireBoundary: mode === 'fragment',
             recoverLoadErrors: mode !== 'fragment',
             hydrateImages: mode === 'fragment' || mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            hydrateVisibleImages: mode === 'fragment',
             attemptedImageSources: sequentialImageSources
           });
 
