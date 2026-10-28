@@ -3885,6 +3885,15 @@
     throw new Error('Не удалось восстановить контрольную точку незавершённого прохода.');
   }
 
+  function checkpointDue(last, now, count, minInterval, minDelta, force = false) {
+    if (force) return true;
+    // A long logical message can occupy thousands of pixels with no count
+    // increase. Either elapsed time OR new material must trigger persistence.
+    const elapsed = now - Number(last?.at || 0);
+    const grown = count - Number(last?.count || 0);
+    return elapsed >= minInterval || grown >= minDelta;
+  }
+
   async function saveRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
     const jobId = state.jobId;
     if (!jobId || !boundary?.kind || !boundary?.key || !order.length) return;
@@ -3900,7 +3909,7 @@
       checkpointSize >= 4000 ? 240 :
       checkpointSize >= 2000 ? 140 :
       checkpointSize >= 500 ? 70 : 35;
-    if (!force && (now - last.at < minInterval || order.length - last.count < minDelta)) return;
+    if (!checkpointDue(last, now, order.length, minInterval, minDelta, force)) return;
 
     const current = (await chrome.storage.local.get('activeCaptureJob')).activeCaptureJob || {};
     if (current.jobId !== jobId) return;
@@ -4263,6 +4272,7 @@ if (boundaryIsVisible(boundary)) {
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
+    let physicalStepCount = 0;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4351,6 +4361,27 @@ if (boundaryIsVisible(boundary)) {
 
       const afterRefs = visibleNavigationRefsLightweight();
       const physicalAfter = sampleCaptureScroller();
+      physicalStepCount += Number(Boolean(downwardStep?.moved));
+      const physicalDelta = physicalBefore?.element === physicalAfter?.element
+        ? Number(physicalAfter.top) - Number(physicalBefore.top)
+        : null;
+      if (physicalStepCount === 1 || physicalStepCount % 8 === 0) {
+        await progress(
+          'Этап 2/3: движение вниз · ' + map.size + ' сообщений · ' +
+            physicalStepCount + ' шагов · позиция ' +
+            (physicalAfter ? Math.round(physicalAfter.top) + ' px' : 'не определена'),
+          map.size,
+          {
+            phase: 'walk',
+            physicalStepCount,
+            physicalScrollTop: physicalAfter?.top ?? null,
+            physicalScrollHeight: physicalAfter?.scrollHeight ?? null,
+            physicalScrollDelta: Number.isFinite(physicalDelta) ? physicalDelta : null,
+            uniqueMessageCount: map.size,
+            force: true
+          }
+        );
+      }
       if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
           !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
         const recovered = await recoverDownwardContinuity(
