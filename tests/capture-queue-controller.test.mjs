@@ -16,7 +16,7 @@ const archive = (id, sourceUrl, ids, mode = 'full') => ({
   messages: ids.map(turn)
 });
 
-function fixture() {
+function fixture({ legacyActive = async () => false } = {}) {
   const data = new Map();
   const archives = new Map();
   const published = [];
@@ -49,7 +49,7 @@ function fixture() {
   };
   const controller = createCaptureQueueController(chrome, {
     isConversationUrl: url => /^https:\/\/chatgpt\.com\/c\//.test(url),
-    legacyCaptureActive: async () => false,
+    legacyCaptureActive: legacyActive,
     waitForChatTabComplete: async () => ({}),
     waitForChatDomReady: async () => ({}),
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
@@ -170,16 +170,59 @@ test('unverified split leaves both original parts recoverable, never publishes a
   assert.equal(f.archives.get(part2.id).messages.length, 6);
 });
 
-test('legacy job is not touched by the queue and blocks queue launches until available', async () => {
+test('one failed chat does not stop its sibling or replace the completed archive index', async () => {
   const f = fixture();
+  await f.controller.versionCheck('0.4.73');
+  await f.controller.enqueue({ sourceUrl: chat(21), mode: 'two-chats' });
+  await f.controller.enqueue({ sourceUrl: chat(22), mode: 'two-chats' });
+  await f.controller.enable(true);
+  const state = await f.settled(s => s.workers.length === 2 && s.workers.every(w => w.status === 'running'));
+  const [first, second] = state.workers;
+  await f.controller.failed({
+    jobId: first.jobId, error: 'network fail', draftId: 'draft-' + first.jobId
+  }, first.captureTabId);
+  const after = await f.controller.getState();
+  assert.equal(after.workers[0].status, 'error');
+  assert.equal(after.workers[1].status, 'running');
+  assert.equal(after.items[0].status, 'error');
+  assert.equal(after.items[1].status, 'running');
+  const completed = archive('ok-q-' + second.jobId, chat(22), ['a','b']);
+  f.archives.set(completed.id, completed);
+  const result = await f.controller.complete({
+    jobId: second.jobId, archiveId: completed.id
+  }, second.captureTabId);
+  assert.equal(result.ok, true);
+  assert.deepEqual(f.published.map(a => a.id), [completed.id]);
+});
+
+test('a worker cannot publish a foreign or unverified archive', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.73');
+  await f.controller.enqueue({ sourceUrl: chat(31), mode: 'two-chats' });
+  await f.controller.enable(true);
+  const s = await f.settled(q => q.workers.length === 1 && q.workers[0].status === 'running');
+  const worker = s.workers[0];
+  const foreign = archive('foreign-q-' + worker.jobId, chat(32), ['a']);
+  f.archives.set(foreign.id, foreign);
+  const result = await f.controller.complete({
+    jobId: worker.jobId, archiveId: foreign.id
+  }, worker.captureTabId);
+  assert.equal(result.ok, false);
+  assert.equal(f.published.length, 0);
+  assert.equal((await f.controller.getState()).items[0].status, 'error');
+});
+
+test('the legacy capture blocks new queue slots without being overwritten', async () => {
   let blocked = true;
-  const previous = f.controller;
-  // Independent legacy active job is represented by a refusal to allocate slots.
-  // Queue should still store the request without publishing an incomplete archive.
-  await f.storage.set({ activeCaptureJob: { jobId: 'legacy', status:'running' } });
-  await previous.versionCheck('0.4.73');
-  await previous.enqueue({ sourceUrl: chat(11), mode: 'two-chats' });
+  const f = fixture({ legacyActive: async () => blocked });
+  await f.storage.set({ activeCaptureJob: { jobId: 'legacy', status: 'running' } });
+  await f.controller.versionCheck('0.4.73');
+  await f.controller.enqueue({ sourceUrl: chat(11), mode: 'two-chats' });
+  await f.controller.enable(true);
+  assert.equal((await f.controller.getState()).workers.length, 0);
   assert.equal((await f.storage.get('activeCaptureJob')).activeCaptureJob.jobId, 'legacy');
-  assert.equal((await f.controller.getState()).items[0].status, 'queued');
-  void blocked;
+  blocked = false;
+  await f.controller.tick();
+  await f.settled(s => s.workers.length === 1 && s.workers[0].status === 'running');
+  assert.equal((await f.storage.get('activeCaptureJob')).activeCaptureJob.jobId, 'legacy');
 });
