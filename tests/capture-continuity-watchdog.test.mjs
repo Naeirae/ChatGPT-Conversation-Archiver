@@ -76,6 +76,65 @@ test('DOM loading that changes content does not look like a stationary repeated 
   assert.equal(guard.metrics().stationarySteps, 0);
 });
 
+test('a short down-step to a previously visited seam does not clear the failure budget', () => {
+  const guard = make();
+  const refs = [ref('same-turn')];
+  const first = guard.noteStep({
+    before: sample(300), after: sample(420),
+    beforeRefs: refs, afterRefs: refs,
+    adjacent: true, overlapping: true
+  });
+  assert.equal(first.verifiedMovement, true);
+  assert.equal(guard.beforeRecovery(sample(300), refs).repeats, 1);
+  const revisited = guard.noteStep({
+    before: sample(300), after: sample(420),
+    beforeRefs: refs, afterRefs: refs,
+    adjacent: true, overlapping: true
+  });
+  assert.equal(revisited.verifiedMovement, false);
+  assert.equal(guard.beforeRecovery(sample(300), refs).repeats, 2);
+  guard.noteStep({
+    before: sample(300), after: sample(420),
+    beforeRefs: refs, afterRefs: refs,
+    adjacent: true, overlapping: true
+  });
+  assert.throws(() => guard.beforeRecovery(sample(300), refs), /Один и тот же стык/);
+});
+
+test('repeated real wheel movement through an old frontier is bounded even with overlapping DOM', () => {
+  const guard = make();
+  const refs = [ref('a')];
+  guard.noteStep({
+    before: sample(100), after: sample(500),
+    beforeRefs: refs, afterRefs: refs, adjacent: true
+  });
+  for (let i = 0; i < 23; i++) {
+    const result = guard.noteStep({
+      before: sample(300), after: sample(400),
+      beforeRefs: refs, afterRefs: refs, adjacent: true, overlapping: true
+    });
+    assert.equal(result.verifiedMovement, false);
+  }
+  assert.throws(() => guard.noteStep({
+    before: sample(300), after: sample(400),
+    beforeRefs: refs, afterRefs: refs, adjacent: true, overlapping: true
+  }), /уже просмотренный участок/);
+});
+
+test('new stable turn reached after a virtualized scrollTop rebase is progress', () => {
+  const guard = make();
+  guard.noteStep({
+    before: sample(200), after: sample(800),
+    beforeRefs: [ref('a')], afterRefs: [ref('a')], adjacent: true
+  });
+  const step = guard.noteStep({
+    before: sample(100), after: sample(220),
+    beforeRefs: [ref('a')], afterRefs: [ref('b')], adjacent: true, overlapping: true
+  });
+  assert.equal(step.verifiedMovement, true);
+  assert.equal(guard.metrics().forwardSteps, 2);
+});
+
 test('both the legacy full and marked-range traversal use watchdog recovery safeguards', () => {
   const fullStart = source.indexOf('  async function walkDownFullLegacy(');
   const fullEnd = source.indexOf('  async function walkDown(', fullStart);

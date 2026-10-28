@@ -16,20 +16,43 @@ const archive = (id, sourceUrl, ids, mode = 'full') => ({
   messages: ids.map(turn)
 });
 
-function fixture({ legacyActive = async () => false } = {}) {
+function fixture({
+  legacyActive = async () => false,
+  waitForDomReady = async () => {},
+  waitForInjection = async () => {}
+} = {}) {
   const data = new Map();
+  let failFinalStateWrite = false;
+  const failNextDoneStateWrite = () => { failFinalStateWrite = true; };
   const archives = new Map();
   const published = [];
   const launches = [];
+  const cancelledMessages = [];
+  const removedTabs = [];
   const pausedJobs = new Set();
   let nextTabId = 70;
   const storage = {
     async get(keys) {
-      if (keys == null) return Object.fromEntries(data);
+      if (keys == null) return Object.fromEntries(
+        [...data].map(([key, value]) => [key, structuredClone(value)])
+      );
       const names = typeof keys === 'string' ? [keys] : keys;
-      return Object.fromEntries(names.map(name => [name, data.get(name)]).filter(entry => entry[1] !== undefined));
+      return Object.fromEntries(names.map(name => [name, data.get(name)])
+        .filter(entry => entry[1] !== undefined)
+        .map(([key, value]) => [key, structuredClone(value)]));
     },
-    async set(values) { for (const [key, value] of Object.entries(values)) data.set(key, value); },
+    async set(values) {
+      const queueState = values.archiverCaptureQueueV1;
+      if (failFinalStateWrite && queueState?.items?.some(item =>
+        item.mode === 'split-chat' && item.status === 'done'
+      )) {
+        failFinalStateWrite = false;
+        throw new Error('simulated MV3 service worker termination during final state write');
+      }
+      for (const [key, value] of Object.entries(values)) {
+        data.set(key, structuredClone(value));
+      }
+    },
     async getBytesInUse(key) { return data.has(key) ? JSON.stringify(data.get(key)).length : 0; }
   };
   const chrome = {
@@ -38,8 +61,13 @@ function fixture({ legacyActive = async () => false } = {}) {
       async query() { return [{ id: 1, windowId: 1, url: chat(987) }]; },
       async create(options) { return { id: nextTabId++, url: options.url }; },
       async update(id) { return { id }; },
-      async remove() {},
+      async get(id) { return { id, url: chat(1), status:'complete' }; },
+      async remove(id) { removedTabs.push(id); },
       async sendMessage(_id, message) {
+        if (message.type === 'ARCHIVER_CANCEL_CAPTURE') {
+          cancelledMessages.push({ tabId: _id, jobId: message.jobId });
+          return { ok: true };
+        }
         if (message.type === 'ARCHIVER_CAPTURE_HEALTH') return {
           ok: true, running: true, paused: pausedJobs.has(message.jobId),
           jobId: message.jobId
@@ -59,18 +87,20 @@ function fixture({ legacyActive = async () => false } = {}) {
     },
     windows: { async update() {} }
   };
-  const controller = createCaptureQueueController(chrome, {
+  const dependencies = {
     isConversationUrl: url => /^https:\/\/chatgpt\.com\/c\//.test(url),
     legacyCaptureActive: legacyActive,
     waitForChatTabComplete: async () => ({}),
-    waitForChatDomReady: async () => ({}),
+    waitForChatDomReady: waitForDomReady,
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
       launches.push({ tabId, jobId, opts });
+      await waitForInjection(tabId, jobId, opts);
     },
     getArchive: async id => archives.get(id),
     publishArchive: async value => { published.push(value); archives.set(value.id, value); },
     mergeMessage: (a, b) => ({ ...a, images: b.images || a.images || [] })
-  });
+  };
+  const controller = createCaptureQueueController(chrome, dependencies);
   async function settled(predicate, max = 160) {
     for (let i = 0; i < max; i++) {
       const state = await controller.getState();
@@ -79,7 +109,12 @@ function fixture({ legacyActive = async () => false } = {}) {
     }
     throw new Error('Queue did not settle');
   }
-  return { controller, chrome, storage, data, archives, published, launches, settled };
+  return {
+    controller, chrome, storage, data, archives, published, launches, settled,
+    cancelledMessages, removedTabs,
+    failNextDoneStateWrite,
+    freshController: () => createCaptureQueueController(chrome, dependencies)
+  };
 }
 
 test('two independent chats run at once and publish without cross-job progress changes', async () => {
@@ -368,4 +403,199 @@ test('failed split lane resumes independently while verified completed lane is r
   assert.deepEqual(f.published[0].messages.map(t=>t.text),
     ['a','b','c','d','e','f','g','h'].map(t=>'turn '+t));
   assert.equal((await f.storage.get('draft:'+savedId))['draft:'+savedId].messages.length,4);
+});
+
+test('a second successful split attempt publishes a new ID without overwriting the first archive', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.76');
+  const sourceUrl = chat(57);
+  const key = 'archiverFragmentMarkers:' + new URL(sourceUrl).origin +
+    new URL(sourceUrl).pathname;
+  await f.storage.set({ [key]: markers });
+  await f.controller.enqueue({ sourceUrl, mode: 'split-chat' });
+  await f.controller.enable(true);
+
+  async function completeCurrentPair() {
+    const state = await f.settled(s =>
+      s.workers.length === 2 && s.workers.every(w => w.status === 'running'));
+    const first = state.workers.find(w => w.lane === 'first');
+    const second = state.workers.find(w => w.lane === 'second');
+    const a = archive('first-q-' + first.jobId, sourceUrl, ['a','b','c','d','e'], 'fragment');
+    const b = archive('second-q-' + second.jobId, sourceUrl, ['c','d','e','f','g','h'], 'fragment');
+    f.archives.set(a.id,a); f.archives.set(b.id,b);
+    assert.equal((await f.controller.complete({
+      jobId:first.jobId, archiveId:a.id
+    },first.captureTabId)).ok, true);
+    assert.equal((await f.controller.complete({
+      jobId:second.jobId, archiveId:b.id
+    },second.captureTabId)).ok, true);
+    return (await f.settled(s=>s.items[0].status==='done')).items[0].archiveId;
+  }
+
+  const firstId = await completeCurrentPair();
+  const firstArchive = f.archives.get(firstId);
+  await f.controller.retry((await f.controller.getState()).items[0].id);
+  const secondId = await completeCurrentPair();
+  assert.notEqual(firstId, secondId);
+  assert.equal(f.published.length, 2);
+  assert.strictEqual(f.archives.get(firstId),firstArchive);
+  assert.deepEqual(f.archives.get(secondId).messages.map(m=>m.id),
+    ['a','b','c','d','e','f','g','h'].map(id=>'data-message-id:'+id));
+});
+
+test('an interrupted service worker can finish the same split publication without new capture', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.76');
+  const sourceUrl=chat(58);
+  const key = 'archiverFragmentMarkers:' + new URL(sourceUrl).origin + new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:markers});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enable(true);
+  const state=await f.settled(s=>s.workers.length===2 &&
+    s.workers.every(w=>w.status==='running'));
+  const first=state.workers.find(w=>w.lane==='first');
+  const second=state.workers.find(w=>w.lane==='second');
+  const a=archive('a-q-'+first.jobId,sourceUrl,['a','b','c','d','e'],'fragment');
+  const b=archive('b-q-'+second.jobId,sourceUrl,['c','d','e','f','g','h'],'fragment');
+  f.archives.set(a.id,a);f.archives.set(b.id,b);
+  await f.controller.complete({jobId:first.jobId,archiveId:a.id},first.captureTabId);
+  // Simulate Chrome terminating the background worker after the merged
+  // archive was published but before the final status write completed.
+  f.failNextDoneStateWrite();
+  await f.controller.complete({jobId:second.jobId,archiveId:b.id},second.captureTabId);
+  let interrupted=await f.controller.getState();
+  assert.equal(interrupted.items[0].status,'finalizing');
+  assert.equal(interrupted.items[0].finalizationStarted,true);
+  assert.equal(f.published.length,1);
+  const publishedId=f.published[0].id;
+  const other=f.freshController();
+  await other.versionCheck('0.4.76');
+  const recovered=await other.getState();
+  assert.equal(recovered.items[0].status,'done');
+  assert.equal(recovered.items[0].archiveId,publishedId);
+  assert.equal(f.published.length,2); // same ID republished to finish incomplete index
+  assert.equal(f.published[1].id,publishedId);
+  assert.equal(f.archives.size,3);
+  assert.equal(f.launches.length,2); // never re-scroll either page
+});
+
+test('two failed attempts never overwrite an earlier independently saved split-part draft', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.76');
+  const sourceUrl=chat(59);
+  const key='archiverFragmentMarkers:'+new URL(sourceUrl).origin+new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:markers});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enable(true);
+  const itemId=(await f.controller.getState()).items[0].id;
+  for(let attempt=0;attempt<2;attempt++){
+    const state=await f.settled(s=>s.workers.length===2 &&
+      s.workers.every(w=>w.status==='running'));
+    const first=state.workers.find(w=>w.lane==='first');
+    const second=state.workers.find(w=>w.lane==='second');
+    const a=archive('bad-a-q-'+first.jobId,sourceUrl,['a','b','c','d','e'],'fragment');
+    const b=archive('bad-b-q-'+second.jobId,sourceUrl,['c','z','e','f','g','h'],'fragment');
+    f.archives.set(a.id,a); f.archives.set(b.id,b);
+    await f.controller.complete({jobId:first.jobId,archiveId:a.id},first.captureTabId);
+    await f.controller.complete({jobId:second.jobId,archiveId:b.id},second.captureTabId);
+    const after=await f.settled(s=>s.items[0].status==='error');
+    assert.match(after.items[0].error,/стык/);
+    if(attempt===0) {
+      const keys=[...f.data.keys()].filter(k=>k.startsWith('draft:queue-split:'));
+      assert.equal(keys.length,2);
+      await f.controller.retry(itemId);
+    }
+  }
+  const keys=[...f.data.keys()].filter(k=>k.startsWith('draft:queue-split:'));
+  assert.equal(keys.length,4);
+  for(const id of keys) assert.ok(f.data.get(id).messages.length>=5);
+  assert.equal(f.published.length,0);
+});
+
+test('navigation to a non-chat page retires just the affected worker', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.76');
+  await f.controller.enqueue({sourceUrl:chat(61),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(62),mode:'two-chats'});
+  await f.controller.enable(true);
+  const state=await f.settled(s=>s.workers.length===2 &&
+    s.workers.every(w=>w.status==='running'));
+  await f.controller.tabNavigated(state.workers[0].captureTabId,'https://example.org/');
+  const next=await f.controller.getState();
+  assert.equal(next.workers[0].status,'error');
+  assert.equal(next.workers[1].status,'running');
+});
+
+test('cancel during DOM readiness never launches a collector and releases its slot', async () => {
+  let releaseDom, markDomReached;
+  const domReached = new Promise(resolve => { markDomReached = resolve; });
+  const blocked = new Promise(resolve => { releaseDom = resolve; });
+  const f = fixture({
+    waitForDomReady: async () => { markDomReached(); await blocked; }
+  });
+  await f.controller.versionCheck('0.4.76');
+  await f.controller.enqueue({ sourceUrl: chat(71), mode: 'two-chats' });
+  await f.controller.enable(true);
+  await domReached;
+  let state = await f.controller.getState();
+  assert.equal(state.workers[0].status, 'starting');
+  assert.equal(state.workers[0].captureTabId, null);
+  await f.controller.cancel(state.items[0].id);
+  releaseDom();
+  state = await f.settled(s => s.items[0].status === 'cancelled');
+  assert.equal(state.workers[0].status, 'cancelled');
+  assert.equal(f.launches.length, 0);
+  assert.equal(f.removedTabs.length, 1);
+  assert.equal(f.published.length, 0);
+});
+
+test('cancel while content-script injection is pending is delivered after injection too', async () => {
+  let releaseInjection, markInjectionReached;
+  const injectionReached = new Promise(resolve => { markInjectionReached = resolve; });
+  const blocked = new Promise(resolve => { releaseInjection = resolve; });
+  const f = fixture({
+    waitForInjection: async () => { markInjectionReached(); await blocked; }
+  });
+  await f.controller.versionCheck('0.4.76');
+  await f.controller.enqueue({ sourceUrl: chat(72), mode: 'two-chats' });
+  await f.controller.enable(true);
+  await injectionReached;
+  const state = await f.controller.getState();
+  const worker = state.workers[0];
+  assert.equal(worker.status, 'starting');
+  assert.ok(worker.captureTabId != null);
+  await f.controller.cancel(worker.itemId);
+  releaseInjection();
+  await f.settled(s => f.cancelledMessages.length >= 2);
+  assert.equal(f.cancelledMessages[0].jobId, worker.jobId);
+  assert.equal(f.cancelledMessages[1].jobId, worker.jobId);
+  await f.controller.failed({
+    jobId:worker.jobId,status:'cancelled',error:'stopped'
+  },worker.captureTabId);
+  assert.equal((await f.controller.getState()).workers[0].status,'cancelled');
+  assert.equal(f.published.length,0);
+});
+
+test('a stranded starting slot with no working tab is retired without touching drafts', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.76');
+  const previousDraft = { id:'draft-old',messages:[{text:'save me'}] };
+  await f.storage.set({
+    'draft:draft-old':previousDraft,
+    archiverCaptureQueueV1:{
+      enabled:false,
+      items:[{id:'stuck-item',sourceUrl:chat(73),mode:'two-chats',status:'starting'}],
+      workers:[{
+        jobId:'stuck-worker', itemId:'stuck-item', sourceUrl:chat(73),
+        lane:'single', status:'starting', captureTabId:null,
+        updatedAt:Date.now()-600000,startedAt:Date.now()-700000,
+        draftId:'draft-old'
+      }]
+    }
+  });
+  await f.controller.tick();
+  const state=await f.controller.getState();
+  assert.equal(state.items[0].status,'error');
+  assert.equal(state.workers[0].status,'error');
+  assert.deepEqual((await f.storage.get('draft:draft-old'))['draft:draft-old'],previousDraft);
 });

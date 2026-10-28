@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   QUEUE_MODES, queueLanePlan, splitLanePlan, chooseRunnableQueueItems,
-  queueItemStatus, joinVerifiedSplitCapture, queueResumePlan
+  queueItemStatus, joinVerifiedSplitCapture, queueResumePlan,
+  splitArchiveId, splitRecoveryDraftId
 } from '../lib/capture-queue.mjs';
 const url = 'https://chatgpt.com/c/4e156f31-0000-4000-8000-111111111111';
 const other = 'https://chatgpt.com/c/4e156f31-0000-4000-8000-222222222222';
@@ -128,4 +129,23 @@ test('split queue with one verified lane already done needs only one free slot',
     { itemId:'other',lane:'single',status:'running',sourceUrl:other }
   ];
   assert.deepEqual(chooseRunnableQueueItems([split],active).map(v=>v.id),['split']);
+});
+
+test('split output IDs are stable within one attempt but never reused after retry', () => {
+  const first = { jobId:'worker-a', lane:'first' };
+  const second = { jobId:'worker-b', lane:'second' };
+  const other = { jobId:'worker-c', lane:'second' };
+  const oldId = splitArchiveId('item-12', first, second);
+  assert.equal(splitArchiveId('item-12', first, second), oldId);
+  assert.notEqual(splitArchiveId('item-12', first, other), oldId);
+  assert.notEqual(splitArchiveId('item-13', first, second), oldId);
+  assert.throws(() => splitArchiveId('item-12', second, first), /двух разных/);
+});
+
+test('each failed split worker owns an immutable different recovery draft key', () => {
+  const first = { jobId:'job1', lane:'first' };
+  const next = { jobId:'job2', lane:'first' };
+  assert.notEqual(splitRecoveryDraftId('item', first), splitRecoveryDraftId('item', next));
+  assert.match(splitRecoveryDraftId('item', first), /job1$/);
+  assert.throws(() => splitRecoveryDraftId('item', {jobId:'job1',lane:'single'}), /Недостаточно/);
 });
