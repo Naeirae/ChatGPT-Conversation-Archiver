@@ -34,7 +34,8 @@
     lastScrollDirection: '',
     manualTopConfirmed: false,
     boundarySearchActive: false,
-    queueCapture: false
+    queueCapture: false,
+    pauseSnapshotWriter: null
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -261,16 +262,29 @@
       wheelDelta = 860
     } = {}) {
       const normalizedDirection = direction === 'down' ? 'down' : 'up';
-      const result = await chrome.runtime.sendMessage({
-        type: 'ARCHIVER_PHYSICAL_SCROLL',
-        queueCapture: state.queueCapture,
-        jobId,
-        direction: normalizedDirection,
-        bursts,
-        wheelDelta
-      });
-      if (!result?.ok) {
+      let result = null;
+      // A wheel request may already be in flight when Pause is acknowledged.
+      // Wait for Resume and retry the step instead of aborting the capture.
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await waitIfPaused();
+        result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_PHYSICAL_SCROLL',
+          queueCapture: state.queueCapture,
+          jobId,
+          direction: normalizedDirection,
+          bursts,
+          wheelDelta
+        });
+        if (result?.ok) break;
+        if (result?.paused === true && result?.error === 'CAPTURE_PAUSED') {
+          await waitIfPaused();
+          await sleep(180);
+          continue;
+        }
         throw new Error(result?.error || 'Не удалось физически прокрутить вкладку.');
+      }
+      if (!result?.ok) {
+        throw new Error('После паузы рабочая вкладка так и не разрешила прокрутку.');
       }
       await waitForTurnSettle(getSignature, {
         timeout: settleTimeout,
@@ -3910,7 +3924,20 @@
     return elapsed >= minInterval || grown >= minDelta;
   }
 
-  async function saveRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
+  let recoveryCheckpointWrite = Promise.resolve();
+  // A periodic checkpoint and a pause snapshot must never overwrite one
+  // another out of order. Serialize the actual storage operations.
+  async function saveRecoveryCheckpoint(map, order, boundary, options = {}) {
+    const jobId = state.jobId;
+    const operation = recoveryCheckpointWrite.catch(() => {}).then(async () => {
+      if (!jobId || jobId !== state.jobId) return;
+      return persistRecoveryCheckpoint(map, order, boundary, options);
+    });
+    recoveryCheckpointWrite = operation.catch(() => {});
+    return operation;
+  }
+
+  async function persistRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
     const jobId = state.jobId;
     if (!jobId || !boundary?.kind || !boundary?.key || !order.length) return;
 
@@ -4546,6 +4573,7 @@ if (boundaryIsVisible(boundary)) {
     state.queueCapture = Boolean(options.queueCapture);
     state.cancel = false;
     state.paused = false;
+    state.pauseSnapshotWriter = null;
     state.lastScrollDirection = '';
     state.manualTopConfirmed = false;
     state.boundarySearchActive = false;
@@ -4644,6 +4672,10 @@ if (boundaryIsVisible(boundary)) {
         : null;
       const boundary = markerEnd || fixedCaptureBoundary || makeCaptureBoundary(turns);
       if (!boundary) throw new Error('Не удалось зафиксировать конец снимка переписки.');
+      // Write the exact accumulated work to disk before acknowledging Pause.
+      state.pauseSnapshotWriter = () => saveRecoveryCheckpoint(
+        map, order, boundary, { force: true }
+      );
 
       await progress(
         fixedCaptureBoundary
@@ -5657,6 +5689,7 @@ if (boundaryIsVisible(boundary)) {
       state.queueCapture = false;
       state.cancel = false;
       state.paused = false;
+      state.pauseSnapshotWriter = null;
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
       state.lastScrollDirection = '';
@@ -6058,31 +6091,70 @@ if (boundaryIsVisible(boundary)) {
       return false;
     }
     if (message && message.type === 'ARCHIVER_PAUSE_CAPTURE') {
-      if (state.running && (!message.jobId || message.jobId === state.jobId)) {
-        state.pauseCheckpoint = makePauseCheckpoint();
-        state.paused = true;
+      if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
+        sendResponse({
+          ok: false, paused: false, running: false,
+          jobId: state.jobId || '', error: 'Активный сбор для постановки на паузу не найден.'
+        });
+        return false;
       }
-      sendResponse({ ok: true, paused: state.paused, checkpointSaved: Boolean(state.pauseCheckpoint) });
-      return false;
+      const pausedJobId = state.jobId;
+      state.pauseCheckpoint = makePauseCheckpoint();
+      state.paused = true;
+      (async () => {
+        let snapshotError = '';
+        if (state.pauseSnapshotWriter) {
+          try {
+            await state.pauseSnapshotWriter();
+          } catch (error) {
+            snapshotError = error?.message || String(error);
+          }
+        }
+        // A collector may have failed while its pause checkpoint was saving.
+        if (!state.running || state.jobId !== pausedJobId) {
+          sendResponse({
+            ok: false, paused: false, running: false, jobId: pausedJobId,
+            error: 'Сбор завершился при сохранении паузы. Проверьте незавершённые сборы.'
+          });
+          return;
+        }
+        const key = state.queueCapture
+          ? 'archiverQueueJob:' + pausedJobId : 'activeCaptureJob';
+        const stored = (await chrome.storage.local.get(key))[key] || {};
+        const draftId = stored.draftId || stored.recoveryDraftId || ('draft-' + pausedJobId);
+        const draft = (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId];
+        sendResponse({
+          ok: true, paused: true, running: true, jobId: pausedJobId,
+          checkpointSaved: Boolean(draft?.messages?.length),
+          draftCount: Number(draft?.messages?.length || 0),
+          snapshotError
+        });
+      })().catch(error => {
+        const alive = Boolean(state.running && state.jobId === pausedJobId);
+        sendResponse({
+          ok: alive, paused: alive, running: alive, jobId: pausedJobId,
+          checkpointSaved: false, draftCount: 0,
+          snapshotError: error?.message || String(error),
+          error: alive ? '' : 'Сборщик завершился во время подтверждения паузы.'
+        });
+      });
+      return true;
     }
     if (message && message.type === 'ARCHIVER_RESUME_CAPTURE') {
       if (!state.running || (message.jobId && message.jobId !== state.jobId)) {
-        sendResponse({ ok: false, error: 'Активный сбор для продолжения не найден.' });
+        sendResponse({
+          ok: false, resumed: false, running: false, jobId: state.jobId || '',
+          error: 'Активный сбор для продолжения не найден.'
+        });
         return false;
       }
-
-      // Pause means "stop automatic activity here", not "start a recovery
-      // traversal on resume". The old resume path tried to scroll while the
-      // worker still marked the job paused, so the worker rejected those
-      // physical scroll requests and the pause could appear to hang.
-      //
-      // Resume immediately from the physical viewport that is currently open.
-      // If the user moved the page manually during the pause, the ordinary
-      // overlap/frontier checks of the active pass decide how to reconnect.
       state.paused = false;
       state.pauseCheckpoint = null;
       state.resumeFailure = '';
-      sendResponse({ ok: true, paused: false, recovered: false });
+      sendResponse({
+        ok: true, resumed: true, paused: false, running: true,
+        jobId: state.jobId, recovered: false
+      });
       return false;
     }
     if (message && message.type === 'ARCHIVER_CANCEL_CAPTURE') {
