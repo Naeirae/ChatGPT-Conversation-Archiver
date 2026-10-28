@@ -2598,16 +2598,18 @@
     if (now - lastProgressAt < 1500 && !(extra && extra.force)) return;
     lastProgressAt = now;
     const patch = Object.assign({ status: 'running', message, count }, extra || {});
-    const strictFinalization = Boolean(extra?.finalizationStep);
+    const strictFinalization = Boolean(extra?.finalizationStep || extra?.phase === 'finalizing');
     try {
       const request = chrome.runtime.sendMessage({
         type: 'ARCHIVER_CAPTURE_PROGRESS',
         jobId: state.jobId,
         patch
       });
-      const result = strictFinalization
-        ? await withCaptureOperationTimeout(request, 30000, 'Сохранение состояния Архиватора')
-        : await request;
+      const result = await withCaptureOperationTimeout(
+        request,
+        strictFinalization ? 30000 : 12000,
+        strictFinalization ? 'Завершение сбора' : 'Обновление прогресса'
+      );
       if (result?.ok) return result;
       if (result && result.ok === false) {
         throw new Error(result.error || 'Фоновый процесс остановил этот сбор.');
@@ -3993,6 +3995,20 @@
     return false;
   }
 
+  function smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, scrollResult) {
+    // In image-heavy conversations a single tall turn may occupy the whole
+    // viewport; scrolling a short distance can replace the sole visible turn
+    // without an overlapping message. Accept only a measured small downward
+    // movement, not merely a CDP acknowledgement or a signature change.
+    if (!beforeRefs?.length || !afterRefs?.length) return false;
+    if (beforeRefs.length !== 1 && afterRefs.length !== 1) return false;
+    if (!scrollResult?.moved || scrollResult.direction !== 'down') return false;
+    const before = Number(scrollResult.before);
+    const after = Number(scrollResult.after);
+    const step = after - before;
+    return Number.isFinite(step) && step >= 2 && step <= 160;
+  }
+
   async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
     const seenWindows = new Set();
     for (let attempt = 0; attempt < 6; attempt++) {
@@ -4242,10 +4258,10 @@ if (boundaryIsVisible(boundary)) {
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
+      const downwardStep = await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
         settleTimeout: 1800,
         quietWindow: 300,
-        wheelDelta: 320
+        wheelDelta: 120
       });
 
       await expandVisible();
@@ -4259,8 +4275,8 @@ if (boundaryIsVisible(boundary)) {
       }
 
       const afterRefs = visibleNavigationRefsLightweight();
-      if (!beforeRefs.length || !afterRefs.length ||
-          !navigationWindowsOverlap(beforeRefs, afterRefs)) {
+      if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
+          !smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)) {
         const recovered = await recoverDownwardContinuity(
           beforeRefs,
           map,
