@@ -1020,11 +1020,44 @@
     );
   }
 
+  function rectTrailingEdgeInsideCaptureViewport(
+    rect, viewportWidth, viewportHeight, scrollportRect = null
+  ) {
+    if (!rectIntersectsCaptureViewport(rect, viewportWidth, viewportHeight, scrollportRect)) {
+      return false;
+    }
+    const top = Math.max(0, scrollportRect ? Number(scrollportRect.top) : 0);
+    const bottom = Math.min(
+      Number(viewportHeight),
+      scrollportRect ? Number(scrollportRect.bottom) : Number(viewportHeight)
+    );
+    // The turn may be taller than the entire viewport. Seeing its first
+    // pixels does not mean that its trailing attachments have been visited.
+    return rect.bottom >= top + 2 && rect.bottom <= bottom + 8;
+  }
+
+  function turnTrailingEdgeVisible(turn) {
+    if (!turn?.isConnected) return false;
+    const root = contentRoot(turn, roleOf(turn)) || turn;
+    const rect = root.getBoundingClientRect();
+    const scroller = findScrollContainer(turn);
+    const documentRoot = !scroller ||
+      scroller === document.documentElement ||
+      scroller === document.body ||
+      scroller === document.scrollingElement;
+    return rectTrailingEdgeInsideCaptureViewport(
+      rect,
+      window.innerWidth || document.documentElement.clientWidth,
+      window.innerHeight || document.documentElement.clientHeight,
+      documentRoot ? null : scroller.getBoundingClientRect()
+    );
+  }
+
   function boundaryIsVisible(boundary) {
-    // Querying a present DOM turn is not enough: virtualized ChatGPT can keep
-    // the marked end mounted well outside the physical scroll viewport.
+    // Reaching the end marker requires the trailing edge of that message to
+    // enter the physical scrollport, not merely its first visible pixels.
     return Boolean(boundary && orderedTurns().some(turn =>
-      matchesBoundary(turn, boundary) && turnIntersectsCaptureViewport(turn)
+      matchesBoundary(turn, boundary) && turnTrailingEdgeVisible(turn)
     ));
   }
 
@@ -1944,7 +1977,7 @@
       // walking back down.
       // A mounted offscreen end marker must not truncate the current window.
       if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
-          turnIntersectsCaptureViewport(turn)) break;
+          turnTrailingEdgeVisible(turn)) break;
     }
 
     return [...new Set(touchedIds)];
