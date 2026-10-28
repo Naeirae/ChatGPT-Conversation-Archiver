@@ -50,8 +50,10 @@ import {
 
 import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mjs';
 import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
+import { createCaptureQueueController } from './lib/capture-queue-controller.mjs';
 
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
+const CAPTURE_QUEUE_ALARM = 'archiver-capture-queue-health';
 const RUN_HISTORY_KEY = 'captureRunHistory';
 const DOC_IMAGE_PATCHES_KEY = 'docImagePatches';
 const DOCS_NEW_URL = 'https://docs.new';
@@ -1695,6 +1697,8 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
     existingDraftId: options.existingDraftId || '',
     fixedCaptureBoundary: options.fixedCaptureBoundary || null,
     captureRange: options.captureRange || null,
+    queueCapture: Boolean(options.queueCapture),
+    seekMarkedStart: Boolean(options.seekMarkedStart),
     resumeAnchorSignature: options.resumeAnchorSignature || '',
     resumeTailSignatures: Array.isArray(options.resumeTailSignatures) ? options.resumeTailSignatures : [],
     resumeNavigation: Boolean(options.resumeNavigation)
@@ -2053,6 +2057,10 @@ async function startCapture({
     ? 'current'
     : (captureTarget === 'current' ? 'current' : 'copy');
 
+  const queued = await queueController.getState();
+  if (queued.workers.some(worker => ['starting', 'running', 'paused', 'stopping'].includes(worker.status))) {
+    throw new Error('Параллельная очередь ещё собирает чаты. Дождитесь завершения перед одиночным сбором.');
+  }
   const current = await getJob();
   if (current && ['starting', 'running', 'paused'].includes(current.status)) {
     const stale = Date.now() - Number(current.updatedAt || current.startedAt || 0) > 300000;
@@ -6431,11 +6439,71 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
   };
 }
 
+// Queue jobs use their own records; never replace activeCaptureJob.
+const queueController = createCaptureQueueController(chrome, {
+  isConversationUrl,
+  legacyCaptureActive: async () => {
+    const job = await getJob();
+    return Boolean(job && ['starting', 'running', 'paused'].includes(job.status));
+  },
+  waitForChatTabComplete,
+  waitForChatDomReady,
+  ensureChatGptContentScript,
+  getArchive,
+  mergeMessage: (older, newer) => mergeStoredMessageCapture(older, newer),
+  publishArchive: async archive => {
+    await putArchive({ ...archive, partial: false, complete: true });
+    await indexArchive(archive);
+    await registerArchive(archive);
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.target === 'offscreen') return;
   (async () => {
     await captureRuntimeReady;
+    await queueRuntimeReady;
+    if (message?.queueCapture) {
+      const tabId = sender?.tab?.id;
+      const worker = await queueController.authorized(message.jobId || '', tabId);
+      if (!worker) return { ok: false, error: 'Проход очереди не принадлежит этой вкладке.' };
+      switch (message.type) {
+        case 'ARCHIVER_CAPTURE_PROGRESS':
+          return await queueController.progress(message, tabId);
+        case 'ARCHIVER_CHECKPOINT_SAVED':
+          return await queueController.checkpoint(message, tabId);
+        case 'ARCHIVER_CAPTURE_COMPLETE':
+          return await queueController.complete(message, tabId);
+        case 'ARCHIVER_CAPTURE_FAILED':
+          return await queueController.failed(message, tabId);
+        case 'ARCHIVER_PHYSICAL_SCROLL':
+          return await physicalScrollTab(tabId, message.direction, message.bursts, message.wheelDelta);
+        case 'ARCHIVER_CAPTURE_RENDERED_IMAGE':
+          return await captureRenderedImageForContent(tabId, message.rect || {}, message.viewport || {});
+        case 'ARCHIVER_PHYSICAL_CLICK':
+          return await physicalClickChatTab(tabId, message.point || {});
+        case 'ARCHIVER_PHYSICAL_COPY_SELECTION':
+          return await physicalCopyChatSelection(tabId);
+        default:
+          return { ok: false, error: 'Неизвестное сообщение параллельного сборщика.' };
+      }
+    }
     switch (message?.type) {
+      case 'ARCHIVER_QUEUE_GET':
+        return { ok: true, queue: await queueController.getState() };
+      case 'ARCHIVER_QUEUE_ADD':
+        return await queueController.enqueue({ sourceUrl: message.sourceUrl || '', mode: message.mode || 'two-chats' });
+      case 'ARCHIVER_QUEUE_CHANGE':
+        return await queueController.change(message.itemId || '', { mode: message.mode });
+      case 'ARCHIVER_QUEUE_REMOVE':
+        return await queueController.remove(message.itemId || '');
+      case 'ARCHIVER_QUEUE_RETRY':
+        return await queueController.retry(message.itemId || '');
+      case 'ARCHIVER_QUEUE_ENABLE':
+        return await queueController.enable(message.enabled !== false);
+      case 'ARCHIVER_QUEUE_CANCEL':
+        return await queueController.cancel(message.itemId || '');
+
       case 'ARCHIVER_FETCH_IMAGE_BINARY':
         return await fetchImageBinaryForContent(message.src || '');
       case 'ARCHIVER_CAPTURE_RENDERED_IMAGE': {
@@ -6513,7 +6581,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         );
       case 'ARCHIVER_GET_LIVE_STATE': {
         const job = await refreshCaptureJobHealth();
-        return { ok: true, job, unfinishedPass: liveUnfinishedSummary(job) };
+        return { ok: true, job, unfinishedPass: liveUnfinishedSummary(job), queue: await queueController.getState() };
       }
       case 'ARCHIVER_GET_SAVED_ARCHIVES_FAST':
         return { ok: true, savedArchives: await listLinkedArchivesFast() };
@@ -6588,6 +6656,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           linkedDoc,
           captureRange,
           savedArchives: await listLinkedArchivesFast(),
+          queue: await queueController.getState(),
           canContinue: Boolean(archive?.messages?.length && !archive.isFragment),
           history: await getRunHistory()
         };
@@ -6929,6 +6998,8 @@ self.addEventListener('error', event => {
 chrome.tabs.onRemoved.addListener(tabId => {
   (async () => {
   await captureRuntimeReady;
+  await queueRuntimeReady;
+  await queueController.tabClosed(tabId);
   const job = await getJob();
   if (!job) return;
 
@@ -7031,9 +7102,16 @@ const captureRuntimeReady = retireCaptureAfterVersionChange().catch(error => {
   console.error('Capture version migration failed', error);
   throw error;
 });
+const queueRuntimeReady = queueController.versionCheck(
+  chrome.runtime.getManifest().version || ''
+).catch(error => {
+  console.error('Queue runtime version migration failed', error);
+  throw error;
+});
 
 chrome.runtime.onInstalled.addListener(details => {
   chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
+  chrome.alarms.create(CAPTURE_QUEUE_ALARM, { periodInMinutes: 1 });
   checkForUpdate().catch(() => {});
 
   if (details?.reason === 'update') {
@@ -7049,10 +7127,17 @@ chrome.runtime.onInstalled.addListener(details => {
 
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 360 });
+  chrome.alarms.create(CAPTURE_QUEUE_ALARM, { periodInMinutes: 1 });
   checkForUpdate().catch(() => {});
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm?.name === CAPTURE_QUEUE_ALARM) {
+    queueRuntimeReady.then(() => queueController.tick()).catch(error =>
+      logTabListenerError('queue-health', error)
+    );
+    return;
+  }
   if (alarm?.name === UPDATE_ALARM) {
     checkForUpdate().catch(() => {});
     return;
