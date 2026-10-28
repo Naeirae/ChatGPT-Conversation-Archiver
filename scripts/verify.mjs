@@ -116,12 +116,15 @@ try {
 
   // Never silently skip the overlap check when virtualized DOM exposes no
   // physically visible navigable turns before or after scrolling.
-  const emptyEvidenceGuardCount = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
-  if (emptyEvidenceGuardCount !== 2) {
-    fail('traversal: missing/empty viewport evidence must not bypass continuity recovery');
+  const legacyEmptyWindowGuard = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
+  const measuredSingleTurnGuard = contentSource.includes(
+    '!smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)'
+  );
+  if (legacyEmptyWindowGuard !== 1 || !measuredSingleTurnGuard) {
+    fail('traversal: missing viewport evidence cannot bypass legacy continuity or measured single-turn validation');
   }
 
-  // The page requests 320px down and 180px recovery; the worker must not
+  // The page requests short down/recovery steps; the worker must not
   // silently turn both into legacy 860px jumps.
   if (!contentSource.includes('wheelDelta') ||
       !serviceWorkerSource.includes('message.wheelDelta') ||
