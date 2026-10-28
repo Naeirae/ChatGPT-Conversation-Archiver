@@ -4750,7 +4750,7 @@ if (boundaryIsVisible(boundary)) {
             bursts: 1,
             requireBoundary: mode === 'fragment',
             recoverLoadErrors: mode !== 'fragment',
-            hydrateImages: mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
+            hydrateImages: mode === 'fragment' || mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             attemptedImageSources: sequentialImageSources
           });
 
@@ -5167,7 +5167,7 @@ if (boundaryIsVisible(boundary)) {
         : [];
 
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
+        onlyMissing: mode === 'full' || mode === 'fragment' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
       });
 
       if ((mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length) {
