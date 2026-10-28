@@ -238,6 +238,43 @@
       </section>
     </section>
 
+    <section id="captureQueuePanel" class="workspace-section queue-panel">
+      <div class="section-bar">
+        <strong>Очередь сбора</strong>
+        <small id="queueStatus">Нет заданий</small>
+      </div>
+      <p class="muted queue-intro">
+        Для каждого чата выберите режим. «Два чата» запускает две разные переписки параллельно.
+        Экспериментальный режим делит один чат на два прохода с проверкой перекрытия.
+      </p>
+      <label class="field queue-field">
+        <span>Ссылка на переписку</span>
+        <input id="queueChatUrl" type="url" autocomplete="off"
+          placeholder="https://chatgpt.com/c/..." />
+      </label>
+      <label class="field queue-field">
+        <span>Режим нового задания</span>
+        <select id="queueAddMode">
+          <option value="two-chats">Параллельный сбор разных чатов</option>
+          <option value="split-chat">Эксперимент: один чат, два потока</option>
+        </select>
+      </label>
+      <div class="queue-actions">
+        <button id="queueAddCurrent" class="compact-button" type="button">Добавить текущий чат</button>
+        <button id="queueAddUrl" class="compact-button" type="button">Добавить по ссылке</button>
+      </div>
+      <p class="muted queue-hint">
+        Для режима двух потоков в самом чате отметьте «Начало», «Середина» и «Конец».
+        Середина должна иметь устойчивые ID и соседние реплики. Без проверенного стыка результат
+        останется двумя черновиками.
+      </p>
+      <div id="queueList" class="queue-list" aria-live="polite"></div>
+      <div class="queue-actions queue-run-actions">
+        <button id="queueRun" class="compact-button primary" type="button">Запустить очередь</button>
+        <button id="queueStop" class="compact-button" type="button">Не запускать новые</button>
+      </div>
+    </section>
+
     <section id="unfinishedPassesPanel" class="workspace-section unfinished-panel hidden">
       <div class="section-bar">
         <strong>Незавершённые сборы</strong>

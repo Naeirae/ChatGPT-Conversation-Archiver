@@ -1524,3 +1524,22 @@ body.tour-open .header-popover {
   border-color:transparent;
   background:transparent;
 }
+
+/* Independent, per-chat capture queue */
+.queue-panel { margin-top: 10px; }
+.queue-intro, .queue-hint { font-size: 11px; line-height: 1.45; margin: 8px 0; }
+.queue-field { margin-top: 7px; }
+.queue-field input, .queue-field select { width: 100%; }
+.queue-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.queue-actions button { flex: 1 1 150px; }
+.queue-list { display: grid; gap: 8px; margin-top: 10px; }
+.queue-row { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 9px; }
+.queue-row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 7px; }
+.queue-row-link { color: var(--accent); font-size: 11px; font-weight: 650; overflow-wrap: anywhere; }
+.queue-row-status { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.queue-row-select { width: 100%; margin-top: 7px; font-size: 11px; }
+.queue-worker { font-size: 10px; color: var(--muted); margin-top: 5px; overflow-wrap: anywhere; }
+.queue-row-error { font-size: 10.5px; color: var(--text); margin-top: 6px; overflow-wrap: anywhere; }
+.queue-row-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.queue-row-actions button { width: auto; margin: 0; padding: 5px 8px; font-size: 10.5px; }
+.queue-hint { border-left: 2px solid var(--border); padding-left: 9px; }

@@ -1008,6 +1008,213 @@ async function saveSettings(patch, noticeId = 'settingsSaved') {
   }
 }
 
+const QUEUE_MODE_OPTIONS = [
+  { value: 'two-chats', label: 'Два разных чата параллельно' },
+  { value: 'split-chat', label: 'Эксперимент: один чат, два потока' }
+];
+const QUEUE_STATE_LABELS = {
+  queued: 'В очереди', starting: 'Запускается', running: 'Собирается',
+  paused: 'Пауза', stopping: 'Останавливается',
+  'awaiting-merge': 'Проверяю стык', finalizing: 'Объединяю',
+  done: 'Готово', error: 'Ошибка', cancelled: 'Остановлено'
+};
+let lastQueueDoneIds = new Set();
+
+async function queueCall(type, extra = {}) {
+  const result = await chrome.runtime.sendMessage({ type, ...extra });
+  if (!result?.ok) throw new Error(result?.error || 'Не удалось изменить очередь.');
+  await refreshQueue();
+  return result;
+}
+
+async function refreshQueue() {
+  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_QUEUE_GET' });
+  if (!result?.ok) throw new Error(result?.error || 'Состояние очереди недоступно.');
+  if (!state) state = {};
+  state.queue = result.queue || null;
+  renderQueue(state.queue);
+  return result.queue;
+}
+
+function queueButton(text, handler, { danger = false } = {}) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = danger ? 'compact-button danger-outline' : 'compact-button';
+  button.textContent = text;
+  button.onclick = async () => {
+    button.disabled = true;
+    try { await handler(); }
+    catch (error) {
+      setStatus(error.message || String(error), true);
+      button.disabled = false;
+    }
+  };
+  return button;
+}
+
+function renderQueue(queue) {
+  const list = $('queueList');
+  if (!list) return;
+  const items = Array.isArray(queue?.items) ? queue.items : [];
+  const workers = Array.isArray(queue?.workers) ? queue.workers : [];
+  const running = workers.filter(worker =>
+    ['starting', 'running', 'paused', 'stopping'].includes(worker.status)
+  ).length;
+  $('queueStatus').textContent = items.length + ' заданий · ' +
+    running + '/2 потока · ' + (queue?.enabled ? 'запуск включён' : 'ожидает запуска');
+  $('queueRun').disabled = Boolean(queue?.enabled);
+  $('queueStop').disabled = !queue?.enabled;
+  list.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'muted';
+    empty.textContent = 'Очередь пуста. Добавьте чаты и выберите режим отдельно для каждого.';
+    list.appendChild(empty);
+  }
+  for (const item of items) {
+    const row = document.createElement('article');
+    row.className = 'queue-row';
+    const head = document.createElement('div');
+    head.className = 'queue-row-head';
+    const link = document.createElement('a');
+    link.className = 'queue-row-link';
+    if (/^https:\/\/(chatgpt\.com|chat\.openai\.com)\//i.test(item.sourceUrl || '')) {
+      link.href = item.sourceUrl;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+    link.textContent = item.sourceUrl || 'Переписка';
+    const status = document.createElement('span');
+    status.className = 'queue-row-status';
+    status.textContent = QUEUE_STATE_LABELS[item.status] || item.status || '—';
+    head.append(link, status);
+    row.appendChild(head);
+
+    const selector = document.createElement('select');
+    selector.className = 'queue-row-select';
+    selector.setAttribute('aria-label', 'Режим сбора для этого чата');
+    for (const mode of QUEUE_MODE_OPTIONS) {
+      const option = document.createElement('option');
+      option.value = mode.value;
+      option.textContent = mode.label;
+      selector.appendChild(option);
+    }
+    selector.value = item.mode;
+    selector.disabled = item.status !== 'queued';
+    selector.onchange = async () => {
+      const value = selector.value;
+      selector.disabled = true;
+      try {
+        await queueCall('ARCHIVER_QUEUE_CHANGE', { itemId: item.id, mode: value });
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        await refreshQueue().catch(() => {});
+      }
+    };
+    row.appendChild(selector);
+
+    const matching = workers.filter(worker => worker.itemId === item.id);
+    for (const worker of matching) {
+      const line = document.createElement('div');
+      line.className = 'queue-worker';
+      const position = Number(worker.physicalScrollTop);
+      line.textContent = (worker.lane === 'single' ? 'Сборщик' :
+        worker.lane === 'first' ? 'Поток 1' : 'Поток 2') +
+        ' · ' + (QUEUE_STATE_LABELS[worker.status] || worker.status) +
+        ' · ' + Number(worker.count || 0) + ' сообщений' +
+        (Number.isFinite(position) && worker.physicalScrollTop != null
+          ? ' · ' + Math.round(position) + ' px' : '') +
+        (worker.message ? ' · ' + worker.message : '');
+      row.appendChild(line);
+    }
+    if (item.mode === 'split-chat' && item.status === 'queued') {
+      const hint = document.createElement('div');
+      hint.className = 'queue-worker';
+      hint.textContent = 'Перед запуском отметьте в этой переписке начало, середину и конец.';
+      row.appendChild(hint);
+    }
+    if (item.error) {
+      const error = document.createElement('div');
+      error.className = 'queue-row-error';
+      error.textContent = item.error;
+      row.appendChild(error);
+    }
+    if (item.archiveId && item.status === 'done') {
+      const ready = document.createElement('div');
+      ready.className = 'queue-worker';
+      ready.textContent = 'Архив сохранён локально. Доступен в разделе «Сохранённые чаты».';
+      row.appendChild(ready);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'queue-row-actions';
+    const liveLanes = matching.filter(worker =>
+      ['starting', 'running', 'paused', 'stopping'].includes(worker.status));
+    if (!liveLanes.length &&
+        (item.status === 'queued' || ['done', 'error', 'cancelled'].includes(item.status))) {
+      actions.appendChild(queueButton('Убрать из очереди', () =>
+        queueCall('ARCHIVER_QUEUE_REMOVE', { itemId: item.id })));
+    }
+    if (liveLanes.length) {
+      const stop = queueButton('Остановить это задание', () =>
+        queueCall('ARCHIVER_QUEUE_CANCEL', { itemId: item.id }), { danger: true });
+      stop.disabled = liveLanes.every(worker => worker.status === 'stopping');
+      actions.appendChild(stop);
+    }
+    if (!liveLanes.length && ['error', 'cancelled', 'done'].includes(item.status)) {
+      actions.appendChild(queueButton('Повторить', () =>
+        queueCall('ARCHIVER_QUEUE_RETRY', { itemId: item.id })));
+    }
+    if (actions.childNodes.length) row.appendChild(actions);
+    list.appendChild(row);
+  }
+  const doneIds = new Set(items.filter(item => item.status === 'done' && item.archiveId).map(item => item.archiveId));
+  if ([...doneIds].some(id => !lastQueueDoneIds.has(id))) {
+    void loadFastArchiveLibrary().catch(() => {});
+  }
+  lastQueueDoneIds = doneIds;
+}
+
+async function queueAdd(sourceUrl) {
+  const url = String(sourceUrl || '').trim();
+  if (!url) throw new Error('Введите ссылку на чат ChatGPT.');
+  const mode = $('queueAddMode').value;
+  await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode });
+  $('queueChatUrl').value = '';
+  setStatus('Чат добавлен в очередь. Режим можно изменить в его карточке.');
+}
+
+$('queueAddUrl').onclick = async () => {
+  const button = $('queueAddUrl');
+  button.disabled = true;
+  try { await queueAdd($('queueChatUrl').value); }
+  catch (error) { setStatus(error.message || String(error), true); }
+  finally { button.disabled = false; }
+};
+$('queueAddCurrent').onclick = async () => {
+  const button = $('queueAddCurrent');
+  button.disabled = true;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    await queueAdd(tab?.url || '');
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally { button.disabled = false; }
+};
+$('queueRun').onclick = async () => {
+  try {
+    await queueCall('ARCHIVER_QUEUE_ENABLE', { enabled: true });
+    startPolling();
+    setStatus('Очередь запущена. Максимум два независимых прохода одновременно.');
+  } catch (error) { setStatus(error.message || String(error), true); }
+};
+$('queueStop').onclick = async () => {
+  try {
+    await queueCall('ARCHIVER_QUEUE_ENABLE', { enabled: false });
+    setStatus('Новые задания не запускаются. Уже работающие проходы продолжаются.');
+  } catch (error) { setStatus(error.message || String(error), true); }
+};
+
 function render(data) {
   state = data || {};
   const job = state.job;
@@ -1025,6 +1232,7 @@ function render(data) {
       'Начало и конец основного архива отмечены. Оставьте начало видимым и нажмите «Собрать отмеченный диапазон». Этот режим не открывает копию и не ищет верх автоматически.';
   }
 
+  renderQueue(state.queue);
   renderCaptureState(job);
   if (Array.isArray(state.history)) renderHistory(state.history);
   renderUnfinishedPasses(state.unfinishedPasses || []);
@@ -1330,6 +1538,7 @@ async function getLiveState() {
   const nextState = {
     ...(state || {}),
     job: result.job || null,
+    queue: result.queue || state?.queue || null,
     unfinishedPasses: mergeLiveUnfinished(
       state?.unfinishedPasses || [],
       result.unfinishedPass || null
@@ -2404,6 +2613,8 @@ $('reloadExtension').addEventListener('click', () => {
     void hydrateSavedArchiveDetails().catch(error => setStatus(error.message || String(error), true));
     if (result?.linkedDoc?.url && !$('docUrl').value) $('docUrl').value = result.linkedDoc.url;
     if (result?.job && ['starting', 'running', 'paused'].includes(result.job.status)) startPolling();
+    if (result?.queue?.enabled || result?.queue?.workers?.some(worker =>
+      ['starting', 'running', 'paused', 'stopping'].includes(worker.status))) startPolling();
 
     void refreshUpdateNotice().catch(() => {});
     void showWhatsNewIfNeeded().catch(() => {});
