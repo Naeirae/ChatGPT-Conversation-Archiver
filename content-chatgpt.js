@@ -5286,9 +5286,13 @@ if (boundaryIsVisible(boundary)) {
       );
       // Only the worker may publish lastArchiveId after it validates the
       // result. Keep a rejected archive under its private key for recovery.
-      await chrome.storage.local.set({
-        ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId })
-      });
+      await withCaptureOperationTimeout(
+        chrome.storage.local.set({
+          ['archive:' + archiveId]: Object.assign({}, conversation, { id: archiveId })
+        }),
+        30000,
+        'Запись локального архива'
+      );
       await progress(
         'Этап 3/3: локальная запись завершена · подтверждаю архив…',
         messages.length,
