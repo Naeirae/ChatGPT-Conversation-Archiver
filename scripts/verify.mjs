@@ -141,7 +141,8 @@ try {
       !contentSource.includes('wheelDelta: 120') ||
       !contentSource.includes('smallPhysicalStepCanBridgeSingleTurn(beforeRefs, afterRefs, downwardStep)') ||
       !contentSource.includes("extra?.phase === 'finalizing'") ||
-      !contentSource.includes("strictFinalization ? 30000 : 12000")) {
+      !contentSource.includes("strictFinalization ? 30000 : 12000") ||
+      !contentSource.includes("'Запись локального архива'")) {
     fail('marked capture: small measured adjacency and bounded image/finalization progress are required');
   }
 
