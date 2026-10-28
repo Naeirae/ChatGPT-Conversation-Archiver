@@ -1128,8 +1128,23 @@ function renderQueue(queue) {
         ' · ' + Number(worker.count || 0) + ' сообщений' +
         (Number.isFinite(position) && worker.physicalScrollTop != null
           ? ' · ' + Math.round(position) + ' px' : '') +
+        (worker.draftCount
+          ? ' · черновик: ' + Number(worker.draftCount) : '') +
         (worker.message ? ' · ' + worker.message : '');
       row.appendChild(line);
+      if (worker.status === 'running' || worker.status === 'paused') {
+        const laneActions = document.createElement('div');
+        laneActions.className = 'queue-row-actions queue-lane-actions';
+        const pause = worker.status === 'running';
+        laneActions.appendChild(queueButton(
+          pause ? 'Пауза — этот поток' : 'Продолжить этот поток',
+          () => queueCall(
+            pause ? 'ARCHIVER_QUEUE_PAUSE' : 'ARCHIVER_QUEUE_RESUME',
+            { itemId: item.id, lane: worker.lane }
+          )
+        ));
+        row.appendChild(laneActions);
+      }
     }
     if (item.mode === 'split-chat' && item.status === 'queued') {
       const hint = document.createElement('div');
@@ -1166,8 +1181,10 @@ function renderQueue(queue) {
       actions.appendChild(stop);
     }
     if (!liveLanes.length && ['error', 'cancelled', 'done'].includes(item.status)) {
-      actions.appendChild(queueButton('Повторить', () =>
-        queueCall('ARCHIVER_QUEUE_RETRY', { itemId: item.id })));
+      actions.appendChild(queueButton(
+        item.status === 'done' ? 'Повторить' : 'Восстановить / повторить',
+        () => queueCall('ARCHIVER_QUEUE_RETRY', { itemId: item.id })
+      ));
     }
     if (actions.childNodes.length) row.appendChild(actions);
     list.appendChild(row);
