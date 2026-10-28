@@ -4003,6 +4003,7 @@
     if (!beforeRefs?.length || !afterRefs?.length) return false;
     if (beforeRefs.length !== 1 && afterRefs.length !== 1) return false;
     if (!scrollResult?.moved || scrollResult.direction !== 'down') return false;
+    if (scrollResult.before == null || scrollResult.after == null) return false;
     const before = Number(scrollResult.before);
     const after = Number(scrollResult.after);
     const step = after - before;
