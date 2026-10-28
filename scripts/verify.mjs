@@ -122,7 +122,7 @@ try {
   const legacyEmptyWindowGuard = contentSource.split('!beforeRefs.length || !afterRefs.length ||').length - 1;
   const measuredSingleTurnGuard = contentSource.includes(
     'if (!overlapping && !adjacent)'
-  ) && /measuredAdjacentScroll\\(\\s*physicalBefore,\\s*physicalAfter,\\s*downwardStep\\s*\\)/.test(contentSource);
+  ) && /measuredAdjacentScroll\(\s*physicalBefore,\s*physicalAfter,\s*downwardStep\s*\)/.test(contentSource);
   if (legacyEmptyWindowGuard !== 1 || !measuredSingleTurnGuard) {
     fail('traversal: missing viewport evidence cannot bypass legacy continuity or measured single-turn validation');
   }
@@ -142,7 +142,7 @@ try {
   // but a missing scroll measurement and multi-turn leaps still fail closed.
   if (!contentSource.includes('function measuredAdjacentScroll(') ||
       !contentSource.includes('wheelDelta: 120') ||
-      !/measuredAdjacentScroll\\(\\s*physicalBefore,\\s*physicalAfter,\\s*downwardStep\\s*\\)/.test(contentSource) ||
+      !/measuredAdjacentScroll\(\s*physicalBefore,\s*physicalAfter,\s*downwardStep\s*\)/.test(contentSource) ||
       !contentSource.includes("extra?.phase === 'finalizing'") ||
       !contentSource.includes("strictFinalization ? 30000 : 12000") ||
       !contentSource.includes("'Запись локального архива'")) {
@@ -242,7 +242,7 @@ try {
       !contentSource.includes('verifiedSnapshotEnd = await reachSnapshotEndWithoutCapture()') ||
       !contentSource.includes('verifiedFullStart = await reachTopWithoutCapture(') ||
       !contentSource.includes('verifiedMarkedStart = true') ||
-      !contentSource.includes('captureProof: (mode === \'full\' || mode === \'fragment\')') ||
+      !contentSource.includes("captureProof: (mode === 'full' || mode === 'fragment' ||") ||
       !contentSource.includes('if (!observedUpwardTravel)') ||
       !contentSource.includes("kind: isStrongMessageId(selectedFragment.end.id) ? 'stable' : 'signature'") ||
       !serviceWorkerSource.includes('const top = message.mode === \'full\' ? fullTopEvidence(') ||
