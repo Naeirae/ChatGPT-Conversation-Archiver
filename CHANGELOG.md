@@ -1177,3 +1177,11 @@ This project is pre-1.0. Entries describe repository changes; browser behavior i
 - structured run logs and incomplete drafts;
 - Windows ZIP updater iterations;
 - rich clipboard export and Google Docs physical paste.
+
+
+## Unreleased 0.4.77 — background debugger integration (2026-10-29)
+
+- Persistent Chrome Debugger focus emulation for background capture tabs, shared by physical scrolling and rendered-image fallback.
+- Independent serialized CDP ownership for two capture queue lanes and explicit lifecycle cleanup.
+- Fail closed on hidden/mismatched target pages, conflicting DevTools, or unexpected debugger detach.
+- Additional behavioral tests and source guards. Release remains pending browser acceptance in draft PR #55.
