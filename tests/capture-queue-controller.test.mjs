@@ -62,6 +62,7 @@ function fixture({
   };
   const chrome = {
     storage: { local: storage },
+    alarms: { async create() {} },
     tabs: {
       async query() { return [{ id: 1, windowId: 1, url: chat(987) }]; },
       async create(options) { return { id: nextTabId++, url: options.url }; },
