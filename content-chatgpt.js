@@ -4181,6 +4181,10 @@
     let revisitedSteps = 0;
     let forwardSteps = 0;
     let recoveryAttempts = 0;
+    // Genuine scroll movement inside an already-seen message must not erase
+    // the failed-seam budget. Only a NEW captured turn advances this frontier.
+    let recoveryCountFrontier = null;
+    let recoveriesAtSameCount = 0;
     const fingerprint = (sample, refs = []) => {
       const position = Number(sample?.top);
       const height = Number(sample?.scrollHeight);
@@ -4257,7 +4261,25 @@
         }
         return { forwardSteps, stationarySteps, revisitedSteps, verifiedMovement };
       },
-      beforeRecovery(sample, refs) {
+      beforeRecovery(sample, refs, capturedCount = null) {
+        // A large virtualized chat can repeatedly scroll down/up and keep
+        // raising the pixel high-water mark while never capturing a new turn.
+        // The older watchdog reset on each physical step, permitting hundreds
+        // of retries. Count only recovered *message* frontiers here.
+        if (Number.isFinite(Number(capturedCount)) && capturedCount != null) {
+          const currentCount = Number(capturedCount);
+          if (currentCount !== recoveryCountFrontier) {
+            recoveryCountFrontier = currentCount;
+            recoveriesAtSameCount = 0;
+          }
+          recoveriesAtSameCount++;
+          if (recoveriesAtSameCount > 4) {
+            throw new Error(
+              'Повторяется поиск одного и того же стыка без новых сообщений (' +
+              currentCount + '). Проход остановлен с сохранением черновика.'
+            );
+          }
+        }
         rememberStrongRefs(refs);
         const key = fingerprint(sample, refs);
         const repeats = (retries.get(key) || 0) + 1;
@@ -4277,7 +4299,8 @@
       metrics() {
         return {
           forwardSteps, stationarySteps, revisitedSteps,
-          recoveryAttempts, recoveriesWithoutAdvance
+          recoveryAttempts, recoveriesWithoutAdvance,
+          recoveriesAtSameCount
         };
       }
     };
@@ -4435,7 +4458,7 @@
         adjacent: measuredAdjacentScroll(physicalBefore, physicalAfter, wheel)
       });
       if (!beforeRefs.length || !afterRefs.length || !verifiedOverlap) {
-        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs);
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, map.size);
         await progress(
           'Восстанавливаю стык: попытка ' + retry.recoveriesWithoutAdvance +
             ' без подтверждённого продвижения…',
@@ -4636,7 +4659,7 @@ if (boundaryIsVisible(boundary)) {
         adjacent, overlapping
       });
       if (!overlapping && !adjacent) {
-        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs);
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, map.size);
         await progress(
           'Стык не подтверждён · попытка восстановления ' +
             retry.recoveriesWithoutAdvance +
@@ -4849,7 +4872,7 @@ if (boundaryIsVisible(boundary)) {
         watchdog.noteStep({ before, after, beforeRefs, afterRefs,
           overlapping, adjacent });
         if (!overlapping && !adjacent) {
-          watchdog.beforeRecovery(before, beforeRefs);
+          watchdog.beforeRecovery(before, beforeRefs, witnesses.length);
           throw new Error('Предварительный проход потерял непрерывность. ' +
             'Нельзя выбирать середину по неполному диапазону.');
         }
