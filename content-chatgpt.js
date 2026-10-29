@@ -5066,7 +5066,10 @@ if (boundaryIsVisible(boundary)) {
             timeoutMs: 20 * 60 * 1000
           });
         } else if (mode === 'fragment') {
-          if (options.seekMarkedStart && state.queueCapture) {
+          if (options.seekMarkedStart) {
+            // Both a single background copy and a queued lane must locate
+            // the same immutable user mark without requiring that the user
+            // keeps the source tab visible.
             await seekQueueMarkedStart(selectedFragment.start);
           }
           // Manual range is authoritative. Do not search upward or visit the
@@ -5079,7 +5082,7 @@ if (boundaryIsVisible(boundary)) {
           });
           if (!visibleStart) {
             throw new Error(
-              'Отмеченное начало сейчас не видно. Прокрутите текущую вкладку к отметке «Начало» и запустите сбор снова.'
+              'Отмеченное начало не найдено в рабочей вкладке. Диапазон не был сохранён с пропуском.'
             );
           }
           verifiedMarkedStart = true;
