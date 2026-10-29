@@ -55,7 +55,8 @@ function fixture({
         data.set(key, structuredClone(value));
       }
     },
-    async getBytesInUse(key) { return data.has(key) ? JSON.stringify(data.get(key)).length : 0; }
+    async getBytesInUse(key) { return data.has(key) ? JSON.stringify(data.get(key)).length : 0; },
+    async remove(key) { data.delete(key); }
   };
   const chrome = {
     storage: { local: storage },
@@ -89,6 +90,7 @@ function fixture({
     },
     windows: {
       async update() {},
+      async remove() {},
       async create(options) {
         const created = {
           id: nextWindowId++,
@@ -650,4 +652,58 @@ test('both workers begin DOM hydration concurrently instead of waiting for each 
   assert.equal(f.backgroundWindows.length,2);
   release();
   await f.settled(s => s.workers.every(w => w.status === 'running'));
+});
+
+test('automatic split first launches only a background planner with two user markers', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl = chat(85);
+  const key = 'archiverFragmentMarkers:' + new URL(sourceUrl).origin + new URL(sourceUrl).pathname;
+  await f.storage.set({
+    [key]: { start:markers.start, end:markers.end }
+  });
+  await f.controller.enqueue({ sourceUrl, mode:'split-chat' });
+  await f.controller.enable(true);
+  const planned = await f.settled(state =>
+    state.workers.length===1 && state.workers[0].status==='running');
+  assert.equal(planned.workers[0].lane,'planner');
+  assert.equal(f.launches[0].opts.mode,'split-plan');
+  assert.equal(planned.items[0].status,'running');
+  const job = planned.workers[0];
+  const result = await f.controller.planned({
+    jobId:job.jobId,startId:markers.start.id,endId:markers.end.id,
+    middle:markers.middle,visitedCount:8
+  },job.captureTabId);
+  assert.equal(result.ok,true);
+  const next = await f.settled(state => state.workers.length===2 &&
+    state.workers.every(worker => worker.status==='running'));
+  assert.equal(next.items[0].captureRange.middle.id,markers.middle.id);
+  assert.deepEqual(next.workers.map(w=>w.lane).sort(),['first','second']);
+  assert.equal(f.backgroundWindows.length,3);
+  assert.equal(f.launches.length,3);
+});
+
+test('split planner cannot alter the original marked boundaries or forge its sender', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl = chat(86);
+  const key = 'archiverFragmentMarkers:' + new URL(sourceUrl).origin + new URL(sourceUrl).pathname;
+  await f.storage.set({ [key]: { start:markers.start,end:markers.end } });
+  await f.controller.enqueue({ sourceUrl,mode:'split-chat' });
+  await f.controller.enable(true);
+  const state = await f.settled(s=>s.workers.length===1&&s.workers[0].status==='running');
+  const planner=state.workers[0];
+  await assert.rejects(
+    () => f.controller.planned({
+      jobId:planner.jobId,startId:markers.start.id,endId:'data-message-id:wrong',
+      middle:markers.middle
+    },planner.captureTabId), /исходный диапазон/
+  );
+  await assert.rejects(
+    () => f.controller.planned({
+      jobId:planner.jobId,startId:markers.start.id,endId:markers.end.id,
+      middle:markers.middle
+    },planner.captureTabId+1), /не из его рабочей вкладки/
+  );
+  assert.equal((await f.controller.getState()).workers[0].lane,'planner');
 });
