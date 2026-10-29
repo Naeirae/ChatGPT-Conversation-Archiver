@@ -1769,7 +1769,8 @@ async function openBoundaryMarkingTab() {
 
 async function ensureChatGptContentScript(tabId, jobId, options = {}) {
   const payload = {
-    type: 'ARCHIVER_START_CAPTURE',
+    type: options.mode === 'split-plan'
+      ? 'ARCHIVER_START_SPLIT_PLAN' : 'ARCHIVER_START_CAPTURE',
     jobId,
     mode: options.mode || 'full',
     resumeAnchorId: options.resumeAnchorId || '',
@@ -6574,6 +6575,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return { ok: false, error: 'Сборщик останавливается.' };
       }
       switch (message.type) {
+        case 'ARCHIVER_SPLIT_PLAN_READY':
+          return await queueController.planned(message, tabId);
         case 'ARCHIVER_CAPTURE_PROGRESS':
           return await queueController.progress(message, tabId);
         case 'ARCHIVER_CHECKPOINT_SAVED':
