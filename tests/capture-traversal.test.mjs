@@ -402,3 +402,61 @@ test('forced checkpoint is allowed despite stationary message count', () => {
   )();
   assert.equal(due({ at: 1000, count: 3 }, 1100, 3, 30000, 35, true), true);
 });
+
+
+test('the logical wrapper of a long message stays visible after its first Markdown block leaves view', () => {
+  const fakeDocument={
+    documentElement:{clientWidth:1200,clientHeight:900},
+    body:{},scrollingElement:{}
+  };
+  const fakeWindow={innerWidth:1200,innerHeight:900};
+  const scroller={getBoundingClientRect:()=>({
+    left:0,right:1000,top:80,bottom:750
+  })};
+  const turn={
+    isConnected:true,
+    getBoundingClientRect:()=>({left:50,right:900,top:-1900,bottom:2700})
+  };
+  const markdown={
+    getBoundingClientRect:()=>({left:50,right:900,top:-1900,bottom:-100})
+  };
+  const intersects=(rect,width,height,scrollport)=>{
+    const top=Math.max(0,scrollport?.top??0);
+    const bottom=Math.min(height,scrollport?.bottom??height);
+    return rect.right>0&&rect.left<width&&rect.bottom>top&&rect.top<bottom;
+  };
+  const isVisible=new Function('contentRoot','roleOf','findScrollContainer',
+    'rectIntersectsCaptureViewport','window','document',
+    extract('turnIntersectsCaptureViewport')+'; return turnIntersectsCaptureViewport;'
+  )(()=>markdown,()=>'assistant',()=>scroller,intersects,fakeWindow,fakeDocument);
+  assert.equal(isVisible(turn),true,
+    'The message is still visible though its first Markdown block is not');
+  turn.getBoundingClientRect=()=>({left:50,right:900,top:900,bottom:1400});
+  assert.equal(isVisible(turn),false,
+    'A fully offscreen message must never form a false overlap');
+});
+
+test('logical turn visibility also respects a nested ChatGPT scrollport', () => {
+  const fakeDocument={
+    documentElement:{clientWidth:1200,clientHeight:900},
+    body:{},scrollingElement:{}
+  };
+  const scroller={getBoundingClientRect:()=>({
+    left:0,right:1000,top:100,bottom:600
+  })};
+  const turn={isConnected:true,getBoundingClientRect:()=>({
+    left:20,right:800,top:650,bottom:840
+  })};
+  const markdown={getBoundingClientRect:()=>({
+    left:20,right:800,top:-190,bottom:-20
+  })};
+  const intersects=(rect,width,height,scrollport)=>
+    rect.right>0&&rect.left<width&&rect.bottom>(scrollport?.top??0)&&
+    rect.top<Math.min(height,scrollport?.bottom??height);
+  const visible=new Function('contentRoot','roleOf','findScrollContainer',
+    'rectIntersectsCaptureViewport','window','document',
+    extract('turnIntersectsCaptureViewport')+'; return turnIntersectsCaptureViewport;'
+  )(()=>markdown,()=>'assistant',()=>scroller,intersects,
+    {innerWidth:1200,innerHeight:900},fakeDocument);
+  assert.equal(visible(turn),false,'Wrapper outside scrollport must be excluded');
+});
