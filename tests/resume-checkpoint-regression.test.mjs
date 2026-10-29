@@ -25,3 +25,10 @@ test('a shorter or different resumed prefix cannot overwrite stored messages', (
   assert.match(block.slice(guard,write), /oldPrefix\.some\(\(oldMessage, index\)/);
   assert.match(block.slice(guard,write), /sameNavigationRef\(navigationRef\(oldMessage\), navigationRef\(draft\.messages\[index\]\)\)/);
 });
+
+test('a failed resumed pass does not replace a larger checkpoint', () => {
+  const failure = source.slice(source.indexOf("if (!draftId && mode !== 'images-draft'"),
+    source.indexOf('const fallbackDraftIds'));
+  assert.match(failure, /previousCheckpoint\?\.messages\?\.length > draft\.messages\.length/);
+  assert.match(failure, /draftCount = previousCheckpoint\.messages\.length/);
+});
