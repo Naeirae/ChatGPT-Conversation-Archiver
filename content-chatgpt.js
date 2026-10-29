@@ -4748,14 +4748,16 @@ if (boundaryIsVisible(boundary)) {
             if (id !== start.id) continue;
             started = true;
           }
-          if (!id || seen.has(id)) continue;
-          // Weak DOM/index identities may be observed during the scan, but
-          // must never become the midpoint used to join two archives.
-          seen.add(id);
-          witnesses.push({
-            id, role: roleOf(turn) || '',
-            signature: turnTextSignature(turn)
-          });
+          if (!id) continue;
+          // Once the immutable end is encountered, turns after it can never
+          // become evidence for selecting the middle of the user's range.
+          if (!seen.has(id)) {
+            seen.add(id);
+            witnesses.push({
+              id, role: roleOf(turn) || '',
+              signature: turnTextSignature(turn)
+            });
+          }
           if (id === end.id) break;
         }
       };
