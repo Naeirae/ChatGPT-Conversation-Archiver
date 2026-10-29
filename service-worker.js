@@ -53,6 +53,7 @@ import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
 import { createCaptureQueueController } from './lib/capture-queue-controller.mjs';
 import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
 import { freezeTransition } from './lib/capture-freeze-policy.mjs';
+import { shouldInspectCapture, captureStallEvidence, stallDiagnosticText } from './lib/capture-health-diagnostics.mjs';
 
 const backgroundFocus = createBackgroundFocusManager(chrome);
 const cancelledStartupJobIds = new Set();
@@ -1402,6 +1403,33 @@ async function appendRunLog(patch, entry = null) {
   return setJob({ ...(patch || {}), log: log.slice(-40) });
 }
 
+// This alarm is diagnostic, not a watchdog that kills a running collector.
+// A long single message or slow image may produce no new message count.
+// Never infer failure from missing progress alone; record what was observable.
+async function inspectStalledSingleCapture() {
+  await captureRuntimeReady;
+  const job = await getJob();
+  const now = Date.now();
+  if (!shouldInspectCapture(job, now)) return;
+  const tab = job.captureTabId != null
+    ? await chrome.tabs.get(job.captureTabId).catch(() => null) : null;
+  const health = await probeLiveCapture(job, 2500);
+  if (tab?.frozen && job.captureTabId != null &&
+      backgroundFocus.details(job.captureTabId)?.jobId === job.jobId) {
+    await backgroundFocus.awakenFrozen(job.captureTabId, job.jobId).catch(() => {});
+  }
+  const current = await getJob();
+  if (current?.jobId !== job.jobId ||
+      !shouldInspectCapture(current, Date.now())) return;
+  const evidence = captureStallEvidence(current, tab, health, Date.now());
+  const message = stallDiagnosticText(evidence);
+  await appendRunLog({ lastStallDiagnosticAt: Date.now() }, {
+    level: 'warn', code: 'CAPTURE_NO_COUNT_ADVANCE',
+    message, phase: current.phase || '',
+    count: Number(current.count || 0)
+  });
+}
+
 async function getRunHistory() {
   const result = await chrome.storage.local.get(RUN_HISTORY_KEY);
   return Array.isArray(result[RUN_HISTORY_KEY]) ? result[RUN_HISTORY_KEY] : [];
@@ -1631,6 +1659,8 @@ function formatRunLog(job) {
   if (job.startedAt) lines.push('startedAt: ' + timestamp(job.startedAt));
   if (job.updatedAt) lines.push('lastJobUpdateAt: ' + timestamp(job.updatedAt));
   if (job.lastProgressAt) lines.push('lastProgressAt: ' + timestamp(job.lastProgressAt));
+  if (job.lastCountAdvanceAt) lines.push('lastCountAdvanceAt: ' + timestamp(job.lastCountAdvanceAt));
+  if (job.lastStallDiagnosticAt) lines.push('lastStallDiagnosticAt: ' + timestamp(job.lastStallDiagnosticAt));
   if (job.lastPhysicalScrollAt) lines.push('lastPhysicalScrollAt: ' + timestamp(job.lastPhysicalScrollAt));
   if (job.lastPhysicalActivity) lines.push('lastPhysicalActivity: ' + job.lastPhysicalActivity);
   if (job.lastScrollBefore != null || job.lastScrollAfter != null) {
@@ -6989,11 +7019,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // An in-flight progress request may complete after the pause handshake.
         // Acknowledge it without undoing the pause or killing the collector.
         if (job.status === 'paused') return { ok: true, paused: true };
+        const countAdvance = Number(message.patch?.count ?? job.count ?? 0) > Number(job.count || 0);
+        const evidencePatch = {
+          lastProgressAt: Date.now(),
+          ...(countAdvance ? { lastCountAdvanceAt: Date.now() } : {})
+        };
         const phaseChanged = message.patch?.phase && message.patch.phase !== job.phase;
         const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
         if (notable) {
           await appendRunLog(
-            { ...message.patch, lastProgressAt: Date.now(),
+            { ...message.patch, ...evidencePatch,
               tabId: job.sourceTabId ?? job.tabId },
             {
               level: 'info',
@@ -7008,7 +7043,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           );
         } else {
-          await setJob({ ...message.patch, lastProgressAt: Date.now(),
+          await setJob({ ...message.patch, ...evidencePatch,
             tabId: job.sourceTabId ?? job.tabId });
         }
         return { ok: true };
@@ -7459,6 +7494,9 @@ chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm?.name === CAPTURE_QUEUE_ALARM) {
     queueRuntimeReady.then(() => queueController.tick()).catch(error =>
       logTabListenerError('queue-health', error)
+    );
+    void inspectStalledSingleCapture().catch(error =>
+      logTabListenerError('single-capture-health', error)
     );
     return;
   }
