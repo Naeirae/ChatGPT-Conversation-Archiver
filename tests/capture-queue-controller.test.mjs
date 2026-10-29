@@ -27,10 +27,12 @@ function fixture({
   const archives = new Map();
   const published = [];
   const launches = [];
+  const backgroundWindows = [];
   const cancelledMessages = [];
   const removedTabs = [];
   const pausedJobs = new Set();
   let nextTabId = 70;
+  let nextWindowId = 200;
   const storage = {
     async get(keys) {
       if (keys == null) return Object.fromEntries(
@@ -85,11 +87,27 @@ function fixture({
         return { ok: true };
       }
     },
-    windows: { async update() {} }
+    windows: {
+      async update() {},
+      async create(options) {
+        const created = {
+          id: nextWindowId++,
+          tabs: [{ id: nextTabId++, url: options.url }]
+        };
+        backgroundWindows.push({ ...options, windowId: created.id, tabId: created.tabs[0].id });
+        return created;
+      }
+    }
   };
   const dependencies = {
     isConversationUrl: url => /^https:\/\/chatgpt\.com\/c\//.test(url),
     legacyCaptureActive: legacyActive,
+    createUnfocusedCaptureWindow: async sourceUrl => {
+      const created = await chrome.windows.create({
+        url: sourceUrl, focused: false, type: 'normal', state: 'normal'
+      });
+      return { tab: created.tabs[0], windowId: created.id };
+    },
     waitForChatTabComplete: async () => ({}),
     waitForChatDomReady: waitForDomReady,
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
@@ -111,7 +129,7 @@ function fixture({
   }
   return {
     controller, chrome, storage, data, archives, published, launches, settled,
-    cancelledMessages, removedTabs,
+    backgroundWindows, cancelledMessages, removedTabs,
     failNextDoneStateWrite,
     freshController: () => createCaptureQueueController(chrome, dependencies)
   };
@@ -598,4 +616,38 @@ test('a stranded starting slot with no working tab is retired without touching d
   assert.equal(state.items[0].status,'error');
   assert.equal(state.workers[0].status,'error');
   assert.deepEqual((await f.storage.get('draft:draft-old'))['draft:draft-old'],previousDraft);
+});
+
+test('two queue collectors open their own visible unfocused windows and do not switch the user tab', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({ sourceUrl: chat(81), mode: 'two-chats' });
+  await f.controller.enqueue({ sourceUrl: chat(82), mode: 'two-chats' });
+  await f.controller.enable(true);
+  const state = await f.settled(s => s.workers.length === 2 &&
+    s.workers.every(w => w.status === 'running'));
+  assert.equal(f.backgroundWindows.length, 2);
+  assert.ok(f.backgroundWindows.every(w => w.focused === false &&
+    w.state === 'normal' && w.type === 'normal'));
+  assert.notEqual(state.workers[0].captureWindowId, state.workers[1].captureWindowId);
+  assert.equal(state.workers[0].captureWindowId, f.backgroundWindows[0].windowId);
+  assert.equal(state.workers[1].captureWindowId, f.backgroundWindows[1].windowId);
+});
+
+test('both workers begin DOM hydration concurrently instead of waiting for each other', async () => {
+  let entered = 0;
+  let release;
+  const block = new Promise(resolve => { release = resolve; });
+  const f = fixture({
+    waitForDomReady: async () => { entered++; await block; }
+  });
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({ sourceUrl: chat(83), mode:'two-chats' });
+  await f.controller.enqueue({ sourceUrl: chat(84), mode:'two-chats' });
+  await f.controller.enable(true);
+  const started = await f.settled(() => entered === 2);
+  assert.equal(started.workers.length, 2);
+  assert.equal(f.backgroundWindows.length,2);
+  release();
+  await f.settled(s => s.workers.every(w => w.status === 'running'));
 });
