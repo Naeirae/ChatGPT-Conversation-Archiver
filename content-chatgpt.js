@@ -4131,18 +4131,31 @@
     };
   }
 
-  function measuredAdjacentScroll(before, after, transport, maxPixels = 200) {
-    // A message may span many screens. Chronological progress is physical
-    // displacement in the SAME scroll container, not a rising message count
-    // or a fresh message ID in each viewport.
+  function measuredAdjacentScroll(before, after, transport, maxPixels = Infinity) {
+    // Long ChatGPT messages can occupy several viewports without adding a
+    // new turn ID. 200px / 35%-viewport was too small for a real Chrome wheel
+    // step and falsely treated same-scroller scrolling as a missing seam.
+    //
+    // A measured down-step shorter than 75% of BOTH scrollports guarantees
+    // physical viewport overlap when the layout has not rebased. Only accept
+    // it from the same container with nearly unchanged document geometry.
+    // A renderer saying "moved: false" cannot override measured DOM movement:
+    // the background SW and content script may have sampled different roots.
     if (!before?.element || !after?.element || before.element !== after.element) return false;
-    if (!transport?.moved || transport.direction !== 'down') return false;
+    if (transport?.direction !== 'down' || transport?.ok === false) return false;
     const delta = Number(after.top) - Number(before.top);
-    const limit = Math.min(maxPixels, Math.max(20, Number(before.clientHeight) * 0.35));
-    return Number.isFinite(delta) && delta >= 2 && delta <= limit &&
-      Number.isFinite(before.scrollHeight) && Number.isFinite(after.scrollHeight) &&
-      before.scrollHeight > before.clientHeight &&
-      after.scrollHeight > after.clientHeight;
+    const firstHeight = Number(before.clientHeight);
+    const secondHeight = Number(after.clientHeight);
+    const firstTotal = Number(before.scrollHeight);
+    const secondTotal = Number(after.scrollHeight);
+    if (![delta, firstHeight, secondHeight, firstTotal, secondTotal].every(Number.isFinite) ||
+        firstHeight <= 0 || secondHeight <= 0 ||
+        firstTotal <= firstHeight || secondTotal <= secondHeight) return false;
+    const overlapLimit = Math.floor(Math.min(firstHeight, secondHeight) * 0.75);
+    const stableHeight = Math.abs(secondTotal - firstTotal) <=
+      Math.max(12, Math.floor(Math.min(firstHeight, secondHeight) * 0.06));
+    return stableHeight && delta >= 2 && delta <=
+      Math.min(Math.max(2, Number(maxPixels) || Infinity), overlapLimit);
   }
 
   function createContinuityWatchdog({
