@@ -2317,8 +2317,10 @@ async function startCapture({
       const opened = await createUnfocusedCaptureWindow(inspection.href);
       captureTab = opened.tab;
       captureTab = await waitForChatTabComplete(captureTab.id);
-      domProbe = await waitForChatDomReady(captureTab.id, 45000);
+      // Focus emulation must precede ChatGPT DOM hydration; a hidden tab
+      // may never render its virtualized turns until CDP emulates focus.
       await backgroundFocus.enable(captureTab.id, jobId, inspection.href);
+      domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
 
     const modeLabel = mode === 'fragment' ? 'сбор архива по ручным отметкам' : mode === 'reconcile'
