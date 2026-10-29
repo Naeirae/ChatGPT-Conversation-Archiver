@@ -54,6 +54,28 @@ import { createCaptureQueueController } from './lib/capture-queue-controller.mjs
 import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
 
 const backgroundFocus = createBackgroundFocusManager(chrome);
+
+// A restarted MV3 worker loses in-memory CDP ownership, not the saved job.
+// Restore only after the original content script proves it is still running
+// in the exact tab/job. Never attach to an unrelated foreground tab.
+async function ensureCaptureDebuggerSession(tabId, jobId, sourceUrl) {
+  const active = backgroundFocus.details(tabId);
+  if (active) {
+    if (active.jobId !== jobId ||
+        conversationKey(active.expectedUrl || '') !== conversationKey(sourceUrl || '')) {
+      throw new Error('Отладчик принадлежит другому проходу.');
+    }
+    if (active.closing) throw new Error('Отладчик рабочего прохода завершается.');
+    return { ok: true, alreadyAttached: true };
+  }
+  const health = await chrome.tabs.sendMessage(tabId, {
+    type: 'ARCHIVER_CAPTURE_HEALTH', jobId
+  }).catch(() => null);
+  if (!health?.ok || health.jobId !== jobId || health.running !== true) {
+    throw new Error('После перезапуска фонового процесса рабочий сборщик не подтвердил активность. Черновик сохранён.');
+  }
+  return backgroundFocus.enable(tabId, jobId, sourceUrl);
+}
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const CAPTURE_QUEUE_ALARM = 'archiver-capture-queue-health';
 const RUN_HISTORY_KEY = 'captureRunHistory';
@@ -6562,6 +6584,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (physicalTypes.has(message.type) && worker.status === 'stopping') {
         return { ok: false, error: 'Сборщик останавливается.' };
       }
+      if (physicalTypes.has(message.type)) {
+        try {
+          await ensureCaptureDebuggerSession(tabId, worker.jobId, worker.sourceUrl);
+        } catch (error) {
+          await queueController.detached(worker.jobId, tabId,
+            error?.message || String(error));
+          return { ok: false, error: error?.message || String(error) };
+        }
+        const latest = await queueController.authorized(worker.jobId, tabId);
+        if (!latest || !['starting', 'running'].includes(latest.status)) {
+          await backgroundFocus.release(tabId, worker.jobId);
+          return { ok: false, error: 'Фоновый проход остановлен до физической операции.' };
+        }
+      }
       switch (message.type) {
         case 'ARCHIVER_SPLIT_PLAN_READY':
           return await queueController.planned(message, tabId);
@@ -6611,8 +6647,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const tabId = sender?.tab?.id;
         if (tabId == null) throw new Error('Не удалось определить вкладку с картинкой.');
         const job = await getJob();
-        if (job?.captureTabId != null && job.captureTabId !== tabId) {
-          throw new Error('Картинка пришла не из вкладки текущего сбора.');
+        if (!job || job.jobId !== message.jobId ||
+            !['starting', 'running'].includes(job.status) || job.captureTabId !== tabId) {
+          throw new Error('Картинка пришла не из активной вкладки текущего сбора.');
+        }
+        if (job.captureTarget === 'copy') {
+          await ensureCaptureDebuggerSession(tabId, job.jobId, job.sourceUrl);
         }
         return await captureRenderedImageForContent(
           tabId,
@@ -6923,22 +6963,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
         }
 
-        // A successful physical-scroll request proves that the collector is
-        // alive, but persisting that proof on every wheel step is expensive on
-        // very long chats. Store a heartbeat at most once every 15 seconds.
-        const now = Date.now();
-        if (now - Number(job.lastHeartbeatAt || job.updatedAt || 0) >= 15000) {
-          await setJob({
-            lastHeartbeatAt: now,
-            lastPhysicalActivity: 'scroll'
-          });
+        if (job.captureTarget === 'copy') {
+          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         }
-        return await physicalScrollTab(
+        const scroll = await physicalScrollTab(
           job.captureTabId,
           message.direction,
           message.bursts,
           message.wheelDelta
         );
+        // Never store an optimistic heartbeat before the wheel has moved
+        // the actual ChatGPT viewport or established a verified edge.
+        const now = Date.now();
+        if (scroll?.ok && (scroll.moved || scroll.observedEdge) &&
+            now - Number(job.lastHeartbeatAt || job.updatedAt || 0) >= 15000) {
+          await setJob({ lastHeartbeatAt: now,
+            lastPhysicalActivity: scroll.moved ? 'scroll-moved' : 'scroll-edge' });
+        }
+        return scroll;
       }
       case 'ARCHIVER_PHYSICAL_CLICK': {
         const job = await getJob();
@@ -6949,6 +6991,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое нажатие разрешено только вкладке текущего сбора.' };
+        }
+        if (job.captureTarget === 'copy') {
+          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         }
         return await physicalClickChatTab(job.captureTabId, message.point || {});
       }
@@ -6961,6 +7006,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const senderTabId = sender?.tab?.id;
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое копирование разрешено только вкладке текущего сбора.' };
+        }
+        if (job.captureTarget === 'copy') {
+          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         }
         return await physicalCopyChatSelection(job.captureTabId);
       }
@@ -7147,11 +7195,15 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.url) void backgroundFocus.release(tabId).catch(() => {});
+  const managed = backgroundFocus.details(tabId);
+  if (managed && changeInfo.url &&
+      conversationKey(changeInfo.url) !== conversationKey(managed.expectedUrl || '')) {
+    void backgroundFocus.release(tabId, managed.jobId).catch(() => {});
+  }
   (async () => {
   await captureRuntimeReady;
   await queueRuntimeReady;
-  await queueController.tabNavigated(tabId, tab.url || changeInfo.url || '');
+  await queueController.tabNavigated(tabId, changeInfo.url || tab.url || '');
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
