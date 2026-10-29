@@ -2345,6 +2345,9 @@ async function startCapture({
   try {
     if (captureTarget === 'current') {
       captureTab = await chrome.tabs.get(sourceTab.id);
+      // The current tab must also keep collecting after the user switches.
+      // Persist CDP focus for the whole job instead of attaching per wheel.
+      await backgroundFocus.enable(captureTab.id, jobId, inspection.href);
       domProbe = await waitForChatDomReady(sourceTab.id, 15000);
     } else {
       // The historical foreground warmup worked before other tabs started
@@ -2543,7 +2546,7 @@ async function startCapture({
       }).catch(() => {});
     }
 
-    if (captureTarget === 'copy' && failedCaptureTabId != null) {
+    if (failedCaptureTabId != null) {
       await backgroundFocus.release(failedCaptureTabId, jobId);
     }
     if (captureTarget === 'copy' && failedCaptureTabId != null && !collectorStarted) {
@@ -2671,7 +2674,7 @@ async function cancelCapture() {
     }).catch(() => {});
   }
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+  if (job.captureTabId != null) {
     await backgroundFocus.release(job.captureTabId, job.jobId);
   }
   await recordRunHistory(next);
@@ -2976,7 +2979,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     count: Number(job.count || 0)
   });
   await recordRunHistory(next);
-  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+  if (job.captureTabId != null) {
     await backgroundFocus.release(job.captureTabId, jobId);
   }
   if (autoRecoveryEligible) {
@@ -3943,7 +3946,7 @@ async function handleCaptureComplete(message) {
     await removeDraftRecoveryTab(draftId).catch(() => {});
   }
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+  if (job.captureTabId != null) {
     await backgroundFocus.release(job.captureTabId, job.jobId);
   }
 
@@ -6718,9 +6721,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             !['starting', 'running'].includes(job.status) || job.captureTabId !== tabId) {
           throw new Error('Картинка пришла не из активной вкладки текущего сбора.');
         }
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(tabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(tabId, job.jobId, job.sourceUrl);
         return await captureRenderedImageForContent(
           tabId,
           message.rect || {},
@@ -7032,9 +7033,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
         }
 
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         const scroll = await physicalScrollTab(
           job.captureTabId,
           message.direction,
@@ -7071,9 +7070,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое нажатие разрешено только вкладке текущего сбора.' };
         }
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         return await physicalClickChatTab(job.captureTabId, message.point || {});
       }
       case 'ARCHIVER_PHYSICAL_COPY_SELECTION': {
@@ -7086,9 +7083,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое копирование разрешено только вкладке текущего сбора.' };
         }
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         return await physicalCopyChatSelection(job.captureTabId);
       }
       case 'ARCHIVER_CAPTURE_FAILED': {
