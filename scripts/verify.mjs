@@ -1216,6 +1216,8 @@ const focusSource = await readFile('lib/background-focus-manager.mjs', 'utf8');
 const backgroundWorkerSource = await readFile('service-worker.js', 'utf8');
 const queueSource = await readFile('lib/capture-queue-controller.mjs', 'utf8');
 if (!focusSource.includes('Emulation.setFocusEmulationEnabled') ||
+    !focusSource.includes('Page.setWebLifecycleState') ||
+    !backgroundWorkerSource.includes('backgroundFocus.awakenFrozen(tabId, owned.jobId)') ||
     !focusSource.includes('async function withDebugger(') ||
     !backgroundWorkerSource.includes('backgroundFocus.withDebugger(tabId') ||
     !backgroundWorkerSource.includes('backgroundFocus.enable(captureTab.id') ||
