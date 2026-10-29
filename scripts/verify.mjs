@@ -1282,13 +1282,14 @@ for (const required of [
   }
 }
 
-if (!contentSource.includes('recoveriesAtSameCount > 4') ||
-    !contentSource.includes('beforeRefs, map.size') ||
-    !contentSource.includes('beforeRefs, witnesses.length')) {
+const longSeamSource = await readFile('content-chatgpt.js', 'utf8');
+if (!longSeamSource.includes('recoveriesAtSameCount > 4') ||
+    !longSeamSource.includes('beforeRefs, map.size') ||
+    !longSeamSource.includes('beforeRefs, witnesses.length')) {
   fail('continuity: backtracking must not silently reset the same-message seam budget');
 }
-if (!serviceWorkerSource.includes('Скрипт сбора уже не работает; пауза невозможна') ||
-    !serviceWorkerSource.includes('Скрипт сбора завершился, но интерфейс')) {
+if (!diagnosticSource.includes('Скрипт сбора уже не работает; пауза невозможна') ||
+    !diagnosticSource.includes('Скрипт сбора завершился, но интерфейс')) {
   fail('capture lifecycle: stale worker status must not show an impossible pause');
 }
 
