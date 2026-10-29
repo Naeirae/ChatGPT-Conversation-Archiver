@@ -1627,6 +1627,17 @@ function formatRunLog(job) {
   lines.push('status: ' + (job.status || ''));
   lines.push('phase: ' + (job.phase || ''));
   lines.push('count: ' + Number(job.count || 0));
+  const timestamp = value => Number(value) ? new Date(Number(value)).toISOString() : '';
+  if (job.startedAt) lines.push('startedAt: ' + timestamp(job.startedAt));
+  if (job.updatedAt) lines.push('lastJobUpdateAt: ' + timestamp(job.updatedAt));
+  if (job.lastProgressAt) lines.push('lastProgressAt: ' + timestamp(job.lastProgressAt));
+  if (job.lastPhysicalScrollAt) lines.push('lastPhysicalScrollAt: ' + timestamp(job.lastPhysicalScrollAt));
+  if (job.lastPhysicalActivity) lines.push('lastPhysicalActivity: ' + job.lastPhysicalActivity);
+  if (job.lastScrollBefore != null || job.lastScrollAfter != null) {
+    lines.push('lastScrollPositions: ' + String(job.lastScrollBefore ?? '?') +
+      ' -> ' + String(job.lastScrollAfter ?? '?'));
+  }
+  if (job.tabFrozen != null) lines.push('tabFrozen: ' + Boolean(job.tabFrozen));
   if (job.draftCount) lines.push('draftCount: ' + Number(job.draftCount || 0));
   if (job.archiveId) lines.push('archiveId: ' + job.archiveId);
   if (job.message) lines.push('message: ' + job.message);
@@ -1642,10 +1653,23 @@ function formatRunLog(job) {
 
 async function formatDiagnosticLog() {
   const job = await getJob();
-  const rows = (await chrome.storage.local.get('archiverWorkerErrors')).archiverWorkerErrors || [];
-  return formatRunLog(job) + '\n\n=== WORKER ERRORS ===\n' + (rows.length
-    ? rows.map(item => '[' + new Date(item.at).toISOString() + '] ' + item.source + '\n' + item.message).join('\n\n')
-    : 'Нет записанных ошибок фонового процесса.');
+  const raw = (await chrome.storage.local.get('archiverWorkerErrors')).archiverWorkerErrors || [];
+  const rows = Array.isArray(raw) ? raw : [];
+  const startedAt = Number(job?.startedAt || 0);
+  const finishedAt = Number(job?.finishedAt || Date.now());
+  const matching = startedAt
+    ? rows.filter(item => Number(item?.at || 0) >= startedAt &&
+        Number(item?.at || 0) <= finishedAt)
+    : [];
+  const earlierCount = rows.length - matching.length;
+  return formatRunLog(job) + '\n\n=== WORKER ERRORS DURING THIS RUN ===\n' +
+    (matching.length
+      ? matching.map(item => '[' + new Date(item.at).toISOString() + '] ' +
+          item.source + '\n' + item.message).join('\n\n')
+      : 'Ошибок фонового процесса за время этого запуска не зарегистрировано.') +
+    (earlierCount > 0
+      ? '\n\nHistorical worker errors from other runs (not attributed to this job): ' + earlierCount
+      : '');
 }
 
 async function cleanupTemporaryBaseline(job) {
@@ -6968,7 +6992,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
         if (notable) {
           await appendRunLog(
-            { ...message.patch, tabId: job.sourceTabId ?? job.tabId },
+            { ...message.patch, lastProgressAt: Date.now(),
+              tabId: job.sourceTabId ?? job.tabId },
             {
               level: 'info',
               code: message.patch?.boundaryReached
@@ -6982,7 +7007,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           );
         } else {
-          await setJob({ ...message.patch, tabId: job.sourceTabId ?? job.tabId });
+          await setJob({ ...message.patch, lastProgressAt: Date.now(),
+            tabId: job.sourceTabId ?? job.tabId });
         }
         return { ok: true };
       }
@@ -7018,10 +7044,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Never store an optimistic heartbeat before the wheel has moved
         // the actual ChatGPT viewport or established a verified edge.
         const now = Date.now();
-        if (scroll?.ok && (scroll.moved || scroll.observedEdge) &&
-            now - Number(job.lastHeartbeatAt || job.updatedAt || 0) >= 15000) {
-          await setJob({ lastHeartbeatAt: now,
-            lastPhysicalActivity: scroll.moved ? 'scroll-moved' : 'scroll-edge' });
+        if (scroll?.ok && now - Number(job.lastPhysicalScrollAt || 0) >= 15000) {
+          const patch = {
+            lastPhysicalScrollAt: now,
+            lastPhysicalActivity: scroll.moved ? 'scroll-moved'
+              : scroll.observedEdge ? 'scroll-edge' : 'scroll-no-progress',
+            lastScrollBefore: scroll.before ?? null,
+            lastScrollAfter: scroll.after ?? null
+          };
+          if (scroll.moved || scroll.observedEdge) patch.lastHeartbeatAt = now;
+          const current = await getJob();
+          if (current?.jobId === job.jobId &&
+              ['starting', 'running'].includes(current.status)) {
+            await setJob(patch);
+          }
         }
         return scroll;
       }
