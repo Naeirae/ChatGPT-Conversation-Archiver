@@ -711,3 +711,89 @@ test('split planner cannot alter the original marked boundaries or forge its sen
   );
   assert.equal((await f.controller.getState()).workers[0].lane,'planner');
 });
+
+
+test('automatic split planner uses one slot, then waits for two free slots', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl=chat(81);
+  const key='archiverFragmentMarkers:'+new URL(sourceUrl).origin+new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:{start:markers.start,end:markers.end}});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enqueue({sourceUrl:chat(82),mode:'two-chats'});
+  await f.controller.enable(true);
+  const running=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  const planner=running.workers.find(w=>w.lane==='planner');
+  const sibling=running.workers.find(w=>w.lane==='single');
+  assert.ok(planner);assert.ok(sibling);
+  assert.equal(f.launches.length,2);
+  const ack=await f.controller.planned({
+    jobId:planner.jobId,startId:markers.start.id,endId:markers.end.id,
+    middle:markers.middle,visitedCount:11
+  },planner.captureTabId);
+  assert.equal(ack.ok,true);
+  assert.equal(f.launches.length,2); // one occupied slot cannot run a two-lane split
+  const interim=await f.controller.getState();
+  assert.equal(interim.items[0].status,'queued');
+  assert.equal(interim.workers.length,1);
+  const complete=archive('single-q-'+sibling.jobId,sibling.sourceUrl,['a','b']);
+  f.archives.set(complete.id,complete);
+  assert.equal((await f.controller.complete({
+    jobId:sibling.jobId,archiveId:complete.id
+  },sibling.captureTabId)).ok,true);
+  const next=await f.settled(q=>q.workers.length===3 &&
+    q.workers.filter(w=>w.lane==='first'||w.lane==='second').length===2 &&
+    q.workers.filter(w=>w.lane==='first'||w.lane==='second').every(w=>w.status==='running'));
+  assert.equal(next.workers.filter(w=>w.lane==='first'||w.lane==='second').length,2);
+  assert.equal(f.launches.length,4);
+});
+
+test('MV3 restart revalidates debugger ownership on both saved queue tabs', async () => {
+  const prepared=[];
+  const f=fixture({prepareBackgroundCapture:async(tabId,jobId,sourceUrl)=>{
+    prepared.push({tabId,jobId,sourceUrl});return {ok:true};
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(83),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(84),mode:'two-chats'});
+  await f.controller.enable(true);
+  const before=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  assert.equal(prepared.length,2);
+  const state=(await f.storage.get('archiverCaptureQueueV1')).archiverCaptureQueueV1;
+  for(const w of state.workers) w.updatedAt=Date.now()-310000;
+  await f.storage.set({archiverCaptureQueueV1:state});
+  const newWorker=f.freshController();
+  await newWorker.tick();
+  assert.equal(prepared.length,4);
+  assert.equal(f.backgroundWindows.length,2);
+  const after=(await newWorker.getState()).workers;
+  assert.deepEqual(after.map(w=>w.jobId),before.workers.map(w=>w.jobId));
+  assert.ok(after.every(w=>w.status==='running'));
+});
+
+test('debugger detach fails only affected worker and retains its exact draft', async()=>{
+  const releases=[];
+  const f=fixture({releaseBackgroundCapture:async(tabId,jobId)=>{
+    releases.push(jobId);return true;
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(85),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(86),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  const [a,b]=workers;
+  const draftId='draft-'+a.jobId;
+  await f.storage.set({['draft:'+draftId]:{id:draftId,messages:[turn('a'),turn('b')]}});
+  await f.controller.checkpoint({jobId:a.jobId,draftId,draftCount:2},a.captureTabId);
+  await f.controller.detached(a.jobId,a.captureTabId,'canceled_by_user');
+  const after=await f.controller.getState();
+  assert.equal(after.workers[0].status,'error');
+  assert.equal(after.workers[1].status,'running');
+  assert.equal(after.workers[0].draftId,draftId);
+  assert.equal((await f.storage.get('draft:'+draftId))['draft:'+draftId].messages.length,2);
+  assert.ok(releases.includes(a.jobId));
+  assert.ok(!releases.includes(b.jobId));
+});
