@@ -19,6 +19,7 @@ const jsFiles = [
   'lib/capture-queue.mjs',
   'lib/capture-queue-controller.mjs',
   'lib/background-focus-manager.mjs',
+  'lib/capture-freeze-policy.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -1224,6 +1225,15 @@ if (!focusSource.includes('Emulation.setFocusEmulationEnabled') ||
   fail('background capture: persistent CDP session integration is incomplete');
 }
 
+const lifecycleSource = await readFile('service-worker.js', 'utf8');
+const queueControllerSource = await readFile('lib/capture-queue-controller.mjs', 'utf8');
+if (!lifecycleSource.includes('freezeTransition(job, changeInfo.frozen)') ||
+    !lifecycleSource.includes('queueController.tabFreezeChanged(tabId, changeInfo.frozen)') ||
+    lifecycleSource.includes("if (changeInfo.frozen === true && job.status !== 'paused')") ||
+    !queueControllerSource.includes('async function tabFreezeChanged(tabId, frozen)')) {
+  fail('background lifecycle: frozen tab must not become a permanent manual Pause');
+}
+
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
@@ -1241,6 +1251,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-continuity-watchdog.test.mjs',
   'tests/background-capture-and-autosplit.test.mjs',
   'tests/background-focus-manager.test.mjs',
+  'tests/capture-freeze-policy.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
