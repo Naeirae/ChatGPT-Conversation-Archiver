@@ -1024,19 +1024,25 @@
   function turnIntersectsCaptureViewport(turn) {
     if (!turn?.isConnected) return false;
     const root = contentRoot(turn, roleOf(turn)) || turn;
-    const element = root.getBoundingClientRect();
     const scroller = findScrollContainer(turn);
     const documentRoot = !scroller ||
       scroller === document.documentElement ||
       scroller === document.body ||
       scroller === document.scrollingElement;
     const scrollerRect = documentRoot ? null : scroller.getBoundingClientRect();
-    return rectIntersectsCaptureViewport(
-      element,
-      window.innerWidth || document.documentElement.clientWidth,
-      window.innerHeight || document.documentElement.clientHeight,
-      scrollerRect
-    );
+    const intersects = element => element?.getBoundingClientRect &&
+      rectIntersectsCaptureViewport(
+        element.getBoundingClientRect(),
+        window.innerWidth || document.documentElement.clientWidth,
+        window.innerHeight || document.documentElement.clientHeight,
+        scrollerRect
+      );
+    // contentRoot can point at the FIRST Markdown subtree, whose bounds end
+    // well before attachments/other blocks in a many-screen assistant turn.
+    // The outer logical turn is still the same message throughout that span.
+    // Count that message as visible if its own logical wrapper intersects the
+    // actual ChatGPT scrollport; never count a wholly offscreen wrapper.
+    return Boolean(intersects(root) || (root !== turn && intersects(turn)));
   }
 
   function rectTrailingEdgeInsideCaptureViewport(
@@ -4131,18 +4137,31 @@
     };
   }
 
-  function measuredAdjacentScroll(before, after, transport, maxPixels = 200) {
-    // A message may span many screens. Chronological progress is physical
-    // displacement in the SAME scroll container, not a rising message count
-    // or a fresh message ID in each viewport.
+  function measuredAdjacentScroll(before, after, transport, maxPixels = Infinity) {
+    // Long ChatGPT messages can occupy several viewports without adding a
+    // new turn ID. 200px / 35%-viewport was too small for a real Chrome wheel
+    // step and falsely treated same-scroller scrolling as a missing seam.
+    //
+    // A measured down-step shorter than 75% of BOTH scrollports guarantees
+    // physical viewport overlap when the layout has not rebased. Only accept
+    // it from the same container with nearly unchanged document geometry.
+    // A renderer saying "moved: false" cannot override measured DOM movement:
+    // the background SW and content script may have sampled different roots.
     if (!before?.element || !after?.element || before.element !== after.element) return false;
-    if (!transport?.moved || transport.direction !== 'down') return false;
+    if (transport?.direction !== 'down' || transport?.ok === false) return false;
     const delta = Number(after.top) - Number(before.top);
-    const limit = Math.min(maxPixels, Math.max(20, Number(before.clientHeight) * 0.35));
-    return Number.isFinite(delta) && delta >= 2 && delta <= limit &&
-      Number.isFinite(before.scrollHeight) && Number.isFinite(after.scrollHeight) &&
-      before.scrollHeight > before.clientHeight &&
-      after.scrollHeight > after.clientHeight;
+    const firstHeight = Number(before.clientHeight);
+    const secondHeight = Number(after.clientHeight);
+    const firstTotal = Number(before.scrollHeight);
+    const secondTotal = Number(after.scrollHeight);
+    if (![delta, firstHeight, secondHeight, firstTotal, secondTotal].every(Number.isFinite) ||
+        firstHeight <= 0 || secondHeight <= 0 ||
+        firstTotal <= firstHeight || secondTotal <= secondHeight) return false;
+    const overlapLimit = Math.floor(Math.min(firstHeight, secondHeight) * 0.75);
+    const stableHeight = Math.abs(secondTotal - firstTotal) <=
+      Math.max(12, Math.floor(Math.min(firstHeight, secondHeight) * 0.06));
+    return stableHeight && delta >= 2 && delta <=
+      Math.min(Math.max(2, Number(maxPixels) || Infinity), overlapLimit);
   }
 
   function createContinuityWatchdog({
@@ -4264,43 +4283,88 @@
     };
   }
 
-  async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
+  async function recoverDownwardContinuity(
+    beforeRefs, afterRefs, originalAfter, map, order, settings, boundary
+  ) {
+    // Returning true just because an UP step rediscovered the old viewport
+    // caused a down/up loop: the next pass crossed the *same* uncertified seam
+    // again. Recovery must also re-traverse forward with small verified
+    // overlapping steps, reaching the missed after-window before succeeding.
     const seenWindows = new Set();
+    let originFound = false;
     for (let attempt = 0; attempt < 6; attempt++) {
+      await waitIfPaused();
       const currentRefs = visibleNavigationRefsLightweight();
       const sample = sampleCaptureScroller();
       const windowKey = JSON.stringify({
         top: sample?.top ?? null,
         refs: currentRefs.map(ref => [ref.strongId, ref.signature])
       });
-      // The same virtualized window on a second attempt means that reversing
-      // the wheel cannot recover the missing bridge. Stop the oscillation.
       if (seenWindows.has(windowKey)) return false;
       seenWindows.add(windowKey);
-      if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
+      if (navigationWindowsOverlap(beforeRefs, currentRefs)) {
+        originFound = true;
+        break;
+      }
 
       await progress(
-        'Этап 2/3: стык сообщений не подтверждён; осторожно проверяю предыдущий участок…',
-        map.size,
-        {
-          phase: 'walk',
-          continuityRecovery: true,
+        'Этап 2/3: стык не подтверждён; ищу предыдущий доказанный участок…',
+        map.size, {
+          phase: 'walk', continuityRecovery: true,
           continuityAttempt: attempt + 1,
           force: attempt === 0
         }
       );
-
-      await physicalScroll(
-        'up',
-        1,
-        { settleTimeout: 1800, quietWindow: 300, wheelDelta: 180 }
-      );
+      await physicalScroll('up', 1, {
+        settleTimeout: 1800, quietWindow: 300, wheelDelta: 120
+      });
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
     }
+    if (!originFound) return false;
 
-    return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
+    let lastRefs = visibleNavigationRefsLightweight();
+    let lastSample = sampleCaptureScroller();
+    let advanced = false;
+    const replaySeen = new Set();
+    for (let replay = 0; replay < 18; replay++) {
+      await waitIfPaused();
+      const key = JSON.stringify([lastSample?.top ?? null,
+        lastRefs.map(ref => String(ref.strongId || ref.signature || ''))]);
+      if (replaySeen.has(key)) return false;
+      replaySeen.add(key);
+      const step = await physicalScroll('down', 1, {
+        settleTimeout: 1800, quietWindow: 300, wheelDelta: 80
+      });
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+      const nextRefs = visibleNavigationRefsLightweight();
+      const nextSample = sampleCaptureScroller();
+      const adjacent = measuredAdjacentScroll(lastSample, nextSample, step);
+      const overlap = navigationWindowsOverlap(lastRefs, nextRefs);
+      // Neither a changed DOM shell nor a wheel request alone proves a
+      // bridge. If the replay has a gap, preserve the draft and stop.
+      if (!adjacent && !overlap) return false;
+      const movedForward = Boolean(lastSample && nextSample &&
+        lastSample.element === nextSample.element &&
+        Number(nextSample.top) >= Number(lastSample.top) + 2);
+      advanced = advanced || movedForward;
+      const sameScrollContainer = Boolean(originalAfter?.element &&
+        originalAfter.element === nextSample?.element);
+      // An identical long message can appear hundreds of pixels before the
+      // original failed after-window. Matching its ID is not enough to claim
+      // that all intervening paragraphs and attachments were traversed.
+      const reachedAfter = sameScrollContainer
+        ? Number(nextSample.top) >= Number(originalAfter.top) - 2
+        : navigationWindowsOverlap(afterRefs, nextRefs);
+      if (advanced && reachedAfter) return true;
+      if (!movedForward && !step?.moved) return false;
+      lastRefs = nextRefs;
+      lastSample = nextSample;
+    }
+    return false;
   }
 
 
@@ -4350,11 +4414,13 @@
       });
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      // Historical fast full traversal used three debugger bursts here.
-      // Continuity is accepted only when the neighbouring virtual windows
-      // retain a strong ID or an ordered multi-message overlap.
+      // Fast three-burst steps can jump past whole turns and are impossible
+      // to certify with a virtualized ChatGPT DOM. Use the same short overlap-
+      // preserving step as the marked-range traversal.
       const physicalBefore = sampleCaptureScroller();
-      const wheel = await physicalScroll('down', 3);
+      const wheel = await physicalScroll('down', 1, {
+        wheelDelta: 120, settleTimeout: 1800, quietWindow: 300
+      });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
@@ -4377,11 +4443,7 @@
             continuityAttempt: retry.recoveryAttempts, force: true }
         );
         const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
+          beforeRefs, afterRefs, physicalAfter, map, order, settings, boundary
         );
         if (!recovered) {
           throw new Error(
@@ -4586,11 +4648,7 @@ if (boundaryIsVisible(boundary)) {
           }
         );
         const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
+          beforeRefs, afterRefs, physicalAfter, map, order, settings, boundary
         );
         if (!recovered) {
           throw new Error(

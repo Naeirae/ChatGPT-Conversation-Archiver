@@ -246,13 +246,55 @@ test('short measured movement bridges adjacent multiple-turn windows', () => {
   assert.equal(advance(sample(1200), sample(1320), moved), true);
 });
 
-test('physical evidence rejects jumps, reverse, missing motion and changed scroller', () => {
+test('physical evidence rejects jumps, reverse, failed transport and changed scroller', () => {
   const { advance, sample, moved } = measuredScrollerFixture();
   assert.equal(advance(sample(100), sample(780), moved), false);
   assert.equal(advance(sample(200), sample(100), moved), false);
-  assert.equal(advance(sample(100), sample(120), { moved: false, direction: 'down' }), false);
+  assert.equal(advance(sample(100), sample(120), { ok: false, direction: 'down' }), false);
   const otherScroller = { ...sample(120), element: {} };
   assert.equal(advance(sample(100), otherScroller, moved), false);
+});
+
+test('long turn crossing uses physical viewport overlap instead of the obsolete 200px cap', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  // Before 0.4.79 these all caused a false missing-seam rewind.
+  for (const delta of [205, 260, 390, 580]) {
+    assert.equal(advance(sample(1800), sample(1800 + delta), moved), true, 'delta=' + delta);
+  }
+  assert.equal(advance(sample(1800), sample(2420), moved), false,
+    'Larger than 75% of the viewport cannot prove a continuous window');
+});
+
+test('background transport metrics cannot negate separately measured physical motion', () => {
+  const { advance, sample } = measuredScrollerFixture();
+  assert.equal(advance(sample(1000), sample(1260), {
+    ok:true, moved:false, direction:'down'
+  }), true);
+  assert.equal(advance(sample(1000), sample(1000), {
+    ok:true, moved:true, direction:'down'
+  }), false);
+  assert.equal(advance(sample(1000), sample(1260), {
+    ok:false, moved:true, direction:'down'
+  }), false);
+});
+
+test('geometry rebasing is never accepted as physical proof without shared message IDs', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  assert.equal(advance(sample(1800), { ...sample(2060), scrollHeight:25800 }, moved), false);
+  assert.equal(advance(sample(1800), { ...sample(2060), clientHeight:320 }, moved), false);
+  assert.equal(advance(sample(1800), { ...sample(2060), element:{} }, moved), false);
+});
+
+test('a long single message passes continuity despite turn signature changes', () => {
+  const { advance, sample, moved } = measuredScrollerFixture();
+  const overlap = new Function(extract('navigationWindowsOverlap') +
+    '; return navigationWindowsOverlap;')();
+  const refsBefore=[{strongId:'',signature:'body-fragment-before'}];
+  const refsAfter=[{strongId:'',signature:'body-fragment-after'}];
+  assert.equal(overlap(refsBefore,refsAfter),false);
+  assert.equal(advance(sample(2400),sample(2790),moved),true);
+  assert.equal(!(overlap(refsBefore,refsAfter) ||
+    advance(sample(2400),sample(2790),moved)),false);
 });
 
 test('stationary long message is not mistaken for progress', () => {
@@ -359,4 +401,62 @@ test('forced checkpoint is allowed despite stationary message count', () => {
     extract('checkpointDue') + '; return checkpointDue;'
   )();
   assert.equal(due({ at: 1000, count: 3 }, 1100, 3, 30000, 35, true), true);
+});
+
+
+test('the logical wrapper of a long message stays visible after its first Markdown block leaves view', () => {
+  const fakeDocument={
+    documentElement:{clientWidth:1200,clientHeight:900},
+    body:{},scrollingElement:{}
+  };
+  const fakeWindow={innerWidth:1200,innerHeight:900};
+  const scroller={getBoundingClientRect:()=>({
+    left:0,right:1000,top:80,bottom:750
+  })};
+  const turn={
+    isConnected:true,
+    getBoundingClientRect:()=>({left:50,right:900,top:-1900,bottom:2700})
+  };
+  const markdown={
+    getBoundingClientRect:()=>({left:50,right:900,top:-1900,bottom:-100})
+  };
+  const intersects=(rect,width,height,scrollport)=>{
+    const top=Math.max(0,scrollport?.top??0);
+    const bottom=Math.min(height,scrollport?.bottom??height);
+    return rect.right>0&&rect.left<width&&rect.bottom>top&&rect.top<bottom;
+  };
+  const isVisible=new Function('contentRoot','roleOf','findScrollContainer',
+    'rectIntersectsCaptureViewport','window','document',
+    extract('turnIntersectsCaptureViewport')+'; return turnIntersectsCaptureViewport;'
+  )(()=>markdown,()=>'assistant',()=>scroller,intersects,fakeWindow,fakeDocument);
+  assert.equal(isVisible(turn),true,
+    'The message is still visible though its first Markdown block is not');
+  turn.getBoundingClientRect=()=>({left:50,right:900,top:900,bottom:1400});
+  assert.equal(isVisible(turn),false,
+    'A fully offscreen message must never form a false overlap');
+});
+
+test('logical turn visibility also respects a nested ChatGPT scrollport', () => {
+  const fakeDocument={
+    documentElement:{clientWidth:1200,clientHeight:900},
+    body:{},scrollingElement:{}
+  };
+  const scroller={getBoundingClientRect:()=>({
+    left:0,right:1000,top:100,bottom:600
+  })};
+  const turn={isConnected:true,getBoundingClientRect:()=>({
+    left:20,right:800,top:650,bottom:840
+  })};
+  const markdown={getBoundingClientRect:()=>({
+    left:20,right:800,top:-190,bottom:-20
+  })};
+  const intersects=(rect,width,height,scrollport)=>
+    rect.right>0&&rect.left<width&&rect.bottom>(scrollport?.top??0)&&
+    rect.top<Math.min(height,scrollport?.bottom??height);
+  const visible=new Function('contentRoot','roleOf','findScrollContainer',
+    'rectIntersectsCaptureViewport','window','document',
+    extract('turnIntersectsCaptureViewport')+'; return turnIntersectsCaptureViewport;'
+  )(()=>markdown,()=>'assistant',()=>scroller,intersects,
+    {innerWidth:1200,innerHeight:900},fakeDocument);
+  assert.equal(visible(turn),false,'Wrapper outside scrollport must be excluded');
 });

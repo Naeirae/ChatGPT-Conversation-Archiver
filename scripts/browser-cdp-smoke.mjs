@@ -17,6 +17,25 @@ function chromeBinary() {
 }
 function pageHtml(id) {
   const label=String(id).replace(/[^a-z0-9-]/gi,'');
+  if (label === 'long-turn') {
+    return '<!doctype html><html><head><meta charset="utf-8"><style>'+
+      'html,body{height:100%;margin:0;font:16px system-ui}'+
+      '#scroller{position:absolute;top:20px;left:20px;right:20px;height:540px;overflow-y:auto}'+
+      '#long-turn{height:18000px;border:1px solid #aaa}'+
+      '.markdown{height:200px;background:#ddd}.other-block{height:17500px}'+
+      '</style></head><body data-lane="long-turn"><div id="scroller">'+
+      '<article id="long-turn" data-message-id="long-single"><div class="markdown">First markdown block</div>'+
+      '<div class="other-block">Rest of one huge assistant turn</div></article></div><script>'+
+      'const scroller=document.getElementById("scroller"),'+
+      'turn=document.getElementById("long-turn"),markdown=turn.querySelector(".markdown");'+
+      'window.__captureProbe=()=>({lane:"long-turn",top:scroller.scrollTop,'+
+      'first:"data-message-id:long-single",count:1,'+
+      'markdownBottom:markdown.getBoundingClientRect().bottom,'+
+      'turnBottom:turn.getBoundingClientRect().bottom,'+
+      'scrollportTop:scroller.getBoundingClientRect().top,'+
+      'visibility:document.visibilityState,hidden:document.hidden});'+
+      '</script></body></html>';
+  }
   return '<!doctype html><html><head><meta charset="utf-8"><style>'+
     'html,body{height:100%;margin:0;font:16px system-ui}'+
     '#scroller{position:absolute;top:20px;left:20px;right:20px;height:540px;overflow-y:auto;border:1px solid #888}'+
@@ -98,7 +117,7 @@ async function main() {
     });
     cdp=await connect(protocol.webSocketDebuggerUrl);
     const sessions=[];
-    for(const lane of ['a','b','foreground']){
+    for(const lane of ['a','b','foreground','long-turn']){
       const target=await cdp.send('Target.createTarget',{
         url:'about:blank',newWindow:true,width:900,height:720,
         background:false,focus:lane==='foreground'
@@ -108,7 +127,7 @@ async function main() {
       });
       sessions.push({lane,id:attached.sessionId,targetId:target.targetId});
     }
-    const [a,b,user]=sessions;
+    const [a,b,user,longTurn]=sessions;
     for(const lane of [a,b,user]){
       // Inject the local deterministic fixture into about:blank, without
       // outbound navigation or Google/ChatGPT account access.
@@ -126,14 +145,18 @@ async function main() {
         return result.result?.value===true;
       });
     }
-    for(const lane of [a,b]){
+    for(const lane of [a,b,longTurn]){
       await cdp.send('Emulation.setFocusEmulationEnabled',{enabled:true},lane.id);
     }
     async function metrics(lane) {
       const result=await cdp.send('Runtime.evaluate',{
         expression:'window.__captureProbe()',returnByValue:true
       },lane.id);
-      return result.result?.value;
+      if (result.exceptionDetails || result.result?.value == null) {
+        throw new Error('CDP fixture probe ' + lane.lane + ' failed: ' +
+          JSON.stringify(result.exceptionDetails || result));
+      }
+      return result.result.value;
     }
     // Exercise the reported current-tab workflow: A is brought forward,
     // then the user switches to another page, while A keeps CDP focus
@@ -216,6 +239,49 @@ async function main() {
       'Waking A altered sibling B');
     assert.equal((await metrics(user)).top,0,
       'Waking A activated the user foreground page');
+    // A real Chrome scroll through a >20-screen single assistant turn must
+    // advance while its ID never changes and the first Markdown block leaves
+    // view. This is the geometry reported in the regression screenshot.
+    // Inject the long fixture after about:blank has stabilized. Writing a
+    // full document at target creation could reset its JS context later.
+    const initializedLong=await cdp.send('Runtime.evaluate',{
+      expression: `(() => {
+        document.head.innerHTML = '<style>html,body{margin:0;height:100%}#scroller{position:absolute;top:20px;left:20px;right:20px;height:540px;overflow-y:auto}#long-turn{height:18000px}.markdown{height:200px}.other-block{height:17500px}</style>';
+        document.body.innerHTML = '<div id="scroller"><article id="long-turn" data-message-id="long-single"><div class="markdown">Markdown start</div><div class="other-block">One continuous tall message</div></article></div>';
+        const scroller=document.getElementById('scroller');
+        const turn=document.getElementById('long-turn');
+        const markdown=turn.querySelector('.markdown');
+        window.__captureProbe=()=>({
+          lane:'long-turn',top:scroller.scrollTop,
+          first:'data-message-id:long-single',count:1,
+          markdownBottom:markdown.getBoundingClientRect().bottom,
+          turnBottom:turn.getBoundingClientRect().bottom,
+          scrollportTop:scroller.getBoundingClientRect().top,
+          visibility:document.visibilityState,hidden:document.hidden
+        });
+        return true;
+      })()`,
+      returnByValue:true
+    },longTurn.id);
+    assert.equal(initializedLong.result?.value,true);
+    const longBefore=await metrics(longTurn);
+    for(let step=0;step<4;step++){
+      await cdp.send('Input.dispatchMouseEvent',{
+        type:'mouseWheel',x:350,y:240,deltaX:0,deltaY:320
+      },longTurn.id);
+    }
+    const longAfter=await poll(async()=>{
+      const value=await metrics(longTurn);
+      return value.top>=900?value:null;
+    },50,120);
+    assert.equal(longAfter.first,longBefore.first,
+      'Single long message ID changed during physical traversal');
+    assert.equal(longAfter.count,1,'Long message should remain a single turn');
+    assert.ok(longAfter.markdownBottom<longAfter.scrollportTop,
+      'The first Markdown block should be offscreen after scrolling');
+    assert.ok(longAfter.turnBottom>longAfter.scrollportTop,
+      'The logical message wrapper must still intersect the viewport');
+    assert.equal((await metrics(user)).top,0,'Long-turn scrolling moved user page');
     console.log(JSON.stringify({
       status:'PASS',chrome:protocol.Browser,
       lanes:{
@@ -224,6 +290,8 @@ async function main() {
         b:{initial:before[1].top,moved:moved[1].top,
           firstId:moved[1].first}
       },
+      longTurn:{before:longBefore.top,after:longAfter.top,
+        stableId:longAfter.first,markdownOffscreen:true,logicalTurnVisible:true},
       currentTabSwitchedAway:true,resumedSession:true,lifecycleThaw:true,
       userTabTop:userUnchanged.top,
       limitation:'Synthetic virtualized pages, not authenticated ChatGPT or extension E2E'
