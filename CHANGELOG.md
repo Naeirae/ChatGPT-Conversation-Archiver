@@ -2,6 +2,13 @@
 
 ## 0.4.77 — восстановление фона и двух потоков (кандидат)
 
+- 2026-10-29 follow-up: restore managed CDP only after original content script confirms its jobId, URL and live status; preserve failure when DevTools owns a tab.
+- Start CDP focus emulation before waiting for ChatGPT virtualized message hydration, including single and queued copies; retry visibility briefly to allow rendering tick.
+- Preserve debugger on same-chat URL updates; store scroll heartbeat only after measured movement or verified edge; screenshot requires the originating active job.
+- Automatic midpoint planner reserves one slot, only counts physically visible turn witnesses, and durably schedules closing its own window after handoff.
+- Independent queue pause, resume, stop, detach and MV3 rebind covered by updated Node regression tests; late cancel no longer resurrects a background single-capture launch.
+- GitHub Actions run 40881567548 on 18eaf8d02739910cef0a905b62bd0bd02ebac139: 192/192 tests passed, extension packaged, updater job passed; installed Chrome acceptance pending.
+
 - Сборщик в режиме «Рабочая копия» больше не уходит в скрытую вкладку исходного окна: открывается отдельное нормальное окно Chrome, не перехватывающее пользовательский фокус. В этом окне рабочая переписка остаётся активной для отрисовки виртуализированных сообщений и выполнения скрипта. Не минимизируйте рабочие окна во время проверки.
 - Очередь двух разных чатов открывает отдельное нефокусируемое окно каждому заданию и запускает их подготовку параллельно, а не последовательно. Задания и контрольные точки не объединяются.
 - Экспериментальный режим одного чата по двум потокам больше не требует вручную выбирать середину: достаточно ранее существующих двух отметок «Начало» и «Конец». Планировщик сканирует выбранный диапазон без публикации архива, подтверждает смежность кадров и выбирает среднюю реплику вместе с двумя реальными соседями с устойчивыми ID. После этого запускаются два независимых прохода и ранее реализованная строгая проверка перекрытия. Ручная середина допускается как дополнительный быстрый путь.
