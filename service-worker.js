@@ -2157,11 +2157,10 @@ async function startCapture({
     throw makeCaptureError('WRONG_SITE', 'Откройте ChatGPT в активной вкладке.');
   }
 
-  // The manual range is tied to the viewport positioned by the user.
-  captureTarget = (mode === 'fragment' ||
-    (mode === 'resume-draft' && providedDraft?.captureMode === 'fragment'))
-    ? 'current'
-    : (captureTarget === 'current' ? 'current' : 'copy');
+  // A manually marked range is a source constraint, not a demand that
+  // its collector remain in the user's current foreground tab. Background
+  // copies navigate to the saved start marker themselves.
+  captureTarget = captureTarget === 'current' ? 'current' : 'copy';
 
   const queued = await queueController.getState();
   if (queued.workers.some(worker => ['starting', 'running', 'paused', 'stopping'].includes(worker.status))) {
@@ -2407,7 +2406,8 @@ async function startCapture({
       existingDraftId: existingDraft?.id || '',
       fixedCaptureBoundary: (mode === 'resume-draft' || mode === 'images-draft' || resumeNavigation) ? fixedCaptureBoundary : null,
       resumeNavigation,
-      captureRange
+      captureRange,
+      seekMarkedStart: mode === 'fragment' && captureTarget === 'copy'
     });
     collectorStarted = true;
 
@@ -6641,7 +6641,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_OPEN_MARKING_TAB':
         return await openBoundaryMarkingTab();
       case 'ARCHIVER_CAPTURE_FRAGMENT':
-        return await startCapture({ mode: 'fragment', captureTarget: 'current' });
+        return await startCapture({
+          mode: 'fragment',
+          captureTarget: message.captureTarget || 'copy'
+        });
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
           mode: 'full',
