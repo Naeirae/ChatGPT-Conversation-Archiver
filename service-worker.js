@@ -54,6 +54,7 @@ import { createCaptureQueueController } from './lib/capture-queue-controller.mjs
 import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
 
 const backgroundFocus = createBackgroundFocusManager(chrome);
+const cancelledStartupJobIds = new Set();
 
 // A restarted MV3 worker loses in-memory CDP ownership, not the saved job.
 // Restore only after the original content script proves it is still running
@@ -2274,6 +2275,14 @@ async function startCapture({
   let captureTab = null;
   let domProbe = null;
   let collectorStarted = false;
+  const assertLaunchActive = async () => {
+    const live = await getJob();
+    if (cancelledStartupJobIds.has(jobId) || live?.jobId !== jobId ||
+        !['starting', 'running'].includes(live?.status)) {
+      throw makeCaptureError('CAPTURE_LAUNCH_CANCELLED',
+        'Запуск остановлен или заменён другим заданием.');
+    }
+  };
 
   await setJob({
     jobId,
@@ -2322,6 +2331,7 @@ async function startCapture({
       await backgroundFocus.enable(captureTab.id, jobId, inspection.href);
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
+    await assertLaunchActive();
 
     const modeLabel = mode === 'fragment' ? 'сбор архива по ручным отметкам' : mode === 'reconcile'
       ? 'сверка и добор локального архива'
@@ -2406,6 +2416,7 @@ async function startCapture({
       }]
     });
 
+    await assertLaunchActive();
     const lastExistingMessage = existingArchive?.messages?.[existingArchive.messages.length - 1] || null;
     const lastDraftMessage = existingDraft?.messages?.[existingDraft.messages.length - 1] || null;
     const resumeAnchorId = mode === 'resume-draft'
@@ -2432,6 +2443,7 @@ async function startCapture({
       seekMarkedStart: mode === 'fragment' && captureTarget === 'copy'
     });
     collectorStarted = true;
+    await assertLaunchActive();
 
     if (captureTarget === 'copy') {
       // No focus swap: the collector remains visible in its own unfocused
@@ -2481,6 +2493,7 @@ async function startCapture({
       });
     }
 
+    cancelledStartupJobIds.delete(jobId);
     return {
       ok: true,
       job: await getJob(),
@@ -2509,6 +2522,21 @@ async function startCapture({
 
     if (mode === 'sync' && existingArchive?.id) {
       await removeArchive(existingArchive.id).catch(() => {});
+    }
+
+    const latest = await getJob();
+    const wasCancelled = cancelledStartupJobIds.delete(jobId);
+    if (error?.code === 'CAPTURE_LAUNCH_CANCELLED' || wasCancelled ||
+        latest?.jobId !== jobId ||
+        (latest && ['cancelled', 'done', 'error'].includes(latest.status))) {
+      if (latest?.jobId === jobId && wasCancelled && latest.status !== 'cancelled') {
+        await setJob({
+          status: 'cancelled', finishedAt: Date.now(),
+          message: 'Запуск остановлен пользователем. Черновики сохранены.'
+        });
+      }
+      return { ok: false, cancelled: Boolean(wasCancelled || latest?.status === 'cancelled'),
+        job: await getJob() };
     }
 
     const rawMessage = error?.message || String(error);
@@ -2551,6 +2579,7 @@ async function startCapture({
 async function cancelCapture() {
   const job = await getJob();
   if (!job || !['starting', 'running', 'paused'].includes(job.status)) return { ok: true, job };
+  if (job.status === 'starting') cancelledStartupJobIds.add(job.jobId);
 
   // Stop the job in the worker first. From this point physical scrolling/clicks
   // are rejected immediately, so a slow content-script cleanup cannot keep the
