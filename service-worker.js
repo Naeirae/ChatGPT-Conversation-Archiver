@@ -1811,6 +1811,31 @@ async function ensureChatGptContentScript(tabId, jobId, options = {}) {
   return result;
 }
 
+// A worker tab in the user's *same* window becomes hidden when the user
+// switches tabs. ChatGPT lazily hydrates virtualized turns only while its
+// document can render. Keep each collector as the active tab of its own
+// unfocused, non-minimized browser window instead of stealing user focus or
+// depending on a hidden tab's throttled timers.
+async function createUnfocusedCaptureWindow(sourceUrl) {
+  const created = await chrome.windows.create({
+    url: sourceUrl,
+    type: 'normal',
+    state: 'normal',
+    focused: false,
+    width: 1040,
+    height: 820
+  });
+  const tab = created?.tabs?.find(candidate => candidate?.id != null) ||
+    (created?.id != null
+      ? (await chrome.tabs.query({ windowId: created.id }))[0] : null);
+  if (!created?.id || tab?.id == null) {
+    if (created?.id != null) await chrome.windows.remove(created.id).catch(() => {});
+    throw new Error('Не удалось открыть отдельное окно фонового сборщика.');
+  }
+  await chrome.tabs.update(tab.id, { autoDiscardable: false }).catch(() => {});
+  return { tab, windowId: created.id };
+}
+
 async function waitForChatTabComplete(tabId, timeout = 30000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -2267,17 +2292,11 @@ async function startCapture({
       captureTab = await chrome.tabs.get(sourceTab.id);
       domProbe = await waitForChatDomReady(sourceTab.id, 15000);
     } else {
-      // Restore the last live-proven background capture path (0.3.10):
-      // open a dedicated ChatGPT tab in the foreground long enough to hydrate
-      // the virtualized conversation DOM, then return focus to the source chat
-      // after the collector has started.
-      captureTab = await chrome.tabs.create({ url: inspection.href, active: true });
-      if (!captureTab?.id) throw new Error('Не удалось открыть рабочую вкладку для фонового сбора.');
-
-      await chrome.tabs.update(captureTab.id, {
-        active: true,
-        autoDiscardable: false
-      }).catch(() => {});
+      // The historical foreground warmup worked before other tabs started
+      // competing for focus. Use a separate active-but-unfocused window so
+      // switching the main browser tabs cannot hide this collector.
+      const opened = await createUnfocusedCaptureWindow(inspection.href);
+      captureTab = opened.tab;
       captureTab = await waitForChatTabComplete(captureTab.id);
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
     }
@@ -2392,12 +2411,8 @@ async function startCapture({
     collectorStarted = true;
 
     if (captureTarget === 'copy') {
-      // Live-proven background path: hydrate and start the collector while the
-      // working copy is foregrounded, then restore the user's source chat.
-      await chrome.tabs.update(sourceTab.id, { active: true }).catch(() => {});
-      if (sourceTab.windowId != null) {
-        await chrome.windows.update(sourceTab.windowId, { focused: true }).catch(() => {});
-      }
+      // No focus swap: the collector remains visible in its own unfocused
+      // window, and the source window is never displaced.
       await appendRunLog({
         status: 'running',
         message: mode === 'full'
@@ -6528,6 +6543,7 @@ const queueController = createCaptureQueueController(chrome, {
   },
   waitForChatTabComplete,
   waitForChatDomReady,
+  createUnfocusedCaptureWindow,
   ensureChatGptContentScript,
   getArchive,
   mergeMessage: (older, newer) => mergeStoredMessageCapture(older, newer),
