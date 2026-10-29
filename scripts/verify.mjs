@@ -711,14 +711,15 @@ try {
       primaryCaptureBlock.includes("type: 'ARCHIVER_CAPTURE_CURRENT'") ||
       !rangeCaptureBlock ||
       !rangeCaptureBlock.includes("type: 'ARCHIVER_CAPTURE_FRAGMENT'") ||
-      !rangeCaptureBlock.includes("captureTarget: 'current'") ||
+      !rangeCaptureBlock.includes("captureTarget: $('captureTarget').value") ||
       !popupHtml.includes('>Разметить диапазон</button>') ||
       !popupHtml.includes('>Собрать отмеченный диапазон</button>') ||
       !popupHtml.includes('capture-location hidden') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_FRAGMENT':") ||
-      !serviceWorkerSource.includes("mode: 'fragment', captureTarget: 'current'") ||
+      !serviceWorkerSource.includes("mode: 'fragment',") ||
+      !serviceWorkerSource.includes("captureTarget: message.captureTarget || 'copy'") ||
       !serviceWorkerSource.includes("if (mode === 'fragment' && (!markers.start || !markers.end))")) {
-    fail('manual range UX: primary capture must mark and collect an explicit current-tab range without automatic full-chat navigation');
+    fail('manual range UX: marked boundaries remain authoritative, background must honor selected capture target');
   }
   // Verify the worker contract independently of the popup. Recovery alarms
   // and direct startCapture callers must not bypass the positioned-tab rule.
@@ -742,13 +743,14 @@ try {
   const navigationResumeBlock = navigationResumeStart >= 0 && navigationResumeEnd > navigationResumeStart
     ? serviceWorkerSource.slice(navigationResumeStart, navigationResumeEnd)
     : '';
-  if (!startCaptureBlock.includes("(mode === 'fragment' ||") ||
-      !startCaptureBlock.includes("providedDraft?.captureMode === 'fragment'") ||
+  if (!startCaptureBlock.includes("captureTarget = captureTarget === 'current' ? 'current' : 'copy'") ||
+      startCaptureBlock.includes("(mode === 'fragment' ||") ||
+      !startCaptureBlock.includes("seekMarkedStart: mode === 'fragment' && captureTarget === 'copy'") ||
       !finishErrorBlock.includes("job.captureMode !== 'fragment'") ||
       !autoRecoveryBlock.includes("failedJob.captureMode === 'fragment'") ||
       navigationResumeBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)") ||
       finishErrorBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)")) {
-    fail('manual range isolation: force positioned current tab; never restart range through legacy navigation recovery or stale alarms');
+    fail('manual range isolation: respect selected background/current target while keeping verified fragment boundaries and disabling unsafe legacy retry');
   }
   const manualContentSource = await readFile('content-chatgpt.js', 'utf8');
   const captureStart = manualContentSource.indexOf('async function captureConversation(');
