@@ -51,7 +51,9 @@ import {
 import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mjs';
 import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
 import { createCaptureQueueController } from './lib/capture-queue-controller.mjs';
+import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
 
+const backgroundFocus = createBackgroundFocusManager(chrome);
 const ACTIVE_JOB_KEY = 'activeCaptureJob';
 const CAPTURE_QUEUE_ALARM = 'archiver-capture-queue-health';
 const RUN_HISTORY_KEY = 'captureRunHistory';
@@ -1151,10 +1153,7 @@ async function captureRenderedImageForContent(tabId, rect = {}, viewport = {}) {
     throw new Error('Не удалось определить видимую область картинки.');
   }
 
-  let attached = false;
-  try {
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attached = true;
+  return backgroundFocus.withDebugger(tabId, async () => {
     const screenshot = await cdp(tabId, 'Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,
@@ -1199,9 +1198,7 @@ async function captureRenderedImageForContent(tabId, rect = {}, viewport = {}) {
     } finally {
       bitmap.close?.();
     }
-  } finally {
-    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
-  }
+  });
 }
 
 async function checkForUpdate() {
@@ -2299,6 +2296,7 @@ async function startCapture({
       captureTab = opened.tab;
       captureTab = await waitForChatTabComplete(captureTab.id);
       domProbe = await waitForChatDomReady(captureTab.id, 45000);
+      await backgroundFocus.enable(captureTab.id, jobId, inspection.href);
     }
 
     const modeLabel = mode === 'fragment' ? 'сбор архива по ручным отметкам' : mode === 'reconcile'
@@ -4785,22 +4783,13 @@ async function scriptedScrollChatTab(tabId, direction = 'down', bursts = 7, whee
 }
 
 async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDelta = 860) {
-  let attached = false;
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
   let debuggerError = '';
   const beforeMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
 
   try {
-    const targets = await chrome.debugger.getTargets();
-    const target = targets.find(item => item.tabId === tabId);
-    if (target?.attached) {
-      throw new Error('Фоновая вкладка уже занята средством отладки Chrome.');
-    }
-
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attached = true;
-
+    await backgroundFocus.withDebugger(tabId, async () => {
     const viewportResult = await cdp(tabId, 'Runtime.evaluate', {
       expression: '({width: innerWidth, height: innerHeight})',
       returnByValue: true
@@ -4828,17 +4817,10 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
       }, 4000);
       await sleep(70);
     }
+    });
   } catch (error) {
     debuggerError = error?.message || String(error);
-  } finally {
-    if (attached) {
-      await withTimeout(
-        chrome.debugger.detach({ tabId }).catch(() => {}),
-        3000,
-        'Отключение Chrome Debugger'
-      ).catch(() => {});
-      attached = false;
-    }
+    if (backgroundFocus.isManaged(tabId)) throw error;
   }
 
   await sleep(120);
@@ -4903,17 +4885,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
 }
 
 async function withChatDebugger(tabId, fn) {
-  let attached = false;
-  try {
-    const targets = await chrome.debugger.getTargets();
-    const target = targets.find(item => item.tabId === tabId);
-    if (target?.attached) throw new Error('Вкладка уже занята средством отладки Chrome.');
-    await chrome.debugger.attach({ tabId }, '1.3');
-    attached = true;
-    return await fn();
-  } finally {
-    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
-  }
+  return backgroundFocus.withDebugger(tabId, fn);
 }
 
 async function physicalClickChatTab(tabId, point = {}) {
@@ -6546,6 +6518,8 @@ const queueController = createCaptureQueueController(chrome, {
   waitForChatDomReady,
   createUnfocusedCaptureWindow,
   ensureChatGptContentScript,
+  prepareBackgroundCapture: (tabId, jobId, url) => backgroundFocus.enable(tabId, jobId, url),
+  releaseBackgroundCapture: (tabId, jobId) => backgroundFocus.release(tabId, jobId),
   getArchive,
   mergeMessage: (older, newer) => mergeStoredMessageCapture(older, newer),
   publishArchive: async archive => {
@@ -7121,6 +7095,7 @@ self.addEventListener('error', event => {
 });
 
 chrome.tabs.onRemoved.addListener(tabId => {
+  void backgroundFocus.release(tabId).catch(() => {});
   (async () => {
   await captureRuntimeReady;
   await queueRuntimeReady;
@@ -7158,6 +7133,7 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.url) void backgroundFocus.release(tabId).catch(() => {});
   (async () => {
   await captureRuntimeReady;
   await queueRuntimeReady;
@@ -7234,6 +7210,27 @@ const queueRuntimeReady = queueController.versionCheck(
 ).catch(error => {
   console.error('Queue runtime version migration failed', error);
   throw error;
+});
+
+chrome.debugger.onDetach.addListener((source, reason) => {
+  const tabId = source?.tabId;
+  if (tabId == null) return;
+  const previous = backgroundFocus.forgetDetached(tabId);
+  if (!previous) return;
+  (async () => {
+    await queueRuntimeReady;
+    const worker = await queueController.authorized(previous.jobId, tabId);
+    if (worker) {
+      await queueController.detached(previous.jobId, tabId, reason);
+      return;
+    }
+    const job = await getJob();
+    if (job?.jobId === previous.jobId && ['starting','running','paused'].includes(job.status)) {
+      await finishJobWithError(job.jobId, job.sourceTabId ?? job.tabId,
+        'Отладчик фонового сборщика отключился: ' + reason,
+        job.draftId || '', Number(job.draftCount || 0));
+    }
+  })().catch(error => logTabListenerError('debugger.onDetach', error));
 });
 
 chrome.runtime.onInstalled.addListener(details => {
