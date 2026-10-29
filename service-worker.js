@@ -4895,7 +4895,11 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
     });
   } catch (error) {
     debuggerError = error?.message || String(error);
-    if (managedBeforeScroll) throw error;
+    // A temporary CDP command failure must not abort the capture while our
+    // original debugger session is still owned. The scripted fallback below
+    // independently verifies actual viewport movement or a physical edge.
+    // But if Chrome detached/stole the session, preserve fail-closed behavior.
+    if (managedBeforeScroll && !backgroundFocus.isManaged(tabId)) throw error;
   }
 
   await sleep(120);
