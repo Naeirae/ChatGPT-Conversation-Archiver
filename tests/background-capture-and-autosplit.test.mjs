@@ -182,7 +182,7 @@ test('manual current-tab collectors retain CDP ownership across a tab switch', (
   const cancellation = between(service,
     'async function cancelCapture()', 'async function scheduleAutomaticRecovery(');
   assert.match(cancellation,/if \(job\.captureTabId != null\) \{\s*await backgroundFocus\.release/);
-  const completion = between(service,'async function completeCapture(',
+  const completion = between(service,'async function handleCaptureComplete(',
     'async function chatScrollMetrics(');
   assert.match(completion,/if \(job\.captureTabId != null\) \{\s*await backgroundFocus\.release/);
   const failed = between(service,'async function finishJobWithError(',
