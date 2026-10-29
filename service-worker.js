@@ -4799,6 +4799,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
   const count = Math.max(1, Math.min(24, Number(bursts) || 7));
   const sign = direction === 'up' ? -1 : 1;
   let debuggerError = '';
+  const managedBeforeScroll = backgroundFocus.isManaged(tabId);
   const beforeMetrics = await chatScrollMetrics(tabId, direction).catch(() => null);
 
   try {
@@ -4833,7 +4834,7 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
     });
   } catch (error) {
     debuggerError = error?.message || String(error);
-    if (backgroundFocus.isManaged(tabId)) throw error;
+    if (managedBeforeScroll) throw error;
   }
 
   await sleep(120);
