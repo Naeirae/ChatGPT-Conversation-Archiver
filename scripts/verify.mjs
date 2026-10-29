@@ -1315,6 +1315,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-freeze-policy.test.mjs',
   'tests/capture-health-diagnostics.test.mjs',
   'tests/capture-recovery.test.mjs',
+  'tests/resume-checkpoint-regression.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
   'tests/document-parts.test.mjs'
