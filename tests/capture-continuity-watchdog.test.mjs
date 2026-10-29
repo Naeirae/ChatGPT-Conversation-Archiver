@@ -149,3 +149,51 @@ test('both the legacy full and marked-range traversal use watchdog recovery safe
     assert.match(code, /recoverDownwardContinuity\(/, mode);
   }
 });
+
+
+test('repeated seam rewinds at the same captured message count stop after four attempts', () => {
+  const guard=make();
+  const refs=[ref('long-turn')];
+  for(let i=0;i<4;i++){
+    const at=guard.beforeRecovery(sample(600+i*480),refs,132);
+    assert.equal(at.recoveryAttempts,i+1);
+    // Physical steps beyond a higher pixel position must not reset the
+    // per-message recovery budget, even if the old watchdog resets its
+    // high-water / repeat counters after apparent motion.
+    guard.noteStep({
+      before:sample(600+i*480),after:sample(750+i*480),
+      beforeRefs:refs,afterRefs:refs,overlapping:true,adjacent:true
+    });
+  }
+  assert.throws(()=>guard.beforeRecovery(sample(4000),refs,132),
+    /Повторяется поиск одного и того же стыка/);
+  assert.equal(guard.metrics().recoveriesAtSameCount,5);
+});
+
+test('a real new captured message gives a new seam recovery budget', () => {
+  const guard=make();
+  const refs=[ref('first')];
+  for(let i=0;i<4;i++){
+    guard.beforeRecovery(sample(i*600),refs,132);
+    guard.noteStep({
+      before:sample(i*600),after:sample(i*600+150),
+      beforeRefs:refs,afterRefs:refs,adjacent:true,overlapping:true
+    });
+  }
+  assert.doesNotThrow(()=>guard.beforeRecovery(sample(5500),[ref('new')],133));
+  assert.equal(guard.metrics().recoveriesAtSameCount,1);
+});
+
+test('many uninterrupted steps through a long message do not exhaust seam budget', () => {
+  const guard=make();
+  const refs=[ref('huge')];
+  for(let i=0;i<2600;i++){
+    guard.noteStep({
+      before:sample(i*120),after:sample((i+1)*120),
+      beforeRefs:refs,afterRefs:refs,
+      adjacent:true,overlapping:true
+    });
+  }
+  assert.equal(guard.metrics().recoveriesAtSameCount,0);
+  assert.equal(guard.metrics().forwardSteps,2600);
+});
