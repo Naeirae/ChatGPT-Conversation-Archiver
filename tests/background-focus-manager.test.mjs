@@ -96,3 +96,26 @@ test('temporary debugger access is serialized and released after commands', asyn
   assert.equal(h.attached.size,0);
   assert.equal(h.log.filter(x=>x==='attach:11').length,2);
 });
+
+
+test('initial CDP focus attachment tolerates transient hidden frames, not persistent hiding', async () => {
+  const h = harness();
+  const original = h.chrome.scripting.executeScript;
+  let calls = 0;
+  h.chrome.scripting.executeScript = async args => {
+    calls++;
+    if (calls <= 2) {
+      return [{ result: {
+        visibility: 'hidden', hidden: true, url: h.urls.get(args.target.tabId),
+        readyState: 'complete'
+      } }];
+    }
+    return original(args);
+  };
+  const manager = createBackgroundFocusManager(h.chrome);
+  const started = await manager.enable(11, 'delayed-visible', h.urls.get(11));
+  assert.equal(started.ok, true);
+  assert.ok(calls >= 3);
+  assert.equal(h.log.filter(event => event === 'attach:11').length, 1);
+  await manager.release(11, 'delayed-visible');
+});
