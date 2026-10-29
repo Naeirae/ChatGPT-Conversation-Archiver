@@ -797,3 +797,68 @@ test('debugger detach fails only affected worker and retains its exact draft', a
   assert.ok(releases.includes(a.jobId));
   assert.ok(!releases.includes(b.jobId));
 });
+
+
+test('cancelling one queue item releases only its debugger; the other can finish', async () => {
+  const releases=[];
+  const f=fixture({releaseBackgroundCapture:async(tabId,jobId)=>{
+    releases.push(jobId);return true;
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(87),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(88),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  const [first,second]=workers;
+  await f.controller.cancel(first.itemId);
+  const after=await f.controller.getState();
+  assert.equal(after.workers[0].status,'stopping');
+  assert.equal(after.workers[1].status,'running');
+  assert.ok(releases.includes(first.jobId));
+  assert.ok(!releases.includes(second.jobId));
+  const completed=archive('ok-q-'+second.jobId,second.sourceUrl,['a','b']);
+  f.archives.set(completed.id,completed);
+  assert.equal((await f.controller.complete({
+    jobId:second.jobId,archiveId:completed.id
+  },second.captureTabId)).ok,true);
+});
+
+test('failed debugger reattachment preserves paused lane and draft for later retry', async () => {
+  let count=0;
+  const f=fixture({prepareBackgroundCapture:async()=>{
+    if(++count>1) throw new Error('DevTools busy');
+    return {ok:true};
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(89),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===1 &&
+    q.workers[0].status==='running');
+  const w=workers[0];
+  assert.equal((await f.controller.pause(w.itemId,w.lane)).ok,true);
+  const resumed=await f.controller.resume(w.itemId,w.lane);
+  assert.equal(resumed.ok,false);
+  const state=await f.controller.getState();
+  assert.equal(state.workers[0].status,'paused');
+  assert.equal(state.workers[0].jobId,w.jobId);
+  assert.match(resumed.error,/DevTools busy/);
+});
+
+test('startup that loses content handshake is retired after timeout, never reserves a permanent slot', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(90),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===1 &&
+    q.workers[0].status==='running');
+  const state=(await f.storage.get('archiverCaptureQueueV1')).archiverCaptureQueueV1;
+  state.workers[0].status='starting';
+  state.workers[0].updatedAt=Date.now()-310000;
+  await f.storage.set({archiverCaptureQueueV1:state});
+  f.chrome.tabs.sendMessage=async()=>null;
+  await f.controller.tick();
+  const after=await f.controller.getState();
+  assert.equal(after.workers[0].status,'error');
+  assert.equal(after.items[0].status,'error');
+});
