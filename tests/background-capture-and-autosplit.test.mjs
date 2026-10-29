@@ -1,0 +1,100 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+
+const content = readFileSync(new URL('../content-chatgpt.js', import.meta.url), 'utf8');
+const service = readFileSync(new URL('../service-worker.js', import.meta.url), 'utf8');
+
+function between(source, begin, end) {
+  const a = source.indexOf(begin), b = source.indexOf(end, a + begin.length);
+  assert.ok(a >= 0 && b > a, 'Missing executable source: ' + begin);
+  return source.slice(a, b);
+}
+
+const midpointSource = between(content,
+  '  function chooseAutomaticSplitMiddle(witnesses = []) {',
+  '  async function planAutomaticSplit('
+);
+const chooseMidpoint = new Function('isStrongMessageId',
+  midpointSource + '\nreturn chooseAutomaticSplitMiddle;'
+)(value => /^(data-message-id|data-turn-id):/.test(String(value || '')));
+
+const witness = id => ({id:'data-message-id:'+id, signature:'sig-'+id, role:'assistant'});
+
+test('automatic midpoint is a real turn with two different stable neighbors', () => {
+  const all = 'abcdefghijk'.split('').map(witness);
+  const middle = chooseMidpoint(all);
+  assert.equal(middle.id, witness('f').id);
+  assert.equal(middle.previous.id, witness('e').id);
+  assert.equal(middle.next.id, witness('g').id);
+  assert.notEqual(middle.id, all[0].id);
+  assert.notEqual(middle.id, all[all.length-1].id);
+});
+
+test('automatic midpoint selects nearest certified triple when center ID is weak', () => {
+  const all = 'abcdefghijklm'.split('').map(witness);
+  all[6] = {...all[6], id:'weak:mid'};
+  const mid = chooseMidpoint(all);
+  assert.ok(mid.id.startsWith('data-message-id:'));
+  assert.ok(mid.previous.id.startsWith('data-message-id:'));
+  assert.ok(mid.next.id.startsWith('data-message-id:'));
+  assert.notEqual(mid.id, 'weak:mid');
+});
+
+test('automark refuses weak or insufficient middle instead of merging incomplete data', () => {
+  assert.throws(() => chooseMidpoint([witness('a'),witness('b')]),/недостаточно/);
+  assert.throws(() => chooseMidpoint([
+    witness('a'),witness('b'),{id:'weak:1'}, {id:'weak:2'},
+    witness('c'),witness('d')
+  ]),/Не найдена безопасная середина/);
+});
+
+test('single background capture and concurrent queue capture use separate active unfocused windows', async () => {
+  const windowSource = between(service,
+    'async function createUnfocusedCaptureWindow(sourceUrl) {',
+    'async function waitForChatTabComplete('
+  );
+  const calls = [];
+  const chrome = {
+    windows:{
+      async create(args) {
+        calls.push({api:'createWindow',args});
+        return {id:210,tabs:[{id:77,url:args.url}]};
+      },
+      async remove(id) {calls.push({api:'removeWindow',id});}
+    },
+    tabs:{
+      async query() {return [];},
+      async update(id,changes) {calls.push({api:'updateTab',id,changes});}
+    }
+  };
+  const createWindow = new Function('chrome',
+    windowSource + '\nreturn createUnfocusedCaptureWindow;'
+  )(chrome);
+  const launched = await createWindow('https://chatgpt.com/c/example');
+  assert.equal(launched.tab.id,77);
+  assert.equal(launched.windowId,210);
+  assert.equal(calls[0].args.focused,false);
+  assert.equal(calls[0].args.state,'normal');
+  assert.equal(calls[0].args.type,'normal');
+  assert.deepEqual(calls[1],{
+    api:'updateTab',id:77,changes:{autoDiscardable:false}
+  });
+  assert.match(service,/captureTab = opened\.tab/);
+  assert.match(service,/createUnfocusedCaptureWindow,/);
+  assert.doesNotMatch(service,/for \(const worker of tasks\) await launchWorker\(worker\)/);
+});
+
+test('content has distinct planning command and never publishes an archive from planner', () => {
+  const planner=between(content,
+    '  async function planAutomaticSplit(jobId, captureRange) {',
+    '  async function seekQueueMarkedStart('
+  );
+  assert.match(planner,/ARCHIVER_SPLIT_PLAN_READY/);
+  assert.match(planner,/ARCHIVER_CAPTURE_FAILED/);
+  assert.match(planner,/navigationWindowsOverlap/);
+  assert.match(planner,/measuredAdjacentScroll/);
+  assert.match(planner,/boundaryIsVisible/);
+  assert.match(planner,/chooseAutomaticSplitMiddle/);
+  assert.doesNotMatch(planner,/ARCHIVER_CAPTURE_COMPLETE/);
+});
