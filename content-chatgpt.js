@@ -3964,9 +3964,11 @@
     const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
     const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
     if (current.jobId !== jobId) return;
-    // Image-only repair of an unfinished draft must be transactional: do not
-    // overwrite the canonical saved text with intermediate DOM snapshots.
+    // Image-only repair and resume navigation must not replace the canonical
+    // chronological prefix with a transient, virtualized DOM window.
     if (current.captureMode === 'images-draft') return;
+    if (['resume-draft', 'retry-walk'].includes(current.captureMode) &&
+        current.phase === 'top') return;
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
@@ -4042,6 +4044,11 @@
       partialSavedAt: current.partialSavedAt || ''
     };
 
+    // Never replace a longer verified saved prefix with a shorter transient
+    // checkpoint. A resumed walk may only grow or enrich that prefix.
+    const storedBeforeWrite = (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId];
+    if (['resume-draft', 'retry-walk'].includes(current.captureMode) &&
+        storedBeforeWrite?.messages?.length > draft.messages.length) return;
     // Persist the large checkpoint independently. The background worker is
     // the sole writer of the active job: do not overwrite a newer state with
     // the copy read before storage I/O.
