@@ -1,5 +1,18 @@
 # 2026-10-29 — 0.4.77: устранение регрессии фонового сбора и автоматическая середина
 
+## Current control point — 2026-10-29, PR #55 still draft
+
+- Candidate branch: fix/real-background-worker-windows-0.4.77; main remains 0.4.76, fb4deb5cd1026ac760f5c4cb533cc401a07b6d00.
+- Last source/test-verified commit before this documentation update: 18eaf8d02739910cef0a905b62bd0bd02ebac139.
+- GitHub Actions run 40881567548: extension and updater jobs green; 192/192 Node tests passed; package manifest 0.4.77 built and uploaded. This is code/build verification, not installed-browser behavior.
+- Active fixes: background focus emulation before ChatGPT DOM hydration; two isolated persistent CDP sessions; authorized restoration after MV3 restart; same-conversation URL changes do not discard CDP; cancellation/startup race protections; paused-lane recovery; stopped and detached lane isolation; one-slot midpoint planner; visible-only witnesses; persistent cleanup for planner-owned windows.
+- Recovery: retries preserve original drafts and independent split archives. No deletion/migration of user data has been added; no main release/merge.
+- Source/automated control gates: 10/10 verified. Installed-Chrome acceptance: 0/7 verified. Combined checklist 10/17 (58.8%), not a readiness rating; all seven browser scenarios remain mandatory.
+- Outstanding P0: two distinct long ChatGPT chats physically scroll and accumulate messages while user is on a third tab; pause/resume and one-lane failure independence; same chat split midpoint and verified overlap; stalled/persistent draft recovery; very long turn and image handling; Google Docs export validation.
+- Runtime caveat: Chrome 118+ supports debugger-session service-worker keepalive; forced worker termination can still destroy JS memory, so reattachment is guarded by the original content-script health and expected conversation key. Permanent page visibility is not proof of physical progress.
+- First next operation: installed Chrome 0.4.77 branch ZIP smoke with logged-in ChatGPT; log verified per-lane physical scrollTop/count deltas, handle focus/DevTools infobar and stalled virtualized DOM; only merge after live evidence. The terminal CDP visibility+scroll behavior is not yet proven.
+
+
 ## Состояние и источник
 
 **Исходный main:** `0.4.76`, `fb4deb5cd1026ac760f5c4cb533cc401a07b6d00`.
