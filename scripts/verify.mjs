@@ -18,6 +18,7 @@ const jsFiles = [
   'lib/capture-recovery.mjs',
   'lib/capture-queue.mjs',
   'lib/capture-queue-controller.mjs',
+  'lib/background-focus-manager.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -1210,6 +1211,19 @@ if (!completedMergeSource.includes('verifiedChronologicalOverlap(') ||
   fail('completed archives: explicit non-destructive verified consolidation required');
 }
 
+const focusSource = await readFile('lib/background-focus-manager.mjs', 'utf8');
+const backgroundWorkerSource = await readFile('service-worker.js', 'utf8');
+const queueSource = await readFile('lib/capture-queue-controller.mjs', 'utf8');
+if (!focusSource.includes('Emulation.setFocusEmulationEnabled') ||
+    !focusSource.includes('async function withDebugger(') ||
+    !backgroundWorkerSource.includes('backgroundFocus.withDebugger(tabId') ||
+    !backgroundWorkerSource.includes('backgroundFocus.enable(captureTab.id') ||
+    !backgroundWorkerSource.includes('chrome.debugger.onDetach.addListener') ||
+    !queueSource.includes('deps.prepareBackgroundCapture(tab.id') ||
+    !queueSource.includes('deps.releaseBackgroundCapture(')) {
+  fail('background capture: persistent CDP session integration is incomplete');
+}
+
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
@@ -1226,6 +1240,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-pause-resume.test.mjs',
   'tests/capture-continuity-watchdog.test.mjs',
   'tests/background-capture-and-autosplit.test.mjs',
+  'tests/background-focus-manager.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
