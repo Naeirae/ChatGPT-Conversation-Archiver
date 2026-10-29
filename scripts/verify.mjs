@@ -20,6 +20,7 @@ const jsFiles = [
   'lib/capture-queue-controller.mjs',
   'lib/background-focus-manager.mjs',
   'lib/capture-freeze-policy.mjs',
+  'lib/capture-health-diagnostics.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -1244,7 +1245,10 @@ for (const required of [
   'lastProgressAt: Date.now()',
   'lastPhysicalScrollAt: now',
   'lastScrollPositions: ',
-  'lastPhysicalActivity: scroll.moved'
+  'lastPhysicalActivity: scroll.moved',
+  'shouldInspectCapture(job, now)',
+  'CAPTURE_NO_COUNT_ADVANCE',
+  "await backgroundFocus.enable(captureTab.id, jobId, inspection.href)"
 ]) {
   if (!diagnosticSource.includes(required)) {
     fail('diagnostics: missing run-scoped progress or physical-scroll evidence: ' + required);
@@ -1269,6 +1273,7 @@ const tests = spawnSync(process.execPath, [
   'tests/background-capture-and-autosplit.test.mjs',
   'tests/background-focus-manager.test.mjs',
   'tests/capture-freeze-policy.test.mjs',
+  'tests/capture-health-diagnostics.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',
