@@ -625,3 +625,11 @@ Next tests: library selection from an open different chat; view/mark/save tab pl
 - GitHub Actions source verification and extension packaging passed on e58a089616b15509b9d29aaeb02c23fb5aa5c2a1, run 40878112673. Later commits require fresh verification.
 - Still unverified: real unattended Chrome scrolling and DOM hydration, two lanes in parallel, CDP service-worker continuity, very long turns/images, split planning/merge, and Google Docs export.
 - Keep PR #55 draft and main unchanged until installed-Chrome acceptance. Next: test background progress while working in a third tab; then two-lane isolation, pause/resume, split merge, failure/draft recovery, Docs export.
+
+## 2026-10-30 — Evidence review of submitted run log (manual fragment, not background copy)
+
+- User pasted a complete diagnostic excerpt for job started 2026-10-29T21:06:39Z (30 October 00:06:39 Moscow), `mode=fragment; captureTarget=current`. It entered walk at 00:06:40; at 00:48:42 ended `cancelled` with 8 collected and 8 preserved in draft, after explicit Stop per the implementation of RUN_CANCELLED_RECOVERABLE.
+- Evidence does **not** show a browser-created automatic cancellation or explain why collection stopped advancing. A 42-minute gap has no intermediate run-log entries, because non-notable progress was stored in state but not printed.
+- The “WORKER ERRORS” block contains historical extension-wide records; the 403 image fetches shown are from October 28–29, before this job. The failed RESUME_CAPTURE errors also predate it. Their presence is not evidence they caused the October 30 stall.
+- Action in candidate 0.4.78: formatDiagnosticLog now separates worker errors recorded during this run from older errors (older entries are retained in storage), and includes lastProgressAt/lastPhysicalScrollAt, observed scroll positions, lastPhysicalActivity and tabFrozen metadata. Actual physical-scroll observations are sampled at most every 15s and never claim movement without evidence.
+- Still needed for the reported **background-copy** regression: an installed extension run whose diagnostic header says `captureTarget: copy`, showing what happens after moving to another tab. The supplied current-tab log cannot prove or disprove background focus, CDP detach or frozen lifecycle defects. User archives/drafts remain untouched.
