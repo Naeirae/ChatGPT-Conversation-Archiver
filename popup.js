@@ -1251,7 +1251,11 @@ function render(data) {
   $('capture').textContent = 'Собрать чат';
   if (!running && hasManualRange) {
     $('fragmentHint').textContent =
-      'Начало и конец основного архива отмечены. Оставьте начало видимым и нажмите «Собрать отмеченный диапазон». Этот режим не открывает копию и не ищет верх автоматически.';
+      'Начало и конец основного архива отмечены. ' +
+        (String($('captureTarget').value) === 'current'
+          ? 'Для сбора в текущей вкладке оставьте начало видимым.'
+          : 'Фоновый сбор откроет отдельную рабочую копию и сам найдёт начало.') +
+        ' Нажмите «Собрать отмеченный диапазон».';
   }
 
   renderQueue(state.queue);
@@ -1685,11 +1689,10 @@ $('openMarkingTab').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OPEN_MARKING_TAB' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть рабочую вкладку для разметки.');
-    await saveSettings({ captureTarget: 'current' }, null);
-    $('captureTarget').value = 'current';
-    updateCaptureTargetHint('current');
     $('fragmentHint').textContent =
-      'Рабочая вкладка открыта. Отметьте в ней «Конец», затем «Начало», оставьте начало видимым и нажмите «Собрать отмеченный диапазон».';
+      'Рабочая вкладка открыта для разметки. Отметьте «Начало» и «Конец». ' +
+      'При выборе фонового сбора архиватор самостоятельно найдёт начало в своей копии; ' +
+      'оставаться на этой вкладке не нужно.';
   } catch (error) {
     setStatus(error.message || String(error), true);
     button.disabled = false;
@@ -1701,7 +1704,7 @@ $('captureFragment').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CAPTURE_FRAGMENT',
-      captureTarget: 'current'
+      captureTarget: $('captureTarget').value
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор диапазона.');
     $('fragmentHint').textContent = 'Сбор отмеченного диапазона запущен.';
