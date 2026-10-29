@@ -1913,6 +1913,10 @@ $('pauseCapture').onclick = async () => {
     if (!result?.ok) throw new Error(result?.error || 'Не удалось поставить сбор на паузу.');
     await getState();
   } catch (error) {
+    // The page can report that its collector is already gone while the
+    // popup still shows the last running snapshot. Refresh even on failure:
+    // the worker has reconciled this ghost job and preserved its draft.
+    await getState().catch(() => {});
     setStatus(error.message || String(error), true);
   } finally {
     $('pauseCapture').disabled = false;

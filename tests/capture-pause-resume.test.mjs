@@ -65,10 +65,23 @@ test('dead content script cannot be turned into a ghost paused job', async () =>
     pagePause: { ok: true, paused: false, running: false, jobId: 'capture-117' },
     health: { ok: true, paused: false, running: false, jobId: 'capture-117' }
   });
-  await assert.rejects(() => f.pauseCapture(), /Пауза не подтверждена/);
+  await assert.rejects(() => f.pauseCapture(), /Скрипт сбора уже не работает/);
   assert.equal(f.job.status, 'error');
   assert.equal(f.finishCalls, 1);
   assert.equal(f.job.draftCount, 117);
+});
+
+test('stale running badge is reconciled when another collector owns the page', async () => {
+  const f = workerFixture({
+    pagePause: { ok: false, paused: false, running: false,
+      jobId: 'previous-collector', error: 'Активный сбор для постановки на паузу не найден.' },
+    health: { ok: true, running: true, paused: false,
+      jobId: 'another-collector' }
+  });
+  await assert.rejects(() => f.pauseCapture(), /Статус обновлён/);
+  assert.equal(f.job.status, 'error');
+  assert.equal(f.job.draftCount, 117);
+  assert.equal(f.finishCalls, 1);
 });
 
 test('pause is only marked after live acknowledgement and forced checkpoint', async () => {

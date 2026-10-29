@@ -1282,6 +1282,17 @@ for (const required of [
   }
 }
 
+const longSeamSource = await readFile('content-chatgpt.js', 'utf8');
+if (!longSeamSource.includes('recoveriesAtSameCount > 4') ||
+    !longSeamSource.includes('beforeRefs, map.size') ||
+    !longSeamSource.includes('beforeRefs, witnesses.length')) {
+  fail('continuity: backtracking must not silently reset the same-message seam budget');
+}
+if (!diagnosticSource.includes('Скрипт сбора уже не работает; пауза невозможна') ||
+    !diagnosticSource.includes('Скрипт сбора завершился, но интерфейс')) {
+  fail('capture lifecycle: stale worker status must not show an impossible pause');
+}
+
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
@@ -1297,6 +1308,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-queue-controller.test.mjs',
   'tests/capture-pause-resume.test.mjs',
   'tests/capture-continuity-watchdog.test.mjs',
+  'tests/capture-ghost-state.test.mjs',
   'tests/capture-seam-replay.test.mjs',
   'tests/background-capture-and-autosplit.test.mjs',
   'tests/background-focus-manager.test.mjs',
