@@ -1,3 +1,52 @@
+# 2026-10-29 — 0.4.77: устранение регрессии фонового сбора и автоматическая середина
+
+## Контрольная точка выпуска — 2026-10-29, PR #55 → main
+
+- Исходная ветка: fix/real-background-worker-windows-0.4.77, исходный main = 0.4.76 (fb4deb5cd1026ac760f5c4cb533cc401a07b6d00). Пользователь 2026-10-29 прямо разрешил продвижение 0.4.77 в production main; итоговый merge SHA и результаты main CI проверить после объединения.
+- Доказано исходниками и Node-тестами: независимые debugger-сессии, проверка jobId/URL/видимости, пауза и отмена, восстановление после перезапуска MV3 по health того же сборщика, сохранение прежних архивов и черновиков, автоматическая середина и проверяемый стык; реальная приёмка самих чатов всё ещё нужна.
+- ДОБАВЛЕНО: scripts/browser-cdp-smoke.mjs — независимый реальный Chrome/Chromium CDP smoke без сторонних пакетов и данных пользователей; в about:blank загружаются два синтетических виртуализированных списка и третья пользовательская страница. Проверяет реальное колесо мыши, видимость через Emulation.setFocusEmulationEnabled, физический scrollTop, смену видимых ID, независимость потоков, отключение и повторное подключение CDP в первом потоке.
+- Локально Chromium 144: A=0→750→1430 px; B=0→750 px; пользовательская страница=0. Chrome CI 156, GitHub Actions run 40939326562: A=0→750→1430→1830 px после CDP reconnect, B=0→750 px, пользователь=0. Новая браузерная проверка PASS. Это тест механизма CDP на синтетическом DOM, НЕ E2E установленного расширения и НЕ подтверждение полноты реальных переписок.
+- В .github/workflows/verify.yml создан отдельный job browser-cdp-smoke после Node-верификации расширения. GitHub Actions run 40939401642 на коммите 263d2386ff589e0e9485200e7b81869b0986938e подтвердил 193/193 Node-тестов и успешные extension, updater и browser-cdp-smoke после исправления ожидания видимости. Позднейшие изменения — документация и описание PR.
+- Чек-лист сопоставимых контрольных пунктов: 11/18 = 61,1% подтверждено (было 10/17, добавлена 1 проверенная браузерная CDP-проверка). По обязательной приёмке на живых чатах 0/7 подтверждено, эти семь пунктов нельзя закрывать на основе синтетического стенда.
+- Известное ограничение выпуска: браузер здесь не авторизован в ChatGPT; проверка двух настоящих длинных чатов, split-merge, сохранённых пользовательских черновиков, изображений и Google Docs не выполнена. По прямому решению пользователя выпуск допускается до завершения этих проверок. Не считать их пройденными; не удалять старые архивы/черновики. При наличии незавершённого локального сбора перед запуском обновлятора отдельно сохранить его.
+- Следующий этап: E2E с установленной 0.4.77 в Chrome — один длинный фон, два одновременно, пауза/отмена одного, один чат split с доказанным стыком, сохранение/повтор, изображения и Google Docs. Записать фактические физические дельты и счётчики, сохранить исходные draft/archive ключи.
+- Production source: существующий Windows updater в update.ps1 закреплён за веткой main и сверяет хеши файлов; публикация в main делает версию доступной для ручного обновления, но не утверждает, что обновление уже выполнено на компьютере пользователя.
+
+
+## Состояние и источник
+
+**Исходный main:** `0.4.76`, `fb4deb5cd1026ac760f5c4cb533cc401a07b6d00`.
+**Новая ветка:** `fix/real-background-worker-windows-0.4.77`.
+**Отчёт пользователя:** раньше фоновый сбор работал без перехода на рабочую вкладку; в 0.4.76 необходимо заходить во вкладку, двухпотоковый сбор неудобен и не работает, два разных чата не могут собираться из-за первой проблемы. Не объявлять это неизбежным ограничением Chrome или ошибкой пользователя.
+
+## Требования, задачи, проверки
+
+| Требование | Работа | Проверка |
+|---|---|---|
+| R010: сбор работает в фоне при работе пользователя в другой вкладке | T010: вывести рабочую переписку из скрытой вкладки пользовательского окна в активную вкладку отдельного нефокусируемого окна; не требовать ручного переключения | Node-тест окна без фокуса; требуется реальная Chrome-проверка |
+| R011: два разных чата собираются одновременно без взаимных переключений | T011: независимые окна и параллельный запуск обеих задач через `Promise.allSettled` | Node-тест конкуренции запуска и раздельных ID; требуется Chrome-проверка |
+| R012: один чат двумя потоками с удобным выбором | T012: автоматический поиск середины между отметками «Начало» и «Конец»; вручную отмечать середину не обязательно | Node-тест надёжных ID, порядка и независимого планировщика; требуется Chrome-проверка |
+| R013: не удалять/не портить старые архивы и черновики | T013: оставить существующие ключи архивов и завершения; ничего не удалять при ошибке планирования | Тесты очереди и индексов; контроль исходного запуска 0.4.72 остаётся незакрытым |
+
+## Архитектурный факт
+
+Старый одиночный путь (история от `0.3.10`, позднее восстановлен в `service-worker.js`) предварительно показывал рабочую вкладку, затем возвращал пользовательский фокус. В 0.4.76 два новых queue worker одновременно не имели самостоятельных активных контекстов: запуск осуществлялся последовательно в одном окне, а скрипты ожидали физического DOM-рендеринга и прокрутки. Это согласуется с жалобой и является подтверждённым недостатком механизма, но конкретное поведение пользовательского браузера без E2E не доказано.
+
+Для 0.4.77 Chrome `windows.create({type:'normal',state:'normal',focused:false})` создаёт отдельное окно на каждый проход. Скрытая/неактивная вкладка больше не является рабочей копией. Исходная вкладка не активируется и не переставляется на запуске. Внутренний `ARCHIVER_START_SPLIT_PLAN` проходит от начала до конца с перекрытием, не публикует архив, передаёт сильную середину в `ARCHIVER_SPLIT_PLAN_READY`. При ошибке вызывает обычный путь `ARCHIVER_CAPTURE_FAILED`; финальное объединение двух самостоятельных архивов по-прежнему требует доказанного стыка.
+
+## Блокировки
+
+- Нельзя считать фоновую работу подтверждённой только по GitHub CI; нужен пользовательский Chrome с продолжительным сбором, открытой другой пользовательской вкладкой и двумя одновременными рабочими окнами.
+- Предварительный автоматический проход по длинному диапазону может быть дорогим, пока отсутствует доказанный более быстрый безопасный индекс; не подменять его неточным прыжком по координатам и не объявлять «мгновенным».
+- Сохранённые ранее черновики при незавершённом проходе 0.4.72 ещё не проверены; обновление установленной версии возможно только после отдельной проверки резервной копии.
+- Встроенная браузерная приёмка и фактический экспорт Google Docs в рамках облачного CI не выполнены.
+
+## Продолжение
+
+Проверить CI, починить обнаруженные тестовые и кодовые сбои. Затем проверить сборку `main`. Реальный длительный тест — отдельный этап приёмки, результаты фиксировать здесь. Не подменять проверку Chrome фразой «сделано».
+
+---
+
 # 2026-10-28 — Контрольная точка 0.4.76: повторный физический рубеж и идемпотентная публикация
 
 **Исходная точка:** `main` 0.4.75, `d256c12801e035c595ba3658b870885329dcaf57`. Текущая ветка: `fix/monotonic-frontier-and-idempotent-merge-0.4.76`.
@@ -553,3 +602,15 @@ Next tests: library selection from an open different chat; view/mark/save tab pl
 **Verification:** GitHub Actions run `40578741997` passed both extension and updater jobs; 63 Node.js behavioral/unit tests passed, including the new partial-overlap cases. This is source/build verification only. Live Chrome validation is not claimed. Required browser checks: (1) reopen overlapping versions; (2) inspect grouped card and combined content; (3) export and confirm Google Docs body; (4) resume from the rightmost saved frontier; (5) delete a synthetic merged snapshot without losing the source attempts; (6) confirm equal-titled distinct conversations stay separated.
 
 **Next operation:** merge the source-verified PR to `main`; then perform the browser checklist against a long saved chat. If a real archive reveals ambiguous overlap, preserve both source drafts and inspect the exact conflicting ID/role/text sequences before changing the matcher. Earlier live scroll validation remains pending.
+
+
+## 2026-10-29 — background CDP lifecycle, PR #55 (candidate, not released)
+
+- Scope: restore unattended background capture and independent queue lanes; retain existing 0.4.77 split planner and overlap logic.
+- lib/background-focus-manager.mjs owns one session per tab, serializes CDP access by tab, validates target URL and visibility, rejects DevTools conflicts, and releases debugger explicitly.
+- service-worker.js reuses the managed debugger for wheel scroll, clicks, selection copy, and rendered image capture. Managed wheel errors cannot silently turn into unverified scripted scrolling.
+- Queue and single-capture paths attach before starting the content collector and release on completion, error, cancellation or planner completion. Tab close, navigation and debugger detach invalidate ownership.
+- tests/background-focus-manager.test.mjs adds concurrency, ownership, visibility, detach and command-serialization coverage. scripts/verify.mjs now includes the module and test file.
+- GitHub Actions source verification and extension packaging passed on e58a089616b15509b9d29aaeb02c23fb5aa5c2a1, run 40878112673. Later commits require fresh verification.
+- Still unverified: real unattended Chrome scrolling and DOM hydration, two lanes in parallel, CDP service-worker continuity, very long turns/images, split planning/merge, and Google Docs export.
+- Keep PR #55 draft and main unchanged until installed-Chrome acceptance. Next: test background progress while working in a third tab; then two-lane isolation, pause/resume, split merge, failure/draft recovery, Docs export.

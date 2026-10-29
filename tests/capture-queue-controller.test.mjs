@@ -19,7 +19,9 @@ const archive = (id, sourceUrl, ids, mode = 'full') => ({
 function fixture({
   legacyActive = async () => false,
   waitForDomReady = async () => {},
-  waitForInjection = async () => {}
+  waitForInjection = async () => {},
+  prepareBackgroundCapture = async () => ({ok:true}),
+  releaseBackgroundCapture = async () => true
 } = {}) {
   const data = new Map();
   let failFinalStateWrite = false;
@@ -27,10 +29,12 @@ function fixture({
   const archives = new Map();
   const published = [];
   const launches = [];
+  const backgroundWindows = [];
   const cancelledMessages = [];
   const removedTabs = [];
   const pausedJobs = new Set();
   let nextTabId = 70;
+  let nextWindowId = 200;
   const storage = {
     async get(keys) {
       if (keys == null) return Object.fromEntries(
@@ -53,10 +57,12 @@ function fixture({
         data.set(key, structuredClone(value));
       }
     },
-    async getBytesInUse(key) { return data.has(key) ? JSON.stringify(data.get(key)).length : 0; }
+    async getBytesInUse(key) { return data.has(key) ? JSON.stringify(data.get(key)).length : 0; },
+    async remove(key) { data.delete(key); }
   };
   const chrome = {
     storage: { local: storage },
+    alarms: { async create() {} },
     tabs: {
       async query() { return [{ id: 1, windowId: 1, url: chat(987) }]; },
       async create(options) { return { id: nextTabId++, url: options.url }; },
@@ -85,13 +91,32 @@ function fixture({
         return { ok: true };
       }
     },
-    windows: { async update() {} }
+    windows: {
+      async update() {},
+      async remove() {},
+      async create(options) {
+        const created = {
+          id: nextWindowId++,
+          tabs: [{ id: nextTabId++, url: options.url }]
+        };
+        backgroundWindows.push({ ...options, windowId: created.id, tabId: created.tabs[0].id });
+        return created;
+      }
+    }
   };
   const dependencies = {
     isConversationUrl: url => /^https:\/\/chatgpt\.com\/c\//.test(url),
     legacyCaptureActive: legacyActive,
+    createUnfocusedCaptureWindow: async sourceUrl => {
+      const created = await chrome.windows.create({
+        url: sourceUrl, focused: false, type: 'normal', state: 'normal'
+      });
+      return { tab: created.tabs[0], windowId: created.id };
+    },
     waitForChatTabComplete: async () => ({}),
     waitForChatDomReady: waitForDomReady,
+    prepareBackgroundCapture,
+    releaseBackgroundCapture,
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
       launches.push({ tabId, jobId, opts });
       await waitForInjection(tabId, jobId, opts);
@@ -111,7 +136,7 @@ function fixture({
   }
   return {
     controller, chrome, storage, data, archives, published, launches, settled,
-    cancelledMessages, removedTabs,
+    backgroundWindows, cancelledMessages, removedTabs,
     failNextDoneStateWrite,
     freshController: () => createCaptureQueueController(chrome, dependencies)
   };
@@ -539,7 +564,7 @@ test('cancel during DOM readiness never launches a collector and releases its sl
   await domReached;
   let state = await f.controller.getState();
   assert.equal(state.workers[0].status, 'starting');
-  assert.equal(state.workers[0].captureTabId, null);
+  assert.ok(state.workers[0].captureTabId != null); // Window is allocated before DOM hydration.
   await f.controller.cancel(state.items[0].id);
   releaseDom();
   state = await f.settled(s => s.items[0].status === 'cancelled');
@@ -598,4 +623,281 @@ test('a stranded starting slot with no working tab is retired without touching d
   assert.equal(state.items[0].status,'error');
   assert.equal(state.workers[0].status,'error');
   assert.deepEqual((await f.storage.get('draft:draft-old'))['draft:draft-old'],previousDraft);
+});
+
+test('two queue collectors open their own visible unfocused windows and do not switch the user tab', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({ sourceUrl: chat(81), mode: 'two-chats' });
+  await f.controller.enqueue({ sourceUrl: chat(82), mode: 'two-chats' });
+  await f.controller.enable(true);
+  const state = await f.settled(s => s.workers.length === 2 &&
+    s.workers.every(w => w.status === 'running'));
+  assert.equal(f.backgroundWindows.length, 2);
+  assert.ok(f.backgroundWindows.every(w => w.focused === false &&
+    w.state === 'normal' && w.type === 'normal'));
+  assert.notEqual(state.workers[0].captureWindowId, state.workers[1].captureWindowId);
+  assert.equal(state.workers[0].captureWindowId, f.backgroundWindows[0].windowId);
+  assert.equal(state.workers[1].captureWindowId, f.backgroundWindows[1].windowId);
+});
+
+test('both workers begin DOM hydration concurrently instead of waiting for each other', async () => {
+  let entered = 0;
+  let release;
+  const block = new Promise(resolve => { release = resolve; });
+  const f = fixture({
+    waitForDomReady: async () => { entered++; await block; }
+  });
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({ sourceUrl: chat(83), mode:'two-chats' });
+  await f.controller.enqueue({ sourceUrl: chat(84), mode:'two-chats' });
+  await f.controller.enable(true);
+  const started = await f.settled(() => entered === 2);
+  assert.equal(started.workers.length, 2);
+  assert.equal(f.backgroundWindows.length,2);
+  release();
+  await f.settled(s => s.workers.every(w => w.status === 'running'));
+});
+
+test('automatic split first launches only a background planner with two user markers', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl = chat(85);
+  const key = 'archiverFragmentMarkers:' + new URL(sourceUrl).origin + new URL(sourceUrl).pathname;
+  await f.storage.set({
+    [key]: { start:markers.start, end:markers.end }
+  });
+  await f.controller.enqueue({ sourceUrl, mode:'split-chat' });
+  await f.controller.enable(true);
+  const planned = await f.settled(state =>
+    state.workers.length===1 && state.workers[0].status==='running');
+  assert.equal(planned.workers[0].lane,'planner');
+  assert.equal(f.launches[0].opts.mode,'split-plan');
+  assert.equal(planned.items[0].status,'running');
+  const job = planned.workers[0];
+  const result = await f.controller.planned({
+    jobId:job.jobId,startId:markers.start.id,endId:markers.end.id,
+    middle:markers.middle,visitedCount:8
+  },job.captureTabId);
+  assert.equal(result.ok,true);
+  const next = await f.settled(state => state.workers.length===2 &&
+    state.workers.every(worker => worker.status==='running'));
+  assert.equal(next.items[0].captureRange.middle.id,markers.middle.id);
+  assert.deepEqual(next.workers.map(w=>w.lane).sort(),['first','second']);
+  assert.equal(f.backgroundWindows.length,3);
+  assert.equal(f.launches.length,3);
+});
+
+test('split planner cannot alter the original marked boundaries or forge its sender', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl = chat(86);
+  const key = 'archiverFragmentMarkers:' + new URL(sourceUrl).origin + new URL(sourceUrl).pathname;
+  await f.storage.set({ [key]: { start:markers.start,end:markers.end } });
+  await f.controller.enqueue({ sourceUrl,mode:'split-chat' });
+  await f.controller.enable(true);
+  const state = await f.settled(s=>s.workers.length===1&&s.workers[0].status==='running');
+  const planner=state.workers[0];
+  await assert.rejects(
+    () => f.controller.planned({
+      jobId:planner.jobId,startId:markers.start.id,endId:'data-message-id:wrong',
+      middle:markers.middle
+    },planner.captureTabId), /исходный диапазон/
+  );
+  await assert.rejects(
+    () => f.controller.planned({
+      jobId:planner.jobId,startId:markers.start.id,endId:markers.end.id,
+      middle:markers.middle
+    },planner.captureTabId+1), /не из его рабочей вкладки/
+  );
+  assert.equal((await f.controller.getState()).workers[0].lane,'planner');
+});
+
+
+test('automatic split planner uses one slot, then waits for two free slots', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl=chat(81);
+  const key='archiverFragmentMarkers:'+new URL(sourceUrl).origin+new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:{start:markers.start,end:markers.end}});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enqueue({sourceUrl:chat(82),mode:'two-chats'});
+  await f.controller.enable(true);
+  const running=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  const planner=running.workers.find(w=>w.lane==='planner');
+  const sibling=running.workers.find(w=>w.lane==='single');
+  assert.ok(planner);assert.ok(sibling);
+  assert.equal(f.launches.length,2);
+  const ack=await f.controller.planned({
+    jobId:planner.jobId,startId:markers.start.id,endId:markers.end.id,
+    middle:markers.middle,visitedCount:11
+  },planner.captureTabId);
+  assert.equal(ack.ok,true);
+  assert.equal(f.launches.length,2); // one occupied slot cannot run a two-lane split
+  const interim=await f.controller.getState();
+  assert.equal(interim.items[0].status,'queued');
+  assert.equal(interim.workers.length,1);
+  const complete=archive('single-q-'+sibling.jobId,sibling.sourceUrl,['a','b']);
+  f.archives.set(complete.id,complete);
+  assert.equal((await f.controller.complete({
+    jobId:sibling.jobId,archiveId:complete.id
+  },sibling.captureTabId)).ok,true);
+  const next=await f.settled(q=>q.workers.length===3 &&
+    q.workers.filter(w=>w.lane==='first'||w.lane==='second').length===2 &&
+    q.workers.filter(w=>w.lane==='first'||w.lane==='second').every(w=>w.status==='running'));
+  assert.equal(next.workers.filter(w=>w.lane==='first'||w.lane==='second').length,2);
+  assert.equal(f.launches.length,4);
+});
+
+test('MV3 restart revalidates debugger ownership on both saved queue tabs', async () => {
+  const prepared=[];
+  const f=fixture({prepareBackgroundCapture:async(tabId,jobId,sourceUrl)=>{
+    prepared.push({tabId,jobId,sourceUrl});return {ok:true};
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(83),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(84),mode:'two-chats'});
+  await f.controller.enable(true);
+  const before=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  assert.equal(prepared.length,2);
+  const state=(await f.storage.get('archiverCaptureQueueV1')).archiverCaptureQueueV1;
+  for(const w of state.workers) w.updatedAt=Date.now()-310000;
+  await f.storage.set({archiverCaptureQueueV1:state});
+  const newWorker=f.freshController();
+  await newWorker.tick();
+  assert.equal(prepared.length,4);
+  assert.equal(f.backgroundWindows.length,2);
+  const after=(await newWorker.getState()).workers;
+  assert.deepEqual(after.map(w=>w.jobId),before.workers.map(w=>w.jobId));
+  assert.ok(after.every(w=>w.status==='running'));
+});
+
+test('debugger detach fails only affected worker and retains its exact draft', async()=>{
+  const releases=[];
+  const f=fixture({releaseBackgroundCapture:async(tabId,jobId)=>{
+    releases.push(jobId);return true;
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(85),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(86),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  const [a,b]=workers;
+  const draftId='draft-'+a.jobId;
+  await f.storage.set({['draft:'+draftId]:{id:draftId,messages:[turn('a'),turn('b')]}});
+  await f.controller.checkpoint({jobId:a.jobId,draftId,draftCount:2},a.captureTabId);
+  await f.controller.detached(a.jobId,a.captureTabId,'canceled_by_user');
+  const after=await f.controller.getState();
+  assert.equal(after.workers[0].status,'error');
+  assert.equal(after.workers[1].status,'running');
+  assert.equal(after.workers[0].draftId,draftId);
+  assert.equal((await f.storage.get('draft:'+draftId))['draft:'+draftId].messages.length,2);
+  assert.ok(releases.includes(a.jobId));
+  assert.ok(!releases.includes(b.jobId));
+});
+
+
+test('cancelling one queue item releases only its debugger; the other can finish', async () => {
+  const releases=[];
+  const f=fixture({releaseBackgroundCapture:async(tabId,jobId)=>{
+    releases.push(jobId);return true;
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(87),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(88),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===2 &&
+    q.workers.every(w=>w.status==='running'));
+  const [first,second]=workers;
+  await f.controller.cancel(first.itemId);
+  const after=await f.controller.getState();
+  assert.equal(after.workers[0].status,'stopping');
+  assert.equal(after.workers[1].status,'running');
+  assert.ok(releases.includes(first.jobId));
+  assert.ok(!releases.includes(second.jobId));
+  const completed=archive('ok-q-'+second.jobId,second.sourceUrl,['a','b']);
+  f.archives.set(completed.id,completed);
+  assert.equal((await f.controller.complete({
+    jobId:second.jobId,archiveId:completed.id
+  },second.captureTabId)).ok,true);
+});
+
+test('failed debugger reattachment preserves paused lane and draft for later retry', async () => {
+  let count=0;
+  const f=fixture({prepareBackgroundCapture:async()=>{
+    if(++count>1) throw new Error('DevTools busy');
+    return {ok:true};
+  }});
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(89),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===1 &&
+    q.workers[0].status==='running');
+  const w=workers[0];
+  assert.equal((await f.controller.pause(w.itemId,w.lane)).ok,true);
+  const resumed=await f.controller.resume(w.itemId,w.lane);
+  assert.equal(resumed.ok,false);
+  const state=await f.controller.getState();
+  assert.equal(state.workers[0].status,'paused');
+  assert.equal(state.workers[0].jobId,w.jobId);
+  assert.match(resumed.error,/DevTools busy/);
+});
+
+test('startup that loses content handshake is retired after timeout, never reserves a permanent slot', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.77');
+  await f.controller.enqueue({sourceUrl:chat(90),mode:'two-chats'});
+  await f.controller.enable(true);
+  const {workers}=await f.settled(q=>q.workers.length===1 &&
+    q.workers[0].status==='running');
+  const state=(await f.storage.get('archiverCaptureQueueV1')).archiverCaptureQueueV1;
+  state.workers[0].status='starting';
+  state.workers[0].updatedAt=Date.now()-310000;
+  await f.storage.set({archiverCaptureQueueV1:state});
+  f.chrome.tabs.sendMessage=async()=>null;
+  await f.controller.tick();
+  const after=await f.controller.getState();
+  assert.equal(after.workers[0].status,'error');
+  assert.equal(after.items[0].status,'error');
+});
+
+
+test('planner cleanup survives worker restart and never closes a repurposed window', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl=chat(91);
+  const key='archiverFragmentMarkers:'+new URL(sourceUrl).origin+new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:{start:markers.start,end:markers.end}});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enable(true);
+  const state=await f.settled(q=>q.workers.length===1 &&
+    q.workers[0].status==='running');
+  const planner=state.workers[0];
+  await f.controller.planned({
+    jobId:planner.jobId,startId:markers.start.id,endId:markers.end.id,
+    middle:markers.middle,visitedCount:8
+  },planner.captureTabId);
+  const taskKey='archiverQueuePlannerCleanupV1';
+  const stored=(await f.storage.get(taskKey))[taskKey];
+  assert.equal(stored.length,1);
+  assert.equal(stored[0].tabId,planner.captureTabId);
+  const closed=[];
+  f.chrome.tabs.query=async({windowId}={})=>{
+    if(windowId===planner.captureWindowId) {
+      return [{id:planner.captureTabId,url:sourceUrl}];
+    }
+    return [{id:1212,url:chat(92)}];
+  };
+  f.chrome.windows.remove=async id=>{closed.push(id);};
+  stored[0].dueAt=Date.now()-1;
+  stored.push({jobId:'foreign',windowId:9999,tabId:9998,
+    sourceUrl:chat(92),dueAt:Date.now()-1});
+  await f.storage.set({[taskKey]:stored});
+  const restarted=f.freshController();
+  await restarted.cleanupPlannerWindows();
+  assert.deepEqual(closed,[planner.captureWindowId]);
+  assert.deepEqual((await f.storage.get(taskKey))[taskKey],[]);
 });

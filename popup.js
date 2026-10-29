@@ -1014,7 +1014,7 @@ async function saveSettings(patch, noticeId = 'settingsSaved') {
 
 const QUEUE_MODE_OPTIONS = [
   { value: 'two-chats', label: 'Два разных чата параллельно' },
-  { value: 'split-chat', label: 'Эксперимент: один чат, два потока' }
+  { value: 'split-chat', label: 'Эксперимент: один чат, два потока (середина автоматически)' }
 ];
 const QUEUE_STATE_LABELS = {
   queued: 'В очереди', starting: 'Запускается', running: 'Собирается',
@@ -1123,6 +1123,7 @@ function renderQueue(queue) {
       line.className = 'queue-worker';
       const position = Number(worker.physicalScrollTop);
       line.textContent = (worker.lane === 'single' ? 'Сборщик' :
+        worker.lane === 'planner' ? 'Планирование середины' :
         worker.lane === 'first' ? 'Поток 1' : 'Поток 2') +
         ' · ' + (QUEUE_STATE_LABELS[worker.status] || worker.status) +
         ' · ' + Number(worker.count || 0) + ' сообщений' +
@@ -1149,7 +1150,7 @@ function renderQueue(queue) {
     if (item.mode === 'split-chat' && item.status === 'queued') {
       const hint = document.createElement('div');
       hint.className = 'queue-worker';
-      hint.textContent = 'Перед запуском отметьте в этой переписке начало, середину и конец.';
+      hint.textContent = 'Перед запуском достаточно отметить начало и конец. Середина будет найдена автоматически.';
       row.appendChild(hint);
     }
     if (item.error) {
@@ -1250,7 +1251,11 @@ function render(data) {
   $('capture').textContent = 'Собрать чат';
   if (!running && hasManualRange) {
     $('fragmentHint').textContent =
-      'Начало и конец основного архива отмечены. Оставьте начало видимым и нажмите «Собрать отмеченный диапазон». Этот режим не открывает копию и не ищет верх автоматически.';
+      'Начало и конец основного архива отмечены. ' +
+        (String($('captureTarget').value) === 'current'
+          ? 'Для сбора в текущей вкладке оставьте начало видимым.'
+          : 'Фоновый сбор откроет отдельную рабочую копию и сам найдёт начало.') +
+        ' Нажмите «Собрать отмеченный диапазон».';
   }
 
   renderQueue(state.queue);
@@ -1684,11 +1689,10 @@ $('openMarkingTab').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_OPEN_MARKING_TAB' });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть рабочую вкладку для разметки.');
-    await saveSettings({ captureTarget: 'current' }, null);
-    $('captureTarget').value = 'current';
-    updateCaptureTargetHint('current');
     $('fragmentHint').textContent =
-      'Рабочая вкладка открыта. Отметьте в ней «Конец», затем «Начало», оставьте начало видимым и нажмите «Собрать отмеченный диапазон».';
+      'Рабочая вкладка открыта для разметки. Отметьте «Начало» и «Конец». ' +
+      'При выборе фонового сбора архиватор самостоятельно найдёт начало в своей копии; ' +
+      'оставаться на этой вкладке не нужно.';
   } catch (error) {
     setStatus(error.message || String(error), true);
     button.disabled = false;
@@ -1700,7 +1704,7 @@ $('captureFragment').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CAPTURE_FRAGMENT',
-      captureTarget: 'current'
+      captureTarget: $('captureTarget').value
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор диапазона.');
     $('fragmentHint').textContent = 'Сбор отмеченного диапазона запущен.';

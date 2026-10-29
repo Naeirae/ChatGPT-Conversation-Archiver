@@ -27,6 +27,18 @@ jobs:
           path: dist/extension
           if-no-files-found: error
 
+  browser-cdp-smoke:
+    runs-on: ubuntu-latest
+    needs: extension
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Verify physical CDP scrolling of two background virtualized feeds
+        run: node scripts/browser-cdp-smoke.mjs
+
   updater:
     runs-on: windows-latest
     steps:

@@ -18,6 +18,7 @@ const jsFiles = [
   'lib/capture-recovery.mjs',
   'lib/capture-queue.mjs',
   'lib/capture-queue-controller.mjs',
+  'lib/background-focus-manager.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -711,14 +712,15 @@ try {
       primaryCaptureBlock.includes("type: 'ARCHIVER_CAPTURE_CURRENT'") ||
       !rangeCaptureBlock ||
       !rangeCaptureBlock.includes("type: 'ARCHIVER_CAPTURE_FRAGMENT'") ||
-      !rangeCaptureBlock.includes("captureTarget: 'current'") ||
+      !rangeCaptureBlock.includes("captureTarget: $('captureTarget').value") ||
       !popupHtml.includes('>Разметить диапазон</button>') ||
       !popupHtml.includes('>Собрать отмеченный диапазон</button>') ||
       !popupHtml.includes('capture-location hidden') ||
       !serviceWorkerSource.includes("case 'ARCHIVER_CAPTURE_FRAGMENT':") ||
-      !serviceWorkerSource.includes("mode: 'fragment', captureTarget: 'current'") ||
+      !serviceWorkerSource.includes("mode: 'fragment',") ||
+      !serviceWorkerSource.includes("captureTarget: message.captureTarget || 'copy'") ||
       !serviceWorkerSource.includes("if (mode === 'fragment' && (!markers.start || !markers.end))")) {
-    fail('manual range UX: primary capture must mark and collect an explicit current-tab range without automatic full-chat navigation');
+    fail('manual range UX: marked boundaries remain authoritative, background must honor selected capture target');
   }
   // Verify the worker contract independently of the popup. Recovery alarms
   // and direct startCapture callers must not bypass the positioned-tab rule.
@@ -742,13 +744,14 @@ try {
   const navigationResumeBlock = navigationResumeStart >= 0 && navigationResumeEnd > navigationResumeStart
     ? serviceWorkerSource.slice(navigationResumeStart, navigationResumeEnd)
     : '';
-  if (!startCaptureBlock.includes("(mode === 'fragment' ||") ||
-      !startCaptureBlock.includes("providedDraft?.captureMode === 'fragment'") ||
+  if (!startCaptureBlock.includes("captureTarget = captureTarget === 'current' ? 'current' : 'copy'") ||
+      startCaptureBlock.includes("(mode === 'fragment' ||") ||
+      !startCaptureBlock.includes("seekMarkedStart: mode === 'fragment' && captureTarget === 'copy'") ||
       !finishErrorBlock.includes("job.captureMode !== 'fragment'") ||
       !autoRecoveryBlock.includes("failedJob.captureMode === 'fragment'") ||
       navigationResumeBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(failedJob.captureMode)") ||
       finishErrorBlock.includes("['full', 'fragment', 'reconcile', 'images'].includes(job.captureMode)")) {
-    fail('manual range isolation: force positioned current tab; never restart range through legacy navigation recovery or stale alarms');
+    fail('manual range isolation: respect selected background/current target while keeping verified fragment boundaries and disabling unsafe legacy retry');
   }
   const manualContentSource = await readFile('content-chatgpt.js', 'utf8');
   const captureStart = manualContentSource.indexOf('async function captureConversation(');
@@ -981,14 +984,17 @@ try {
     fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
   }
 
-  const bgCreateStart = serviceWorkerSource.indexOf("captureTab = await chrome.tabs.create({ url: inspection.href, active: true })");
-  const bgStartCollector = serviceWorkerSource.indexOf("await ensureChatGptContentScript(captureTab.id, jobId");
-  const bgRestoreSource = serviceWorkerSource.indexOf("await chrome.tabs.update(sourceTab.id, { active: true })", bgStartCollector);
-  if (bgCreateStart < 0 ||
-      bgStartCollector < 0 ||
-      bgRestoreSource < bgStartCollector ||
+  const bgCreateStart = serviceWorkerSource.indexOf('const opened = await createUnfocusedCaptureWindow(inspection.href)');
+  const bgStartCollector = serviceWorkerSource.indexOf('await ensureChatGptContentScript(captureTab.id, jobId', bgCreateStart);
+  const bgWindowStart = serviceWorkerSource.indexOf('async function createUnfocusedCaptureWindow(');
+  const bgWindowEnd = serviceWorkerSource.indexOf('async function waitForChatTabComplete(', bgWindowStart);
+  const bgWindow = serviceWorkerSource.slice(bgWindowStart, bgWindowEnd);
+  if (bgCreateStart < 0 || bgStartCollector < bgCreateStart ||
+      !bgWindow.includes('focused: false') ||
+      !bgWindow.includes("state: 'normal'") ||
+      !serviceWorkerSource.includes('createUnfocusedCaptureWindow,') ||
       !serviceWorkerSource.includes("files: ['content-chatgpt.js']")) {
-    fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
+    fail('background capture: create non-minimized unfocused independent window, then inject collector without switching source tab');
   }
 
   const retryRuntimeStart = contentSource.indexOf('function findVisibleLoadRetry()');
@@ -1205,6 +1211,19 @@ if (!completedMergeSource.includes('verifiedChronologicalOverlap(') ||
   fail('completed archives: explicit non-destructive verified consolidation required');
 }
 
+const focusSource = await readFile('lib/background-focus-manager.mjs', 'utf8');
+const backgroundWorkerSource = await readFile('service-worker.js', 'utf8');
+const queueSource = await readFile('lib/capture-queue-controller.mjs', 'utf8');
+if (!focusSource.includes('Emulation.setFocusEmulationEnabled') ||
+    !focusSource.includes('async function withDebugger(') ||
+    !backgroundWorkerSource.includes('backgroundFocus.withDebugger(tabId') ||
+    !backgroundWorkerSource.includes('backgroundFocus.enable(captureTab.id') ||
+    !backgroundWorkerSource.includes('chrome.debugger.onDetach.addListener') ||
+    !queueSource.includes('deps.prepareBackgroundCapture(tab.id') ||
+    !queueSource.includes('deps.releaseBackgroundCapture(')) {
+  fail('background capture: persistent CDP session integration is incomplete');
+}
+
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
@@ -1220,6 +1239,8 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-queue-controller.test.mjs',
   'tests/capture-pause-resume.test.mjs',
   'tests/capture-continuity-watchdog.test.mjs',
+  'tests/background-capture-and-autosplit.test.mjs',
+  'tests/background-focus-manager.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',

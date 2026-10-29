@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.4.77 — восстановление фона и двух потоков
+
+- Добавлена проверка настоящего Chromium/Chrome через CDP: два синтетических виртуализированных потока физически прокручиваются независимо, третья страница не двигается. Проверяются отключение и повторное подключение debugger с сохранением scrollTop.
+- GitHub Actions включает отдельный browser-cdp-smoke после Node-верификации. Chrome 156: оба потока +750 px, первый после повторного подключения CDP +400 px, пользовательская страница 0 px (run 40939326562).
+- После первоначального CDP attach короткая задержка document.visibilityState=visible допускается с ограниченным повтором; постоянное hidden остаётся ошибкой.
+- Это проверка браузерного транспорта на синтетическом DOM, не эксплуатационная приёмка ChatGPT. Решение о выпуске 0.4.77 принято пользователем 2026-10-29 при известном ограничении: семь сценариев на реальных чатах не проверены. Обновление устанавливается из main через существующий обновлятор; сохранённые архивы и черновики не очищаются.
+
+
+- 2026-10-29 follow-up: restore managed CDP only after original content script confirms its jobId, URL and live status; preserve failure when DevTools owns a tab.
+- Start CDP focus emulation before waiting for ChatGPT virtualized message hydration, including single and queued copies; retry visibility briefly to allow rendering tick.
+- Preserve debugger on same-chat URL updates; store scroll heartbeat only after measured movement or verified edge; screenshot requires the originating active job.
+- Automatic midpoint planner reserves one slot, only counts physically visible turn witnesses, and durably schedules closing its own window after handoff.
+- Independent queue pause, resume, stop, detach and MV3 rebind covered by updated Node regression tests; late cancel no longer resurrects a background single-capture launch.
+- GitHub Actions run 40881567548 on 18eaf8d02739910cef0a905b62bd0bd02ebac139: 192/192 tests passed, extension packaged, updater job passed; installed Chrome acceptance pending.
+
+- Сборщик в режиме «Рабочая копия» больше не уходит в скрытую вкладку исходного окна: открывается отдельное нормальное окно Chrome, не перехватывающее пользовательский фокус. В этом окне рабочая переписка остаётся активной для отрисовки виртуализированных сообщений и выполнения скрипта. Не минимизируйте рабочие окна во время проверки.
+- Очередь двух разных чатов открывает отдельное нефокусируемое окно каждому заданию и запускает их подготовку параллельно, а не последовательно. Задания и контрольные точки не объединяются.
+- Экспериментальный режим одного чата по двум потокам больше не требует вручную выбирать середину: достаточно ранее существующих двух отметок «Начало» и «Конец». Планировщик сканирует выбранный диапазон без публикации архива, подтверждает смежность кадров и выбирает среднюю реплику вместе с двумя реальными соседями с устойчивыми ID. После этого запускаются два независимых прохода и ранее реализованная строгая проверка перекрытия. Ручная середина допускается как дополнительный быстрый путь.
+- При сомнительном предварительном проходе автоматическая середина не считается подтверждённой и общий архив не публикуется; оригинальные пользовательские отметки и сохранённые черновики не удаляются.
+- Добавлены тесты создания нефокусируемых окон, реальной конкурентной подготовки двух сборщиков, безопасности автоматической середины, отказа от чужих границ и сохранения прежних гарантий сборов.
+- Автоматические тесты и Chrome CDP-smoke не доказывают устойчивость установленного расширения на реальных больших чатах. Реальная браузерная приёмка остаётся отдельной незакрытой задачей после выпуска.
+
+
 ## 0.4.76 — действительно новый участок, сохранность объединённых архивов
 
 - Защита длинной прокрутки учитывает достигнутый физический максимум и новые устойчивые ID. Повторное прохождение уже виденного участка вниз после возврата вверх больше не обнуляет историю неудачных стыков; 24 повторных физических шага без нового рубежа прерывают проход с сохранением черновика.
@@ -1167,3 +1190,11 @@ This project is pre-1.0. Entries describe repository changes; browser behavior i
 - structured run logs and incomplete drafts;
 - Windows ZIP updater iterations;
 - rich clipboard export and Google Docs physical paste.
+
+
+## Unreleased 0.4.77 — background debugger integration (2026-10-29)
+
+- Persistent Chrome Debugger focus emulation for background capture tabs, shared by physical scrolling and rendered-image fallback.
+- Independent serialized CDP ownership for two capture queue lanes and explicit lifecycle cleanup.
+- Fail closed on hidden/mismatched target pages, conflicting DevTools, or unexpected debugger detach.
+- Additional behavioral tests and source guards. Release remains pending browser acceptance in draft PR #55.
