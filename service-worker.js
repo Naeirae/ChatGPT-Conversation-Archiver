@@ -1421,6 +1421,23 @@ async function inspectStalledSingleCapture() {
   const current = await getJob();
   if (current?.jobId !== job.jobId ||
       !shouldInspectCapture(current, Date.now())) return;
+  // The live content script can have exited while old progress and a popup
+  // snapshot still claim "running". This explicit health response (unlike a
+  // timeout) is proof that the job cannot be paused or continued in memory.
+  if (health?.ok && (health.jobId !== job.jobId || health.running === false)) {
+    const draftId = current.draftId || current.recoveryDraftId ||
+      ('draft-' + current.jobId);
+    const draft = await getDraft(draftId).catch(() => null);
+    await finishJobWithError(
+      current.jobId, current.sourceTabId ?? current.tabId,
+      'Скрипт сбора завершился, но интерфейс продолжал показывать активный проход. ' +
+      'Сохранённая часть доступна в незавершённых сборах.',
+      draft?.id || current.draftId || current.recoveryDraftId || '',
+      Math.max(Number(draft?.messages?.length || 0), Number(current.draftCount || 0)),
+      'error'
+    );
+    return;
+  }
   const evidence = captureStallEvidence(current, tab, health, Date.now());
   const message = stallDiagnosticText(evidence);
   await appendRunLog({ lastStallDiagnosticAt: Date.now() }, {
