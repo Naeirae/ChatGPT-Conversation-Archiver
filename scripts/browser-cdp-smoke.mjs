@@ -135,6 +135,17 @@ async function main() {
       },lane.id);
       return result.result?.value;
     }
+    // Exercise the reported current-tab workflow: A is brought forward,
+    // then the user switches to another page, while A keeps CDP focus
+    // emulation and must still accept physical wheel input.
+    await cdp.send('Page.bringToFront',{},a.id);
+    const activeCollector=await metrics(a);
+    await cdp.send('Page.bringToFront',{},user.id);
+    const switchedCollector=await metrics(a);
+    assert.equal(activeCollector.top,0);
+    assert.equal(switchedCollector.visibility,'visible',
+      'Collector lost emulated visibility after user switched tabs');
+    assert.equal(switchedCollector.hidden,false);
     const before=await Promise.all([metrics(a),metrics(b),metrics(user)]);
     for(const x of before)assert.equal(x.top,0,'Initial scroll offset');
     for(const x of before.slice(0,2)){
@@ -213,7 +224,7 @@ async function main() {
         b:{initial:before[1].top,moved:moved[1].top,
           firstId:moved[1].first}
       },
-      resumedSession:true,lifecycleThaw:true,
+      currentTabSwitchedAway:true,resumedSession:true,lifecycleThaw:true,
       userTabTop:userUnchanged.top,
       limitation:'Synthetic virtualized pages, not authenticated ChatGPT or extension E2E'
     }));
