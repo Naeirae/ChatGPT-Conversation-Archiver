@@ -589,3 +589,15 @@ Next tests: library selection from an open different chat; view/mark/save tab pl
 **Verification:** GitHub Actions run `40578741997` passed both extension and updater jobs; 63 Node.js behavioral/unit tests passed, including the new partial-overlap cases. This is source/build verification only. Live Chrome validation is not claimed. Required browser checks: (1) reopen overlapping versions; (2) inspect grouped card and combined content; (3) export and confirm Google Docs body; (4) resume from the rightmost saved frontier; (5) delete a synthetic merged snapshot without losing the source attempts; (6) confirm equal-titled distinct conversations stay separated.
 
 **Next operation:** merge the source-verified PR to `main`; then perform the browser checklist against a long saved chat. If a real archive reveals ambiguous overlap, preserve both source drafts and inspect the exact conflicting ID/role/text sequences before changing the matcher. Earlier live scroll validation remains pending.
+
+
+## 2026-10-29 — background CDP lifecycle, PR #55 (candidate, not released)
+
+- Scope: restore unattended background capture and independent queue lanes; retain existing 0.4.77 split planner and overlap logic.
+- lib/background-focus-manager.mjs owns one session per tab, serializes CDP access by tab, validates target URL and visibility, rejects DevTools conflicts, and releases debugger explicitly.
+- service-worker.js reuses the managed debugger for wheel scroll, clicks, selection copy, and rendered image capture. Managed wheel errors cannot silently turn into unverified scripted scrolling.
+- Queue and single-capture paths attach before starting the content collector and release on completion, error, cancellation or planner completion. Tab close, navigation and debugger detach invalidate ownership.
+- tests/background-focus-manager.test.mjs adds concurrency, ownership, visibility, detach and command-serialization coverage. scripts/verify.mjs now includes the module and test file.
+- GitHub Actions source verification and extension packaging passed on e58a089616b15509b9d29aaeb02c23fb5aa5c2a1, run 40878112673. Later commits require fresh verification.
+- Still unverified: real unattended Chrome scrolling and DOM hydration, two lanes in parallel, CDP service-worker continuity, very long turns/images, split planning/merge, and Google Docs export.
+- Keep PR #55 draft and main unchanged until installed-Chrome acceptance. Next: test background progress while working in a third tab; then two-lane isolation, pause/resume, split merge, failure/draft recovery, Docs export.
