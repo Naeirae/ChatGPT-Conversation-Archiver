@@ -1024,19 +1024,25 @@
   function turnIntersectsCaptureViewport(turn) {
     if (!turn?.isConnected) return false;
     const root = contentRoot(turn, roleOf(turn)) || turn;
-    const element = root.getBoundingClientRect();
     const scroller = findScrollContainer(turn);
     const documentRoot = !scroller ||
       scroller === document.documentElement ||
       scroller === document.body ||
       scroller === document.scrollingElement;
     const scrollerRect = documentRoot ? null : scroller.getBoundingClientRect();
-    return rectIntersectsCaptureViewport(
-      element,
-      window.innerWidth || document.documentElement.clientWidth,
-      window.innerHeight || document.documentElement.clientHeight,
-      scrollerRect
-    );
+    const intersects = element => element?.getBoundingClientRect &&
+      rectIntersectsCaptureViewport(
+        element.getBoundingClientRect(),
+        window.innerWidth || document.documentElement.clientWidth,
+        window.innerHeight || document.documentElement.clientHeight,
+        scrollerRect
+      );
+    // contentRoot can point at the FIRST Markdown subtree, whose bounds end
+    // well before attachments/other blocks in a many-screen assistant turn.
+    // The outer logical turn is still the same message throughout that span.
+    // Count that message as visible if its own logical wrapper intersects the
+    // actual ChatGPT scrollport; never count a wholly offscreen wrapper.
+    return Boolean(intersects(root) || (root !== turn && intersects(turn)));
   }
 
   function rectTrailingEdgeInsideCaptureViewport(
