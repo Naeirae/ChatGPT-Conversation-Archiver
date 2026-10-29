@@ -19,7 +19,9 @@ const archive = (id, sourceUrl, ids, mode = 'full') => ({
 function fixture({
   legacyActive = async () => false,
   waitForDomReady = async () => {},
-  waitForInjection = async () => {}
+  waitForInjection = async () => {},
+  prepareBackgroundCapture = async () => ({ok:true}),
+  releaseBackgroundCapture = async () => true
 } = {}) {
   const data = new Map();
   let failFinalStateWrite = false;
@@ -112,8 +114,8 @@ function fixture({
     },
     waitForChatTabComplete: async () => ({}),
     waitForChatDomReady: waitForDomReady,
-    prepareBackgroundCapture: async () => ({ ok: true }),
-    releaseBackgroundCapture: async () => true,
+    prepareBackgroundCapture,
+    releaseBackgroundCapture,
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
       launches.push({ tabId, jobId, opts });
       await waitForInjection(tabId, jobId, opts);
