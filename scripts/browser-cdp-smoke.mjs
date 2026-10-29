@@ -152,7 +152,11 @@ async function main() {
       const result=await cdp.send('Runtime.evaluate',{
         expression:'window.__captureProbe()',returnByValue:true
       },lane.id);
-      return result.result?.value;
+      if (result.exceptionDetails || result.result?.value == null) {
+        throw new Error('CDP fixture probe ' + lane.lane + ' failed: ' +
+          JSON.stringify(result.exceptionDetails || result));
+      }
+      return result.result.value;
     }
     // Exercise the reported current-tab workflow: A is brought forward,
     // then the user switches to another page, while A keeps CDP focus
