@@ -2586,6 +2586,9 @@ async function cancelCapture() {
     }).catch(() => {});
   }
 
+  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+    await backgroundFocus.release(job.captureTabId, job.jobId);
+  }
   await recordRunHistory(next);
   return { ok: true, job: next };
 }
