@@ -7243,10 +7243,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   await captureRuntimeReady;
   await queueRuntimeReady;
   await queueController.tabNavigated(tabId, changeInfo.url || tab.url || '');
-  if (typeof changeInfo.frozen === 'boolean') {
+  const hasFreezeSignal = typeof changeInfo.frozen === 'boolean';
+  const currentTab = hasFreezeSignal
+    ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  // A thaw event can overtake an earlier freeze callback during asynchronous
+  // storage writes. Ignore stale callbacks instead of resurrecting "frozen".
+  const validFreezeSignal = hasFreezeSignal &&
+    (typeof currentTab?.frozen !== 'boolean' ||
+      currentTab.frozen === changeInfo.frozen);
+  if (validFreezeSignal) {
     await queueController.tabFreezeChanged(tabId, changeInfo.frozen);
   }
-  if (changeInfo.frozen === true) {
+  if (validFreezeSignal && changeInfo.frozen === true) {
     const owned = backgroundFocus.details(tabId);
     if (owned && !owned.closing) {
       // Wake only our own CDP-controlled worker tab. Never switch user focus.
@@ -7276,7 +7284,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // Freezing is a Chrome lifecycle event, not an explicit user pause.
   // Converting a running capture into paused used to stop it permanently:
   // thaw did not restore running, and the content script was never paused.
-  if (typeof changeInfo.frozen === 'boolean') {
+  if (validFreezeSignal) {
     const transition = freezeTransition(job, changeInfo.frozen);
     if (transition) {
       let permitted = true;
