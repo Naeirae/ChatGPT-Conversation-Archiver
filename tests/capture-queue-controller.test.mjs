@@ -112,6 +112,8 @@ function fixture({
     },
     waitForChatTabComplete: async () => ({}),
     waitForChatDomReady: waitForDomReady,
+    prepareBackgroundCapture: async () => ({ ok: true }),
+    releaseBackgroundCapture: async () => true,
     ensureChatGptContentScript: async (tabId, jobId, opts) => {
       launches.push({ tabId, jobId, opts });
       await waitForInjection(tabId, jobId, opts);
