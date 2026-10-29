@@ -863,3 +863,41 @@ test('startup that loses content handshake is retired after timeout, never reser
   assert.equal(after.workers[0].status,'error');
   assert.equal(after.items[0].status,'error');
 });
+
+
+test('planner cleanup survives worker restart and never closes a repurposed window', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.77');
+  const sourceUrl=chat(91);
+  const key='archiverFragmentMarkers:'+new URL(sourceUrl).origin+new URL(sourceUrl).pathname;
+  await f.storage.set({[key]:{start:markers.start,end:markers.end}});
+  await f.controller.enqueue({sourceUrl,mode:'split-chat'});
+  await f.controller.enable(true);
+  const state=await f.settled(q=>q.workers.length===1 &&
+    q.workers[0].status==='running');
+  const planner=state.workers[0];
+  await f.controller.planned({
+    jobId:planner.jobId,startId:markers.start.id,endId:markers.end.id,
+    middle:markers.middle,visitedCount:8
+  },planner.captureTabId);
+  const taskKey='archiverQueuePlannerCleanupV1';
+  const stored=(await f.storage.get(taskKey))[taskKey];
+  assert.equal(stored.length,1);
+  assert.equal(stored[0].tabId,planner.captureTabId);
+  const closed=[];
+  f.chrome.tabs.query=async({windowId}={})=>{
+    if(windowId===planner.captureWindowId) {
+      return [{id:planner.captureTabId,url:sourceUrl}];
+    }
+    return [{id:1212,url:chat(92)}];
+  };
+  f.chrome.windows.remove=async id=>{closed.push(id);};
+  stored[0].dueAt=Date.now()-1;
+  stored.push({jobId:'foreign',windowId:9999,tabId:9998,
+    sourceUrl:chat(92),dueAt:Date.now()-1});
+  await f.storage.set({[taskKey]:stored});
+  const restarted=f.freshController();
+  await restarted.cleanupPlannerWindows();
+  assert.deepEqual(closed,[planner.captureWindowId]);
+  assert.deepEqual((await f.storage.get(taskKey))[taskKey],[]);
+});
