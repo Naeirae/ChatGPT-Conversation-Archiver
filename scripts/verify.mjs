@@ -1282,6 +1282,16 @@ for (const required of [
   }
 }
 
+if (!contentSource.includes('recoveriesAtSameCount > 4') ||
+    !contentSource.includes('beforeRefs, map.size') ||
+    !contentSource.includes('beforeRefs, witnesses.length')) {
+  fail('continuity: backtracking must not silently reset the same-message seam budget');
+}
+if (!serviceWorkerSource.includes('Скрипт сбора уже не работает; пауза невозможна') ||
+    !serviceWorkerSource.includes('Скрипт сбора завершился, но интерфейс')) {
+  fail('capture lifecycle: stale worker status must not show an impossible pause');
+}
+
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
@@ -1297,6 +1307,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-queue-controller.test.mjs',
   'tests/capture-pause-resume.test.mjs',
   'tests/capture-continuity-watchdog.test.mjs',
+  'tests/capture-ghost-state.test.mjs',
   'tests/capture-seam-replay.test.mjs',
   'tests/background-capture-and-autosplit.test.mjs',
   'tests/background-focus-manager.test.mjs',
