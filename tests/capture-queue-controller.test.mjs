@@ -901,3 +901,29 @@ test('planner cleanup survives worker restart and never closes a repurposed wind
   assert.deepEqual(closed,[planner.captureWindowId]);
   assert.deepEqual((await f.storage.get(taskKey))[taskKey],[]);
 });
+
+
+test('Chrome freezing one queue window does not pause either running capture', async () => {
+  const f=fixture();
+  await f.controller.versionCheck('0.4.78');
+  await f.controller.enqueue({sourceUrl:chat(98),mode:'two-chats'});
+  await f.controller.enqueue({sourceUrl:chat(99),mode:'two-chats'});
+  await f.controller.enable(true);
+  const state=await f.settled(s=>s.workers.length===2 &&
+    s.workers.every(w=>w.status==='running'));
+  const [one,two]=state.workers;
+  await f.controller.tabFreezeChanged(one.captureTabId,true);
+  let frozen=await f.controller.getState();
+  assert.equal(frozen.workers[0].status,'running');
+  assert.equal(frozen.workers[1].status,'running');
+  assert.equal(frozen.workers[0].jobId,one.jobId);
+  assert.equal(frozen.workers[1].jobId,two.jobId);
+  const stored=(await f.storage.get('archiverCaptureQueueV1')).archiverCaptureQueueV1;
+  assert.equal(stored.workers[0].tabFrozen,true);
+  assert.equal(Boolean(stored.workers[1].tabFrozen),false);
+  await f.controller.tabFreezeChanged(one.captureTabId,false);
+  frozen=await f.controller.getState();
+  assert.equal(frozen.workers[0].status,'running');
+  assert.equal(frozen.workers[1].status,'running');
+  assert.equal((await f.storage.get('archiverCaptureQueueV1')).archiverCaptureQueueV1.workers[0].tabFrozen,false);
+});
