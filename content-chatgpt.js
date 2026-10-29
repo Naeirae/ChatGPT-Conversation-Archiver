@@ -4283,43 +4283,84 @@
     };
   }
 
-  async function recoverDownwardContinuity(beforeRefs, map, order, settings, boundary) {
+  async function recoverDownwardContinuity(
+    beforeRefs, afterRefs, originalAfter, map, order, settings, boundary
+  ) {
+    // Returning true just because an UP step rediscovered the old viewport
+    // caused a down/up loop: the next pass crossed the *same* uncertified seam
+    // again. Recovery must also re-traverse forward with small verified
+    // overlapping steps, reaching the missed after-window before succeeding.
     const seenWindows = new Set();
+    let originFound = false;
     for (let attempt = 0; attempt < 6; attempt++) {
+      await waitIfPaused();
       const currentRefs = visibleNavigationRefsLightweight();
       const sample = sampleCaptureScroller();
       const windowKey = JSON.stringify({
         top: sample?.top ?? null,
         refs: currentRefs.map(ref => [ref.strongId, ref.signature])
       });
-      // The same virtualized window on a second attempt means that reversing
-      // the wheel cannot recover the missing bridge. Stop the oscillation.
       if (seenWindows.has(windowKey)) return false;
       seenWindows.add(windowKey);
-      if (navigationWindowsOverlap(beforeRefs, currentRefs)) return true;
+      if (navigationWindowsOverlap(beforeRefs, currentRefs)) {
+        originFound = true;
+        break;
+      }
 
       await progress(
-        'Этап 2/3: стык сообщений не подтверждён; осторожно проверяю предыдущий участок…',
-        map.size,
-        {
-          phase: 'walk',
-          continuityRecovery: true,
+        'Этап 2/3: стык не подтверждён; ищу предыдущий доказанный участок…',
+        map.size, {
+          phase: 'walk', continuityRecovery: true,
           continuityAttempt: attempt + 1,
           force: attempt === 0
         }
       );
-
-      await physicalScroll(
-        'up',
-        1,
-        { settleTimeout: 1800, quietWindow: 300, wheelDelta: 180 }
-      );
+      await physicalScroll('up', 1, {
+        settleTimeout: 1800, quietWindow: 300, wheelDelta: 120
+      });
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       collect(map, order, settings, boundary);
     }
+    if (!originFound) return false;
 
-    return navigationWindowsOverlap(beforeRefs, visibleNavigationRefsLightweight());
+    let lastRefs = visibleNavigationRefsLightweight();
+    let lastSample = sampleCaptureScroller();
+    let advanced = false;
+    const replaySeen = new Set();
+    for (let replay = 0; replay < 18; replay++) {
+      await waitIfPaused();
+      const key = JSON.stringify([lastSample?.top ?? null,
+        lastRefs.map(ref => String(ref.strongId || ref.signature || ''))]);
+      if (replaySeen.has(key)) return false;
+      replaySeen.add(key);
+      const step = await physicalScroll('down', 1, {
+        settleTimeout: 1800, quietWindow: 300, wheelDelta: 80
+      });
+      await expandVisible();
+      if (settings.includeReasoning) await expandReasoningVisible();
+      collect(map, order, settings, boundary);
+      const nextRefs = visibleNavigationRefsLightweight();
+      const nextSample = sampleCaptureScroller();
+      const adjacent = measuredAdjacentScroll(lastSample, nextSample, step);
+      const overlap = navigationWindowsOverlap(lastRefs, nextRefs);
+      // Neither a changed DOM shell nor a wheel request alone proves a
+      // bridge. If the replay has a gap, preserve the draft and stop.
+      if (!adjacent && !overlap) return false;
+      const movedForward = Boolean(lastSample && nextSample &&
+        lastSample.element === nextSample.element &&
+        Number(nextSample.top) >= Number(lastSample.top) + 2);
+      advanced = advanced || movedForward;
+      if (advanced && (
+        navigationWindowsOverlap(afterRefs, nextRefs) ||
+        (originalAfter?.element && originalAfter.element === nextSample?.element &&
+          Number(nextSample.top) >= Number(originalAfter.top) - 2)
+      )) return true;
+      if (!movedForward && !step?.moved) return false;
+      lastRefs = nextRefs;
+      lastSample = nextSample;
+    }
+    return false;
   }
 
 
@@ -4396,11 +4437,7 @@
             continuityAttempt: retry.recoveryAttempts, force: true }
         );
         const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
+          beforeRefs, afterRefs, physicalAfter, map, order, settings, boundary
         );
         if (!recovered) {
           throw new Error(
@@ -4605,11 +4642,7 @@ if (boundaryIsVisible(boundary)) {
           }
         );
         const recovered = await recoverDownwardContinuity(
-          beforeRefs,
-          map,
-          order,
-          settings,
-          boundary
+          beforeRefs, afterRefs, physicalAfter, map, order, settings, boundary
         );
         if (!recovered) {
           throw new Error(
