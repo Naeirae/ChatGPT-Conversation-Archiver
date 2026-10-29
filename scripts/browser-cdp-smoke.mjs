@@ -165,14 +165,39 @@ async function main() {
     assert.equal(bUnchanged.top,otherBefore,'Scrolling A moved B');
     assert.equal(userUnchanged.top,0,'Scrolling A moved user tab');
     assert.equal(userUnchanged.lane,'foreground');
+    // A service-worker restart can detach the old CDP session. Prove that
+    // the same browser target and rendered scroll position survive a fresh
+    // debugger attachment, without disturbing the other independent lane.
+    await cdp.send('Target.detachFromTarget',{sessionId:a.id});
+    const restored=await cdp.send('Target.attachToTarget',{
+      targetId:a.targetId,flatten:true
+    });
+    const resumedA={...a,id:restored.sessionId};
+    await cdp.send('Emulation.setFocusEmulationEnabled',
+      {enabled:true},resumedA.id);
+    const beforeResume=await metrics(resumedA);
+    assert.equal(beforeResume.top,later.top,
+      'Reattaching CDP lost the physical scroll position');
+    await cdp.send('Input.dispatchMouseEvent',{
+      type:'mouseWheel',x:350,y:240,deltaX:0,deltaY:400
+    },resumedA.id);
+    const afterResume=await poll(async()=>{
+      const state=await metrics(resumedA);
+      return state.top>beforeResume.top+30?state:null;
+    },50,120);
+    assert.equal((await metrics(b)).top,bUnchanged.top,
+      'Reattaching A altered sibling B');
+    assert.equal((await metrics(user)).top,0,
+      'Reattaching A altered the user page');
     console.log(JSON.stringify({
       status:'PASS',chrome:protocol.Browser,
       lanes:{
         a:{initial:before[0].top,moved:moved[0].top,
-          subsequent:later.top,firstId:later.first},
+          subsequent:later.top,resumed:afterResume.top,firstId:afterResume.first},
         b:{initial:before[1].top,moved:moved[1].top,
           firstId:moved[1].first}
       },
+      resumedSession:true,
       userTabTop:userUnchanged.top,
       limitation:'Synthetic virtualized pages, not authenticated ChatGPT or extension E2E'
     }));
