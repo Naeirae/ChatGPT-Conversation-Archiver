@@ -7360,6 +7360,12 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener(alarm => {
+  if (alarm?.name === 'archiverQueuePlannerCleanupV1') {
+    queueRuntimeReady.then(() => queueController.cleanupPlannerWindows()).catch(error =>
+      logTabListenerError('planner-cleanup', error)
+    );
+    return;
+  }
   if (alarm?.name === CAPTURE_QUEUE_ALARM) {
     queueRuntimeReady.then(() => queueController.tick()).catch(error =>
       logTabListenerError('queue-health', error)
