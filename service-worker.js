@@ -2476,6 +2476,9 @@ async function startCapture({
       }).catch(() => {});
     }
 
+    if (captureTarget === 'copy' && failedCaptureTabId != null) {
+      await backgroundFocus.release(failedCaptureTabId, jobId);
+    }
     if (captureTarget === 'copy' && failedCaptureTabId != null && !collectorStarted) {
       await chrome.tabs.remove(failedCaptureTabId).catch(() => {});
     }
@@ -2885,6 +2888,9 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     count: Number(job.count || 0)
   });
   await recordRunHistory(next);
+  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+    await backgroundFocus.release(job.captureTabId, jobId);
+  }
   if (autoRecoveryEligible) {
     await scheduleAutomaticRecovery(next.jobId);
   }
@@ -3847,6 +3853,10 @@ async function handleCaptureComplete(message) {
     if (partialMerge.reason === 'unmatched' && draftId === partialSourceId) continue;
     await removeDraft(draftId).catch(() => {});
     await removeDraftRecoveryTab(draftId).catch(() => {});
+  }
+
+  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+    await backgroundFocus.release(job.captureTabId, job.jobId);
   }
 
   // Keep the working ChatGPT tab open even after a verified successful pass.
