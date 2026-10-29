@@ -4351,11 +4351,15 @@
         lastSample.element === nextSample.element &&
         Number(nextSample.top) >= Number(lastSample.top) + 2);
       advanced = advanced || movedForward;
-      if (advanced && (
-        navigationWindowsOverlap(afterRefs, nextRefs) ||
-        (originalAfter?.element && originalAfter.element === nextSample?.element &&
-          Number(nextSample.top) >= Number(originalAfter.top) - 2)
-      )) return true;
+      const sameScrollContainer = Boolean(originalAfter?.element &&
+        originalAfter.element === nextSample?.element);
+      // An identical long message can appear hundreds of pixels before the
+      // original failed after-window. Matching its ID is not enough to claim
+      // that all intervening paragraphs and attachments were traversed.
+      const reachedAfter = sameScrollContainer
+        ? Number(nextSample.top) >= Number(originalAfter.top) - 2
+        : navigationWindowsOverlap(afterRefs, nextRefs);
+      if (advanced && reachedAfter) return true;
       if (!movedForward && !step?.moved) return false;
       lastRefs = nextRefs;
       lastSample = nextSample;
@@ -4410,11 +4414,13 @@
       });
       await saveRecoveryCheckpoint(map, order, boundary);
 
-      // Historical fast full traversal used three debugger bursts here.
-      // Continuity is accepted only when the neighbouring virtual windows
-      // retain a strong ID or an ordered multi-message overlap.
+      // Fast three-burst steps can jump past whole turns and are impossible
+      // to certify with a virtualized ChatGPT DOM. Use the same short overlap-
+      // preserving step as the marked-range traversal.
       const physicalBefore = sampleCaptureScroller();
-      const wheel = await physicalScroll('down', 3);
+      const wheel = await physicalScroll('down', 1, {
+        wheelDelta: 120, settleTimeout: 1800, quietWindow: 300
+      });
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
