@@ -98,3 +98,25 @@ test('content has distinct planning command and never publishes an archive from 
   assert.match(planner,/chooseAutomaticSplitMiddle/);
   assert.doesNotMatch(planner,/ARCHIVER_CAPTURE_COMPLETE/);
 });
+
+test('manual fragment capture honors background selection instead of silently forcing current tab', () => {
+  const popup = readFileSync(new URL('../popup.js', import.meta.url), 'utf8');
+  const begin = service.indexOf('async function startCapture({');
+  const end = service.indexOf('async function scheduleAutomaticRecovery(', begin);
+  const startup = service.slice(begin, end);
+  assert.match(startup, /captureTarget = captureTarget === 'current' \? 'current' : 'copy'/);
+  assert.doesNotMatch(startup, /\(mode === 'fragment' \|\|/);
+  assert.match(startup, /seekMarkedStart: mode === 'fragment' && captureTarget === 'copy'/);
+  const fragmentCase = between(service, "case 'ARCHIVER_CAPTURE_FRAGMENT':",
+    "case 'ARCHIVER_CAPTURE_CURRENT':");
+  assert.match(fragmentCase, /captureTarget: message\.captureTarget \|\| 'copy'/);
+  const popupStart=popup.indexOf("$('captureFragment').onclick");
+  const popupEnd=popup.indexOf("$('copyFragment').onclick",popupStart);
+  assert.match(popup.slice(popupStart,popupEnd),/captureTarget: \$\('captureTarget'\)\.value/);
+  const seek = between(content,
+    "        } else if (mode === 'fragment') {",
+    "        } else {"
+  );
+  assert.match(seek,/if \(options\.seekMarkedStart\)/);
+  assert.doesNotMatch(seek,/state\.queueCapture/);
+});
