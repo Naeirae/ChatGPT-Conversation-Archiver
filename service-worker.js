@@ -7246,6 +7246,17 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (typeof changeInfo.frozen === 'boolean') {
     await queueController.tabFreezeChanged(tabId, changeInfo.frozen);
   }
+  if (changeInfo.frozen === true) {
+    const owned = backgroundFocus.details(tabId);
+    if (owned && !owned.closing) {
+      // Wake only our own CDP-controlled worker tab. Never switch user focus.
+      const wake = await backgroundFocus.awakenFrozen(tabId, owned.jobId);
+      if (!wake.ok && wake.reason !== 'wake-cooldown') {
+        await logTabListenerError('capture-tab-wake',
+          wake.error || wake.reason || 'Chrome did not confirm wake');
+      }
+    }
+  }
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
