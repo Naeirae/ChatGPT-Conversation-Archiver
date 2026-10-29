@@ -4048,7 +4048,16 @@
     // checkpoint. A resumed walk may only grow or enrich that prefix.
     const storedBeforeWrite = (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId];
     if (['resume-draft', 'retry-walk'].includes(current.captureMode) &&
-        storedBeforeWrite?.messages?.length > draft.messages.length) return;
+        storedBeforeWrite?.messages?.length) {
+      const oldPrefix = storedBeforeWrite.messages;
+      // Length alone is insufficient: a same-sized unrelated window must
+      // never masquerade as the saved chronological prefix.
+      if (draft.messages.length < oldPrefix.length ||
+          oldPrefix.some((oldMessage, index) =>
+            !sameNavigationRef(navigationRef(oldMessage), navigationRef(draft.messages[index])))) {
+        return;
+      }
+    }
     // Persist the large checkpoint independently. The background worker is
     // the sole writer of the active job: do not overwrite a newer state with
     // the copy read before storage I/O.
