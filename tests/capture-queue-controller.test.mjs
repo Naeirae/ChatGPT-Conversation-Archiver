@@ -559,7 +559,7 @@ test('cancel during DOM readiness never launches a collector and releases its sl
   await domReached;
   let state = await f.controller.getState();
   assert.equal(state.workers[0].status, 'starting');
-  assert.equal(state.workers[0].captureTabId, null);
+  assert.ok(state.workers[0].captureTabId != null); // Window is allocated before DOM hydration.
   await f.controller.cancel(state.items[0].id);
   releaseDom();
   state = await f.settled(s => s.items[0].status === 'cancelled');
