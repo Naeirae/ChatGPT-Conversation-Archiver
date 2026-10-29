@@ -4743,6 +4743,9 @@ if (boundaryIsVisible(boundary)) {
 
       const addWindow = () => {
         for (const turn of orderedTurns()) {
+          // A virtualized ChatGPT page may retain offscreen DOM shells. They
+          // are not evidence of a physically traversed chronological window.
+          if (!turnIntersectsCaptureViewport(turn)) continue;
           const id = turnStableKey(turn);
           if (!started) {
             if (id !== start.id) continue;
