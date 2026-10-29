@@ -1237,6 +1237,20 @@ if (!lifecycleSource.includes('freezeTransition(job, changeInfo.frozen)') ||
   fail('background lifecycle: frozen tab must not become a permanent manual Pause');
 }
 
+const diagnosticSource = await readFile('service-worker.js', 'utf8');
+for (const required of [
+  'WORKER ERRORS DURING THIS RUN',
+  'Historical worker errors from other runs',
+  'lastProgressAt: Date.now()',
+  'lastPhysicalScrollAt: now',
+  'lastScrollPositions: ',
+  'lastPhysicalActivity: scroll.moved'
+]) {
+  if (!diagnosticSource.includes(required)) {
+    fail('diagnostics: missing run-scoped progress or physical-scroll evidence: ' + required);
+  }
+}
+
 const tests = spawnSync(process.execPath, [
   '--test',
   'tests/text.test.mjs',
