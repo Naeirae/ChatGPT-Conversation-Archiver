@@ -5984,7 +5984,9 @@ if (boundaryIsVisible(boundary)) {
       }
 
       if (!draftId && mode !== 'images-draft' &&
-          (chronologicalStarted || current.phase === 'top') && map.size > 0) {
+          (chronologicalStarted || current.phase === 'top') &&
+          (map.size > 0 ||
+            (['resume-draft', 'retry-walk'].includes(mode) && Boolean(existingDraftId)))) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
 
         let existingRecoveryDraft = null;
@@ -6053,9 +6055,9 @@ if (boundaryIsVisible(boundary)) {
           // failed network path must not delay or defeat saving the draft.
           // A resumed capture continues one logical unfinished pass. Reuse the
           // canonical draft ID instead of exposing every retry as a new draft.
-          draftId = current.draftId ||
-            (state.queueCapture && mode === 'resume-draft' ? ('draft-' + jobId) :
-              (existingDraftId || current.recoveryDraftId || ('draft-' + jobId)));
+          draftId = (['resume-draft', 'retry-walk'].includes(mode) && existingRecoveryDraft?.id)
+            ? existingRecoveryDraft.id
+            : (current.draftId || existingDraftId || current.recoveryDraftId || ('draft-' + jobId));
           draftCount = draftMessages.length;
           const recoveryCapturePhase = chronologicalStarted
             ? 'walk'
