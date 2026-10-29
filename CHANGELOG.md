@@ -2,6 +2,12 @@
 
 ## 0.4.77 — восстановление фона и двух потоков (кандидат)
 
+- Добавлена проверка настоящего Chromium/Chrome через CDP: два синтетических виртуализированных потока физически прокручиваются независимо, третья страница не двигается. Проверяются отключение и повторное подключение debugger с сохранением scrollTop.
+- GitHub Actions включает отдельный browser-cdp-smoke после Node-верификации. Chrome 156: оба потока +750 px, первый после повторного подключения CDP +400 px, пользовательская страница 0 px (run 40939326562).
+- После первоначального CDP attach короткая задержка document.visibilityState=visible допускается с ограниченным повтором; постоянное hidden остаётся ошибкой.
+- Это проверка браузерного транспорта на синтетическом DOM, не эксплуатационная приёмка ChatGPT. PR #55 остаётся черновым; пользовательские архивы и main не изменены.
+
+
 - 2026-10-29 follow-up: restore managed CDP only after original content script confirms its jobId, URL and live status; preserve failure when DevTools owns a tab.
 - Start CDP focus emulation before waiting for ChatGPT virtualized message hydration, including single and queued copies; retry visibility briefly to allow rendering tick.
 - Preserve debugger on same-chat URL updates; store scroll heartbeat only after measured movement or verified edge; screenshot requires the originating active job.
