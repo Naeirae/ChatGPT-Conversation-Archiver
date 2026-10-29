@@ -1508,22 +1508,30 @@ async function pauseCapture() {
   if (!result?.ok || result.paused !== true || result.running !== true ||
       result.jobId !== job.jobId) {
     const health = await probeLiveCapture(job, 3500);
-    const draftId = job.draftId || job.recoveryDraftId || '';
-    if (health?.ok && health.jobId === job.jobId && health.running === false) {
-      const draft = draftId ? await getDraft(draftId) : null;
+    const draftId = job.draftId || job.recoveryDraftId || ('draft-' + job.jobId);
+    // A page may finish or lose its collector while the worker still shows
+    // running due to prior progress. Its explicit live health response is
+    // stronger evidence than a stale badge; reconcile to a recoverable error
+    // instead of offering an impossible Pause over and over.
+    if (health?.ok && (health.jobId !== job.jobId || health.running === false)) {
+      const draft = await getDraft(draftId).catch(() => null);
       await finishJobWithError(
         job.jobId, job.sourceTabId ?? job.tabId,
-        'Вкладка ответила, но сбор уже завершил работу до запроса паузы. ' +
-          'Незавершённая часть сохранена, если была контрольная точка.',
-        draft?.id || draftId,
-        draft?.messages?.length || Number(job.draftCount || 0),
+        'Скрипт сбора больше не выполняет это задание. ' +
+          'Прежний статус «Сбор идёт» устарел. Сохранённая часть оставлена для продолжения.',
+        draft?.id || (job.draftId || job.recoveryDraftId || ''),
+        Math.max(Number(draft?.messages?.length || 0), Number(job.draftCount || 0)),
         'error'
+      );
+      throw new Error(
+        'Скрипт сбора уже не работает; пауза невозможна. ' +
+        'Статус обновлён, сохранённые черновики не удалены.'
       );
     }
     throw new Error(
       result?.error ||
       'Пауза не подтверждена работающим сборщиком. ' +
-        'Не помечаю неактивное задание как приостановленное. Проверьте черновики.'
+        'Статус и черновики сохранены до повторной проверки здоровья.'
     );
   }
 
