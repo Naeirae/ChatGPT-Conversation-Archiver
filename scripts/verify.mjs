@@ -981,14 +981,17 @@ try {
     fail('unfinished Google Docs export: preserve pre-86c0b4fe direct snapshot export without blocking live-tab hydration');
   }
 
-  const bgCreateStart = serviceWorkerSource.indexOf("captureTab = await chrome.tabs.create({ url: inspection.href, active: true })");
-  const bgStartCollector = serviceWorkerSource.indexOf("await ensureChatGptContentScript(captureTab.id, jobId");
-  const bgRestoreSource = serviceWorkerSource.indexOf("await chrome.tabs.update(sourceTab.id, { active: true })", bgStartCollector);
-  if (bgCreateStart < 0 ||
-      bgStartCollector < 0 ||
-      bgRestoreSource < bgStartCollector ||
+  const bgCreateStart = serviceWorkerSource.indexOf('const opened = await createUnfocusedCaptureWindow(inspection.href)');
+  const bgStartCollector = serviceWorkerSource.indexOf('await ensureChatGptContentScript(captureTab.id, jobId', bgCreateStart);
+  const bgWindowStart = serviceWorkerSource.indexOf('async function createUnfocusedCaptureWindow(');
+  const bgWindowEnd = serviceWorkerSource.indexOf('async function waitForChatTabComplete(', bgWindowStart);
+  const bgWindow = serviceWorkerSource.slice(bgWindowStart, bgWindowEnd);
+  if (bgCreateStart < 0 || bgStartCollector < bgCreateStart ||
+      !bgWindow.includes('focused: false') ||
+      !bgWindow.includes("state: 'normal'") ||
+      !serviceWorkerSource.includes('createUnfocusedCaptureWindow,') ||
       !serviceWorkerSource.includes("files: ['content-chatgpt.js']")) {
-    fail('background capture: warm working tab in foreground, start collector with both content scripts, then restore source tab');
+    fail('background capture: create non-minimized unfocused independent window, then inject collector without switching source tab');
   }
 
   const retryRuntimeStart = contentSource.indexOf('function findVisibleLoadRetry()');
