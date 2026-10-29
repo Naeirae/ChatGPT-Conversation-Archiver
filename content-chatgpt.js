@@ -4680,6 +4680,153 @@ if (boundaryIsVisible(boundary)) {
     );
   }
 
+  function chooseAutomaticSplitMiddle(witnesses = []) {
+    // The planner has physically traversed start -> end. Select a real
+    // central turn whose immediate neighbours also carry immutable IDs.
+    // Never invent an index-based marker for a virtualized conversation.
+    if (witnesses.length < 5) {
+      throw new Error('Для разделения недостаточно проверенных сообщений между началом и концом.');
+    }
+    const middle = (witnesses.length - 1) / 2;
+    const candidates = [];
+    for (let i = 2; i < witnesses.length - 2; i++) {
+      const [previous, center, next] = witnesses.slice(i - 1, i + 2);
+      if ([previous, center, next].every(item => isStrongMessageId(item.id)) &&
+          new Set([previous.id, center.id, next.id]).size === 3) {
+        candidates.push({ i, center, previous, next });
+      }
+    }
+    if (!candidates.length) {
+      throw new Error(
+        'Не найдена безопасная середина с устойчивыми ID соседних реплик. ' +
+        'Исходные границы сохранены; объединение не выполнялось.'
+      );
+    }
+    candidates.sort((a, b) => Math.abs(a.i - middle) - Math.abs(b.i - middle));
+    const chosen = candidates[0];
+    return { ...chosen.center,
+      previous: chosen.previous, next: chosen.next };
+  }
+
+  async function planAutomaticSplit(jobId, captureRange) {
+    if (state.running) throw new Error('Вкладка уже выполняет другой сбор.');
+    const start = captureRange?.start;
+    const end = captureRange?.end;
+    if (!isStrongMessageId(start?.id) || !isStrongMessageId(end?.id) ||
+        start.id === end.id) {
+      throw new Error('Для автоматического разделения нужны две разные отметки с устойчивыми ID.');
+    }
+    state.running = true;
+    state.jobId = jobId;
+    state.queueCapture = true;
+    state.cancel = false;
+    state.paused = false;
+    state.pauseSnapshotWriter = null;
+    state.captureStartProof = null;
+    state.boundarySearchActive = true;
+    try {
+      await progress('Ищу начало выбранного диапазона для расчёта середины…', 0,
+        { phase: 'boundary', force: true });
+      await waitForTurns(10000);
+      await seekQueueMarkedStart(start);
+      if (!orderedTurns().some(turn =>
+        turnStableKey(turn) === start.id && turnIntersectsCaptureViewport(turn))) {
+        throw new Error('Не удалось подтвердить отмеченное начало диапазона.');
+      }
+
+      const witnesses = [];
+      const seen = new Set();
+      let started = false;
+      const watchdog = createContinuityWatchdog();
+      const deadline = Date.now() + 90 * 60 * 1000;
+      let reachedEnd = false;
+
+      const addWindow = () => {
+        for (const turn of orderedTurns()) {
+          const id = turnStableKey(turn);
+          if (!started) {
+            if (id !== start.id) continue;
+            started = true;
+          }
+          if (!id || seen.has(id)) continue;
+          // Weak DOM/index identities may be observed during the scan, but
+          // must never become the midpoint used to join two archives.
+          seen.add(id);
+          witnesses.push({
+            id, role: roleOf(turn) || '',
+            signature: turnTextSignature(turn)
+          });
+          if (id === end.id) break;
+        }
+      };
+
+      for (let step = 0; step < 22000 && Date.now() < deadline; step++) {
+        await waitIfPaused();
+        addWindow();
+        if (seen.has(end.id) && boundaryIsVisible({
+          kind: 'stable', key: end.id, strictStable: true
+        })) {
+          reachedEnd = true;
+          break;
+        }
+        if (step === 0 || step % 24 === 0) {
+          await progress('Автоматически определяю середину между двумя отметками · ' +
+            witnesses.length + ' видимых реплик · шаг ' + (step + 1),
+            witnesses.length, { phase: 'boundary', force: true });
+        }
+        const before = sampleCaptureScroller();
+        const beforeRefs = visibleNavigationRefsLightweight();
+        const movement = await physicalScroll('down', 1, {
+          wheelDelta: 120, settleTimeout: 1600, quietWindow: 260
+        });
+        const after = sampleCaptureScroller();
+        const afterRefs = visibleNavigationRefsLightweight();
+        const overlapping = navigationWindowsOverlap(beforeRefs, afterRefs);
+        const adjacent = measuredAdjacentScroll(before, after, movement);
+        watchdog.noteStep({ before, after, beforeRefs, afterRefs,
+          overlapping, adjacent });
+        if (!overlapping && !adjacent) {
+          watchdog.beforeRecovery(before, beforeRefs);
+          throw new Error('Предварительный проход потерял непрерывность. ' +
+            'Нельзя выбирать середину по неполному диапазону.');
+        }
+        if (!movement.moved && physicalScrollEndVisible() && !seen.has(end.id)) {
+          throw new Error('Достигнут конец чата, но отмеченный конец диапазона не найден.');
+        }
+      }
+      if (!reachedEnd || witnesses[0]?.id !== start.id ||
+          witnesses[witnesses.length - 1]?.id !== end.id) {
+        throw new Error('Начало и конец диапазона не подтверждены одним непрерывным проходом.');
+      }
+      const middle = chooseAutomaticSplitMiddle(witnesses);
+      const reply = await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_SPLIT_PLAN_READY',
+        queueCapture: true,
+        jobId,
+        middle,
+        startId: start.id,
+        endId: end.id,
+        visitedCount: witnesses.length
+      });
+      if (!reply?.ok) throw new Error(reply?.error ||
+        'Фоновый диспетчер не подтвердил автоматическую середину.');
+    } catch (error) {
+      await chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_FAILED',
+        queueCapture: true,
+        jobId,
+        error: error?.message || String(error)
+      }).catch(() => {});
+    } finally {
+      state.running = false;
+      state.paused = false;
+      state.cancel = false;
+      state.queueCapture = false;
+      state.jobId = null;
+      state.boundarySearchActive = false;
+    }
+  }
+
   async function seekQueueMarkedStart(marker) {
     if (!marker?.id || !isStrongMessageId(marker.id)) {
       throw new Error('Экспериментальному потоку нужна устойчивая начальная отметка.');
@@ -6262,6 +6409,16 @@ if (boundaryIsVisible(boundary)) {
         version: EXTENSION_VERSION,
         lastScrollDirection: state.lastScrollDirection || ''
       });
+      return false;
+    }
+    if (message && message.type === 'ARCHIVER_START_SPLIT_PLAN') {
+      if (state.running) {
+        sendResponse({ ok: false, error: 'Вкладка уже занята другим проходом.' });
+        return false;
+      }
+      planAutomaticSplit(message.jobId, message.captureRange || {}).catch(() => {});
+      sendResponse({ ok: true, running: true, jobId: message.jobId,
+        version: EXTENSION_VERSION });
       return false;
     }
     if (message && message.type === 'ARCHIVER_START_CAPTURE') {
