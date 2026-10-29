@@ -2276,10 +2276,10 @@ async function startCapture({
   let captureTab = null;
   let domProbe = null;
   let collectorStarted = false;
-  const assertLaunchActive = async () => {
+  const assertLaunchActive = async (allowDone = false) => {
     const live = await getJob();
     if (cancelledStartupJobIds.has(jobId) || live?.jobId !== jobId ||
-        !['starting', 'running'].includes(live?.status)) {
+        !['starting', 'running', ...(allowDone ? ['done'] : [])].includes(live?.status)) {
       throw makeCaptureError('CAPTURE_LAUNCH_CANCELLED',
         'Запуск остановлен или заменён другим заданием.');
     }
@@ -2495,7 +2495,7 @@ async function startCapture({
       });
     }
 
-    await assertLaunchActive();
+    await assertLaunchActive(true);
     cancelledStartupJobIds.delete(jobId);
     launchingCaptureJobIds.delete(jobId);
     return {
