@@ -19,6 +19,8 @@ const jsFiles = [
   'lib/capture-queue.mjs',
   'lib/capture-queue-controller.mjs',
   'lib/background-focus-manager.mjs',
+  'lib/capture-freeze-policy.mjs',
+  'lib/capture-health-diagnostics.mjs',
   'lib/archive-store.mjs',
   'lib/google-docs-baseline.mjs',
   'lib/tab-plan.mjs',
@@ -1215,6 +1217,9 @@ const focusSource = await readFile('lib/background-focus-manager.mjs', 'utf8');
 const backgroundWorkerSource = await readFile('service-worker.js', 'utf8');
 const queueSource = await readFile('lib/capture-queue-controller.mjs', 'utf8');
 if (!focusSource.includes('Emulation.setFocusEmulationEnabled') ||
+    !focusSource.includes('Page.setWebLifecycleState') ||
+    !backgroundWorkerSource.includes('backgroundFocus.awakenFrozen(tabId, owned.jobId)') ||
+    !backgroundWorkerSource.includes('if (managedBeforeScroll && !backgroundFocus.isManaged(tabId)) throw error;') ||
     !focusSource.includes('async function withDebugger(') ||
     !backgroundWorkerSource.includes('backgroundFocus.withDebugger(tabId') ||
     !backgroundWorkerSource.includes('backgroundFocus.enable(captureTab.id') ||
@@ -1222,6 +1227,32 @@ if (!focusSource.includes('Emulation.setFocusEmulationEnabled') ||
     !queueSource.includes('deps.prepareBackgroundCapture(tab.id') ||
     !queueSource.includes('deps.releaseBackgroundCapture(')) {
   fail('background capture: persistent CDP session integration is incomplete');
+}
+
+const lifecycleSource = await readFile('service-worker.js', 'utf8');
+const queueControllerSource = await readFile('lib/capture-queue-controller.mjs', 'utf8');
+if (!lifecycleSource.includes('freezeTransition(job, changeInfo.frozen)') ||
+    !lifecycleSource.includes('queueController.tabFreezeChanged(tabId, changeInfo.frozen)') ||
+    lifecycleSource.includes("if (changeInfo.frozen === true && job.status !== 'paused')") ||
+    !queueControllerSource.includes('async function tabFreezeChanged(tabId, frozen)')) {
+  fail('background lifecycle: frozen tab must not become a permanent manual Pause');
+}
+
+const diagnosticSource = await readFile('service-worker.js', 'utf8');
+for (const required of [
+  'WORKER ERRORS DURING THIS RUN',
+  'Historical worker errors from other runs',
+  'lastProgressAt: Date.now()',
+  'lastPhysicalScrollAt: now',
+  'lastScrollPositions: ',
+  'lastPhysicalActivity: scroll.moved',
+  'shouldInspectCapture(job, now)',
+  'CAPTURE_NO_COUNT_ADVANCE',
+  "await backgroundFocus.enable(captureTab.id, jobId, inspection.href)"
+]) {
+  if (!diagnosticSource.includes(required)) {
+    fail('diagnostics: missing run-scoped progress or physical-scroll evidence: ' + required);
+  }
 }
 
 const tests = spawnSync(process.execPath, [
@@ -1241,6 +1272,8 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-continuity-watchdog.test.mjs',
   'tests/background-capture-and-autosplit.test.mjs',
   'tests/background-focus-manager.test.mjs',
+  'tests/capture-freeze-policy.test.mjs',
+  'tests/capture-health-diagnostics.test.mjs',
   'tests/capture-recovery.test.mjs',
   'tests/google-docs-baseline.test.mjs',
   'tests/tab-plan.test.mjs',

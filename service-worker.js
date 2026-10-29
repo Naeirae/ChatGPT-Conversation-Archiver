@@ -52,6 +52,8 @@ import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mj
 import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
 import { createCaptureQueueController } from './lib/capture-queue-controller.mjs';
 import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
+import { freezeTransition } from './lib/capture-freeze-policy.mjs';
+import { shouldInspectCapture, captureStallEvidence, stallDiagnosticText } from './lib/capture-health-diagnostics.mjs';
 
 const backgroundFocus = createBackgroundFocusManager(chrome);
 const cancelledStartupJobIds = new Set();
@@ -1401,6 +1403,33 @@ async function appendRunLog(patch, entry = null) {
   return setJob({ ...(patch || {}), log: log.slice(-40) });
 }
 
+// This alarm is diagnostic, not a watchdog that kills a running collector.
+// A long single message or slow image may produce no new message count.
+// Never infer failure from missing progress alone; record what was observable.
+async function inspectStalledSingleCapture() {
+  await captureRuntimeReady;
+  const job = await getJob();
+  const now = Date.now();
+  if (!shouldInspectCapture(job, now)) return;
+  const tab = job.captureTabId != null
+    ? await chrome.tabs.get(job.captureTabId).catch(() => null) : null;
+  const health = await probeLiveCapture(job, 2500);
+  if (tab?.frozen && job.captureTabId != null &&
+      backgroundFocus.details(job.captureTabId)?.jobId === job.jobId) {
+    await backgroundFocus.awakenFrozen(job.captureTabId, job.jobId).catch(() => {});
+  }
+  const current = await getJob();
+  if (current?.jobId !== job.jobId ||
+      !shouldInspectCapture(current, Date.now())) return;
+  const evidence = captureStallEvidence(current, tab, health, Date.now());
+  const message = stallDiagnosticText(evidence);
+  await appendRunLog({ lastStallDiagnosticAt: Date.now() }, {
+    level: 'warn', code: 'CAPTURE_NO_COUNT_ADVANCE',
+    message, phase: current.phase || '',
+    count: Number(current.count || 0)
+  });
+}
+
 async function getRunHistory() {
   const result = await chrome.storage.local.get(RUN_HISTORY_KEY);
   return Array.isArray(result[RUN_HISTORY_KEY]) ? result[RUN_HISTORY_KEY] : [];
@@ -1626,6 +1655,19 @@ function formatRunLog(job) {
   lines.push('status: ' + (job.status || ''));
   lines.push('phase: ' + (job.phase || ''));
   lines.push('count: ' + Number(job.count || 0));
+  const timestamp = value => Number(value) ? new Date(Number(value)).toISOString() : '';
+  if (job.startedAt) lines.push('startedAt: ' + timestamp(job.startedAt));
+  if (job.updatedAt) lines.push('lastJobUpdateAt: ' + timestamp(job.updatedAt));
+  if (job.lastProgressAt) lines.push('lastProgressAt: ' + timestamp(job.lastProgressAt));
+  if (job.lastCountAdvanceAt) lines.push('lastCountAdvanceAt: ' + timestamp(job.lastCountAdvanceAt));
+  if (job.lastStallDiagnosticAt) lines.push('lastStallDiagnosticAt: ' + timestamp(job.lastStallDiagnosticAt));
+  if (job.lastPhysicalScrollAt) lines.push('lastPhysicalScrollAt: ' + timestamp(job.lastPhysicalScrollAt));
+  if (job.lastPhysicalActivity) lines.push('lastPhysicalActivity: ' + job.lastPhysicalActivity);
+  if (job.lastScrollBefore != null || job.lastScrollAfter != null) {
+    lines.push('lastScrollPositions: ' + String(job.lastScrollBefore ?? '?') +
+      ' -> ' + String(job.lastScrollAfter ?? '?'));
+  }
+  if (job.tabFrozen != null) lines.push('tabFrozen: ' + Boolean(job.tabFrozen));
   if (job.draftCount) lines.push('draftCount: ' + Number(job.draftCount || 0));
   if (job.archiveId) lines.push('archiveId: ' + job.archiveId);
   if (job.message) lines.push('message: ' + job.message);
@@ -1641,10 +1683,23 @@ function formatRunLog(job) {
 
 async function formatDiagnosticLog() {
   const job = await getJob();
-  const rows = (await chrome.storage.local.get('archiverWorkerErrors')).archiverWorkerErrors || [];
-  return formatRunLog(job) + '\n\n=== WORKER ERRORS ===\n' + (rows.length
-    ? rows.map(item => '[' + new Date(item.at).toISOString() + '] ' + item.source + '\n' + item.message).join('\n\n')
-    : 'Нет записанных ошибок фонового процесса.');
+  const raw = (await chrome.storage.local.get('archiverWorkerErrors')).archiverWorkerErrors || [];
+  const rows = Array.isArray(raw) ? raw : [];
+  const startedAt = Number(job?.startedAt || 0);
+  const finishedAt = Number(job?.finishedAt || Date.now());
+  const matching = startedAt
+    ? rows.filter(item => Number(item?.at || 0) >= startedAt &&
+        Number(item?.at || 0) <= finishedAt)
+    : [];
+  const earlierCount = rows.length - matching.length;
+  return formatRunLog(job) + '\n\n=== WORKER ERRORS DURING THIS RUN ===\n' +
+    (matching.length
+      ? matching.map(item => '[' + new Date(item.at).toISOString() + '] ' +
+          item.source + '\n' + item.message).join('\n\n')
+      : 'Ошибок фонового процесса за время этого запуска не зарегистрировано.') +
+    (earlierCount > 0
+      ? '\n\nHistorical worker errors from other runs (not attributed to this job): ' + earlierCount
+      : '');
 }
 
 async function cleanupTemporaryBaseline(job) {
@@ -2320,6 +2375,9 @@ async function startCapture({
   try {
     if (captureTarget === 'current') {
       captureTab = await chrome.tabs.get(sourceTab.id);
+      // The current tab must also keep collecting after the user switches.
+      // Persist CDP focus for the whole job instead of attaching per wheel.
+      await backgroundFocus.enable(captureTab.id, jobId, inspection.href);
       domProbe = await waitForChatDomReady(sourceTab.id, 15000);
     } else {
       // The historical foreground warmup worked before other tabs started
@@ -2518,7 +2576,7 @@ async function startCapture({
       }).catch(() => {});
     }
 
-    if (captureTarget === 'copy' && failedCaptureTabId != null) {
+    if (failedCaptureTabId != null) {
       await backgroundFocus.release(failedCaptureTabId, jobId);
     }
     if (captureTarget === 'copy' && failedCaptureTabId != null && !collectorStarted) {
@@ -2646,7 +2704,7 @@ async function cancelCapture() {
     }).catch(() => {});
   }
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+  if (job.captureTabId != null) {
     await backgroundFocus.release(job.captureTabId, job.jobId);
   }
   await recordRunHistory(next);
@@ -2951,7 +3009,7 @@ async function finishJobWithError(jobId, sourceTabId, message, draftId = '', dra
     count: Number(job.count || 0)
   });
   await recordRunHistory(next);
-  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+  if (job.captureTabId != null) {
     await backgroundFocus.release(job.captureTabId, jobId);
   }
   if (autoRecoveryEligible) {
@@ -3918,7 +3976,7 @@ async function handleCaptureComplete(message) {
     await removeDraftRecoveryTab(draftId).catch(() => {});
   }
 
-  if (job.captureTarget === 'copy' && job.captureTabId != null) {
+  if (job.captureTabId != null) {
     await backgroundFocus.release(job.captureTabId, job.jobId);
   }
 
@@ -4894,7 +4952,11 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
     });
   } catch (error) {
     debuggerError = error?.message || String(error);
-    if (managedBeforeScroll) throw error;
+    // A temporary CDP command failure must not abort the capture while our
+    // original debugger session is still owned. The scripted fallback below
+    // independently verifies actual viewport movement or a physical edge.
+    // But if Chrome detached/stole the session, preserve fail-closed behavior.
+    if (managedBeforeScroll && !backgroundFocus.isManaged(tabId)) throw error;
   }
 
   await sleep(120);
@@ -6689,9 +6751,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             !['starting', 'running'].includes(job.status) || job.captureTabId !== tabId) {
           throw new Error('Картинка пришла не из активной вкладки текущего сбора.');
         }
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(tabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(tabId, job.jobId, job.sourceUrl);
         return await captureRenderedImageForContent(
           tabId,
           message.rect || {},
@@ -6959,11 +7019,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // An in-flight progress request may complete after the pause handshake.
         // Acknowledge it without undoing the pause or killing the collector.
         if (job.status === 'paused') return { ok: true, paused: true };
+        const countAdvance = Number(message.patch?.count ?? job.count ?? 0) > Number(job.count || 0);
+        const evidencePatch = {
+          lastProgressAt: Date.now(),
+          ...(countAdvance ? { lastCountAdvanceAt: Date.now() } : {})
+        };
         const phaseChanged = message.patch?.phase && message.patch.phase !== job.phase;
         const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
         if (notable) {
           await appendRunLog(
-            { ...message.patch, tabId: job.sourceTabId ?? job.tabId },
+            { ...message.patch, ...evidencePatch,
+              tabId: job.sourceTabId ?? job.tabId },
             {
               level: 'info',
               code: message.patch?.boundaryReached
@@ -6977,7 +7043,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
           );
         } else {
-          await setJob({ ...message.patch, tabId: job.sourceTabId ?? job.tabId });
+          await setJob({ ...message.patch, ...evidencePatch,
+            tabId: job.sourceTabId ?? job.tabId });
         }
         return { ok: true };
       }
@@ -7001,9 +7068,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return { ok: false, error: 'Прокрутка остановлена: вкладка больше не содержит исходную переписку.' };
         }
 
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         const scroll = await physicalScrollTab(
           job.captureTabId,
           message.direction,
@@ -7013,10 +7078,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Never store an optimistic heartbeat before the wheel has moved
         // the actual ChatGPT viewport or established a verified edge.
         const now = Date.now();
-        if (scroll?.ok && (scroll.moved || scroll.observedEdge) &&
-            now - Number(job.lastHeartbeatAt || job.updatedAt || 0) >= 15000) {
-          await setJob({ lastHeartbeatAt: now,
-            lastPhysicalActivity: scroll.moved ? 'scroll-moved' : 'scroll-edge' });
+        if (scroll?.ok && now - Number(job.lastPhysicalScrollAt || 0) >= 15000) {
+          const patch = {
+            lastPhysicalScrollAt: now,
+            lastPhysicalActivity: scroll.moved ? 'scroll-moved'
+              : scroll.observedEdge ? 'scroll-edge' : 'scroll-no-progress',
+            lastScrollBefore: scroll.before ?? null,
+            lastScrollAfter: scroll.after ?? null
+          };
+          if (scroll.moved || scroll.observedEdge) patch.lastHeartbeatAt = now;
+          const current = await getJob();
+          if (current?.jobId === job.jobId &&
+              ['starting', 'running'].includes(current.status)) {
+            await setJob(patch);
+          }
         }
         return scroll;
       }
@@ -7030,9 +7105,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое нажатие разрешено только вкладке текущего сбора.' };
         }
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         return await physicalClickChatTab(job.captureTabId, message.point || {});
       }
       case 'ARCHIVER_PHYSICAL_COPY_SELECTION': {
@@ -7045,9 +7118,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (job.captureTabId == null || senderTabId !== job.captureTabId) {
           return { ok: false, error: 'Физическое копирование разрешено только вкладке текущего сбора.' };
         }
-        if (job.captureTarget === 'copy') {
-          await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
-        }
+        await ensureCaptureDebuggerSession(job.captureTabId, job.jobId, job.sourceUrl);
         return await physicalCopyChatSelection(job.captureTabId);
       }
       case 'ARCHIVER_CAPTURE_FAILED': {
@@ -7242,20 +7313,74 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   await captureRuntimeReady;
   await queueRuntimeReady;
   await queueController.tabNavigated(tabId, changeInfo.url || tab.url || '');
+  const hasFreezeSignal = typeof changeInfo.frozen === 'boolean';
+  const currentTab = hasFreezeSignal
+    ? await chrome.tabs.get(tabId).catch(() => null) : null;
+  // A thaw event can overtake an earlier freeze callback during asynchronous
+  // storage writes. Ignore stale callbacks instead of resurrecting "frozen".
+  const validFreezeSignal = hasFreezeSignal &&
+    (typeof currentTab?.frozen !== 'boolean' ||
+      currentTab.frozen === changeInfo.frozen);
+  if (validFreezeSignal) {
+    await queueController.tabFreezeChanged(tabId, changeInfo.frozen);
+  }
+  if (validFreezeSignal && changeInfo.frozen === true) {
+    const owned = backgroundFocus.details(tabId);
+    if (owned && !owned.closing) {
+      // Wake only our own CDP-controlled worker tab. Never switch user focus.
+      const wake = await backgroundFocus.awakenFrozen(tabId, owned.jobId);
+      if (!wake.ok && wake.reason !== 'wake-cooldown') {
+        const detail = wake.error || wake.reason || 'Chrome did not confirm wake';
+        await logTabListenerError('capture-tab-wake', detail);
+        const ongoing = await getJob();
+        if (ongoing?.jobId === owned.jobId &&
+            ['starting','running'].includes(ongoing.status)) {
+          await appendRunLog({
+            message: 'Chrome заморозил рабочую вкладку, а CDP не подтвердил разморозку: ' + detail
+          }, {
+            level: 'warn',
+            code: 'CAPTURE_TAB_WAKE_NOT_CONFIRMED',
+            message: detail,
+            phase: ongoing.phase || '',
+            count: Number(ongoing.count || 0)
+          });
+        }
+      }
+    }
+  }
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
-  if (changeInfo.frozen === true && job.status !== 'paused') {
-    await setJob({
-      status: 'paused',
-      pauseReason: 'frozen',
-      resumePhase: job.phase === 'paused' ? (job.resumePhase || 'top') : (job.phase || 'top'),
-      message: 'Вкладка сбора временно заморожена. Сбор продолжится после разморозки.',
-      phase: 'paused'
-    });
+  // Freezing is a Chrome lifecycle event, not an explicit user pause.
+  // Converting a running capture into paused used to stop it permanently:
+  // thaw did not restore running, and the content script was never paused.
+  if (validFreezeSignal) {
+    const transition = freezeTransition(job, changeInfo.frozen);
+    if (transition) {
+      let permitted = true;
+      if (transition.requiresHealth) {
+        const health = await probeLiveCapture(job);
+        permitted = Boolean(health?.ok && health.jobId === job.jobId &&
+          health.running && !health.paused);
+      }
+      const current = await getJob();
+      if (current?.jobId === job.jobId &&
+          ['starting','running','paused'].includes(current.status)) {
+        const patch = permitted ? transition.patch : {
+          tabFrozen: false,
+          tabThawedAt: Date.now(),
+          message: 'Chrome разморозил вкладку, но не удалось подтвердить живой сборщик; сохранённое состояние не перезаписано.'
+        };
+        await appendRunLog(patch, {
+          level: permitted ? 'info' : 'warn',
+          code: permitted ? transition.event : 'CAPTURE_THAW_HEALTH_UNCONFIRMED',
+          message: patch.message || (changeInfo.frozen ? 'Вкладка заморожена.' : 'Вкладка разморожена.'),
+          phase: current.phase || '',
+          count: Number(current.count || 0)
+        });
+      }
+    }
   }
-  // A thaw is not user consent to resume a capture. Keep paused state
-  // until an explicit resume command verifies the live content script.
 
   // ChatGPT changes conversations using client-side routing without leaving
   // chatgpt.com. Detect a changed conversation identity, not just the host.
@@ -7369,6 +7494,9 @@ chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm?.name === CAPTURE_QUEUE_ALARM) {
     queueRuntimeReady.then(() => queueController.tick()).catch(error =>
       logTabListenerError('queue-health', error)
+    );
+    void inspectStalledSingleCapture().catch(error =>
+      logTabListenerError('single-capture-health', error)
     );
     return;
   }

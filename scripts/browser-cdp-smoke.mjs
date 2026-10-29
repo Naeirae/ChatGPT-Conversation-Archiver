@@ -135,6 +135,17 @@ async function main() {
       },lane.id);
       return result.result?.value;
     }
+    // Exercise the reported current-tab workflow: A is brought forward,
+    // then the user switches to another page, while A keeps CDP focus
+    // emulation and must still accept physical wheel input.
+    await cdp.send('Page.bringToFront',{},a.id);
+    const activeCollector=await metrics(a);
+    await cdp.send('Page.bringToFront',{},user.id);
+    const switchedCollector=await metrics(a);
+    assert.equal(activeCollector.top,0);
+    assert.equal(switchedCollector.visibility,'visible',
+      'Collector lost emulated visibility after user switched tabs');
+    assert.equal(switchedCollector.hidden,false);
     const before=await Promise.all([metrics(a),metrics(b),metrics(user)]);
     for(const x of before)assert.equal(x.top,0,'Initial scroll offset');
     for(const x of before.slice(0,2)){
@@ -189,15 +200,31 @@ async function main() {
       'Reattaching A altered sibling B');
     assert.equal((await metrics(user)).top,0,
       'Reattaching A altered the user page');
+    // Reproduce a real Chrome page lifecycle transition through CDP.
+    // The transport must be able to return a frozen page to active without
+    // a foreground tab switch. A synthetic page is not a full ChatGPT E2E.
+    await cdp.send('Page.setWebLifecycleState',{state:'frozen'},resumedA.id);
+    await cdp.send('Page.setWebLifecycleState',{state:'active'},resumedA.id);
+    await cdp.send('Input.dispatchMouseEvent',{
+      type:'mouseWheel',x:350,y:240,deltaX:0,deltaY:350
+    },resumedA.id);
+    const afterThaw=await poll(async()=>{
+      const state=await metrics(resumedA);
+      return state.top>afterResume.top+30?state:null;
+    },50,120);
+    assert.equal((await metrics(b)).top,bUnchanged.top,
+      'Waking A altered sibling B');
+    assert.equal((await metrics(user)).top,0,
+      'Waking A activated the user foreground page');
     console.log(JSON.stringify({
       status:'PASS',chrome:protocol.Browser,
       lanes:{
         a:{initial:before[0].top,moved:moved[0].top,
-          subsequent:later.top,resumed:afterResume.top,firstId:afterResume.first},
+          subsequent:later.top,resumed:afterResume.top,thawed:afterThaw.top,firstId:afterThaw.first},
         b:{initial:before[1].top,moved:moved[1].top,
           firstId:moved[1].first}
       },
-      resumedSession:true,
+      currentTabSwitchedAway:true,resumedSession:true,lifecycleThaw:true,
       userTabTop:userUnchanged.top,
       limitation:'Synthetic virtualized pages, not authenticated ChatGPT or extension E2E'
     }));

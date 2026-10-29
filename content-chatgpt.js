@@ -6415,6 +6415,8 @@ if (boundaryIsVisible(boundary)) {
         cancelling: Boolean(state.cancel && sameJob),
         jobId: state.jobId || '',
         version: EXTENSION_VERSION,
+        visibility: document.visibilityState || 'unknown',
+        hidden: Boolean(document.hidden),
         lastScrollDirection: state.lastScrollDirection || ''
       });
       return false;

@@ -119,3 +119,47 @@ test('initial CDP focus attachment tolerates transient hidden frames, not persis
   assert.equal(h.log.filter(event => event === 'attach:11').length, 1);
   await manager.release(11, 'delayed-visible');
 });
+
+
+test('an owned frozen tab can be woken without touching its sibling or stealing focus', async () => {
+  const h=harness();const manager=createBackgroundFocusManager(h.chrome);
+  await manager.enable(11,'worker-a',h.urls.get(11));
+  await manager.enable(12,'worker-b',h.urls.get(12));
+  const originalGet=h.chrome.tabs.get;
+  let frozen=true;
+  h.chrome.tabs.get=async id=>({...(await originalGet(id)), frozen:id===11?frozen:false});
+  const originalCommand=h.chrome.debugger.sendCommand;
+  h.chrome.debugger.sendCommand=async (target,method,params)=>{
+    if (method==='Page.setWebLifecycleState') {
+      assert.equal(target.tabId,11);
+      assert.equal(params.state,'active');
+      frozen=false;
+    }
+    return originalCommand(target,method,params);
+  };
+  const woke=await manager.awakenFrozen(11,'worker-a',40000);
+  assert.equal(woke.ok,true);
+  assert.equal(woke.requested,true);
+  assert.equal(frozen,false);
+  assert.equal(h.attached.has(11),true);
+  assert.equal(h.attached.has(12),true);
+  assert.equal(h.log.some(x=>x==='Page.setWebLifecycleState:12'),false);
+  assert.equal((await manager.awakenFrozen(11,'foreign-worker',55000)).reason,'not-owned');
+  await manager.release(11,'worker-a');
+  await manager.release(12,'worker-b');
+});
+
+test('frozen wake fails closed for wrong job and throttles repeated wake attempts', async () => {
+  const h=harness();const manager=createBackgroundFocusManager(h.chrome);
+  await manager.enable(11,'owner',h.urls.get(11));
+  const originalGet=h.chrome.tabs.get;
+  h.chrome.tabs.get=async id=>({...(await originalGet(id)), frozen:true});
+  assert.equal((await manager.awakenFrozen(11,'other',30000)).reason,'not-owned');
+  const first=await manager.awakenFrozen(11,'owner',40000);
+  assert.equal(first.requested,true);
+  assert.equal(first.ok,false);
+  const second=await manager.awakenFrozen(11,'owner',41000);
+  assert.equal(second.reason,'wake-cooldown');
+  assert.equal(h.log.filter(x=>x==='Page.setWebLifecycleState:11').length,1);
+  await manager.release(11,'owner');
+});

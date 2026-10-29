@@ -1,5 +1,28 @@
 # 2026-10-29 — 0.4.77: устранение регрессии фонового сбора и автоматическая середина
 
+## 2026-10-30 — Evidence review of submitted run log (manual fragment, not background copy)
+
+- User pasted a complete diagnostic excerpt for job started 2026-10-29T21:06:39Z (30 October 00:06:39 Moscow), `mode=fragment; captureTarget=current`. It entered walk at 00:06:40; at 00:48:42 ended `cancelled` with 8 collected and 8 preserved in draft, via the cancelCapture route (RUN_CANCELLED_RECOVERABLE); the log does not prove which UI action invoked it.
+- Evidence does **not** show a browser-created automatic cancellation or explain why collection stopped advancing. A 42-minute gap has no intermediate run-log entries, because non-notable progress was stored in state but not printed.
+- The “WORKER ERRORS” block contains historical extension-wide records; the 403 image fetches shown are from October 28–29, before this job. The failed RESUME_CAPTURE errors also predate it. Their presence is not evidence they caused the October 30 stall.
+- Action in candidate 0.4.78: formatDiagnosticLog now separates worker errors recorded during this run from older errors (older entries are retained in storage), and includes lastProgressAt/lastPhysicalScrollAt, observed scroll positions, lastPhysicalActivity and tabFrozen metadata. Actual physical-scroll observations are sampled at most every 15s and never claim movement without evidence.
+- Additional inspected source defect: 0.4.77 enabled persistent CDP focus only for `captureTarget=copy`, while the supplied real log used `captureTarget=current`. Therefore switching away from the current tab did not receive the same persistent focus protection. In 0.4.78 current-tab collectors now attach managed focus before first DOM capture, recheck the same debugger ownership for physical operations, and release at every terminal path. Synthetic source/Chrome tests pass; actual logged-in ChatGPT continuation remains unverified.
+- Added 1-minute alarm inspection (warning only) after 180 seconds without additional captured messages; checks the same job's content health, page visibility and Chrome frozen state, last successful wheel and last progress, with two-minute log cooldown. No automatic cancellation, archive deletion or user Pause change.
+- Browser CI 40962497584 on Chrome 156 verified `currentTabSwitchedAway=true`: collector A brought to foreground and user tab restored, then A physically scrolled 0→750→1430→1830→2180 px; B stayed independent and user's scroller remained 0. This is real Chrome CDP on synthetic virtualized DOM, NOT installed-extension E2E or proof that user run 1793307999771-602hrpj is fixed. 206 Node tests and updater also passed. The next real diagnostic can distinguish a live slow long message from a frozen/unresponsive collector.
+- Still needed: an installed 0.4.78 run reproducing the earlier stop after switching tabs, recording whether mode is `current` or `copy`, and showing sustained message growth. The supplied 0.4.77 log establishes neither specific Chrome freeze nor CDP detach. User archives/drafts remain untouched.
+
+
+## 2026-10-30 — вновь обнаруженная регрессия фона, работа над 0.4.78
+
+- Точка отсчёта: в production main 0.4.77 (`eced4c91`), пользователь сообщил, что при уходе из вкладки спустя недолгое время фоновый сбор снова прекращается. Предыдущие синтетические CDP-тесты не воспроизводили эту ошибку; это новое наблюдение не отвергать ссылкой на ограничения Chrome.
+- Дополнительный регрессионный механизм 0.4.77: physicalScrollTab() выбрасывал любую ошибку CDP при managedBeforeScroll вместо прежнего fallback. В 0.4.78 fallback вновь допустим для временной ошибки, когда CDP-сессия всё ещё принадлежит архиватору; реальное смещение/край переписки должны подтвердиться, а при утрате сессии сбор остаётся fail-closed.
+- Подтверждённый дефект 0.4.77: `tabs.onUpdated` принудительно переводил одиночный running в paused по `frozen=true`, при `frozen=false` обратно в running не возвращал. Код присутствовал и в 0.4.76, поэтому единственной причиной текущей регрессии не объявлен.
+- Исправление-кандидат в `fix/background-tab-freeze-0.4.78`: freeze/thaw не заменяет явную Pause, при прежней системной paused выполняется проверка health, очередь не останавливает соседнюю вкладку. Владелец фоновой CDP-сессии может послать `Page.setWebLifecycleState(active)` на frozen-событии, не переключая окно пользователя. Попытки ограничены; неудачи видны в журнале.
+- Подтверждено в синтетическом Chrome 156: `frozen → active` и последующее физическое продвижение позиции первого списка при неподвижной второй и пользовательской страницах (run 40958947730).
+- Не подтверждено: что фактическая остановка на компьютере пользователя вызвана именно freeze, что Chrome реально даёт `tabs.onUpdated(frozen=true)` при конкретном сбое, и что установленный ChatGPT collector продолжит сбор после этого исправления. Перед выпуском в main проверить свежий CI, а для закрытия регрессии получить живое воспроизведение и runtime log.
+- Прогресс: исправление написано, проверено модульно и синтетическим браузером; живая проверка пользователя — 0/1. Продакшен 0.4.77 не менялся.
+
+
 ## Контрольная точка выпуска — 2026-10-29, PR #55 → main
 
 - Исходная ветка: fix/real-background-worker-windows-0.4.77, исходный main = 0.4.76 (fb4deb5cd1026ac760f5c4cb533cc401a07b6d00). Пользователь 2026-10-29 прямо разрешил продвижение 0.4.77 в production main; итоговый merge SHA и результаты main CI проверить после объединения.

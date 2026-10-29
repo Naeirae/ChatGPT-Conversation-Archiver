@@ -160,3 +160,43 @@ test('automatic midpoint ignores offscreen DOM messages as physical evidence', (
   assert.match(planner,/navigationWindowsOverlap/);
   assert.match(planner,/measuredAdjacentScroll/);
 });
+
+
+test('manual current-tab collectors retain CDP ownership across a tab switch', () => {
+  const startup = between(service, 'async function startCapture({',
+    'async function cancelCapture()');
+  const inCurrent = between(startup,
+    "if (captureTarget === 'current') {",
+    '} else {');
+  assert.match(inCurrent,/await backgroundFocus\.enable\(captureTab\.id, jobId, inspection\.href\)/);
+  assert.ok(inCurrent.indexOf('await backgroundFocus.enable(') <
+    inCurrent.indexOf('domProbe = await waitForChatDomReady('));
+  const transport = between(service,
+    "case 'ARCHIVER_PHYSICAL_SCROLL': {",
+    "case 'ARCHIVER_CAPTURE_FAILED':");
+  assert.doesNotMatch(transport, /if \(job\.captureTarget === 'copy'\) \{\s*await ensureCaptureDebuggerSession/);
+  assert.equal((transport.match(/await ensureCaptureDebuggerSession\(job\.captureTabId/g)||[]).length,3);
+  const rendered = between(service, "case 'ARCHIVER_CAPTURE_RENDERED_IMAGE': {",
+    "case 'ARCHIVER_CHECK_UPDATE':");
+  assert.match(rendered,/await ensureCaptureDebuggerSession\(tabId, job\.jobId, job\.sourceUrl\)/);
+  const cancellation = between(service,
+    'async function cancelCapture()', 'async function scheduleAutomaticRecovery(');
+  assert.match(cancellation,/if \(job\.captureTabId != null\) \{\s*await backgroundFocus\.release/);
+  const completion = between(service,'async function handleCaptureComplete(',
+    'async function chatScrollMetrics(');
+  assert.match(completion,/if \(job\.captureTabId != null\) \{\s*await backgroundFocus\.release/);
+  const failed = between(service,'async function finishJobWithError(',
+    'async function focusRecoverableCaptureTab(');
+  assert.match(failed,/if \(job\.captureTabId != null\) \{\s*await backgroundFocus\.release/);
+});
+
+test('run log exposes distinct progress and scroll timestamps and excludes old worker errors', () => {
+  const formatting = between(service,'function formatRunLog(job) {',
+    'async function cleanupTemporaryBaseline(');
+  for (const expected of ['lastProgressAt:', 'lastPhysicalScrollAt:',
+      'lastScrollPositions:', 'WORKER ERRORS DURING THIS RUN',
+      'Historical worker errors from other runs']) {
+    assert.ok(formatting.includes(expected));
+  }
+  assert.match(formatting,/Number\(item\?\.at \|\| 0\) >= startedAt/);
+});
