@@ -52,6 +52,7 @@ import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mj
 import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
 import { createCaptureQueueController } from './lib/capture-queue-controller.mjs';
 import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
+import { freezeTransition } from './lib/capture-freeze-policy.mjs';
 
 const backgroundFocus = createBackgroundFocusManager(chrome);
 const cancelledStartupJobIds = new Set();
@@ -7242,20 +7243,42 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   await captureRuntimeReady;
   await queueRuntimeReady;
   await queueController.tabNavigated(tabId, changeInfo.url || tab.url || '');
+  if (typeof changeInfo.frozen === 'boolean') {
+    await queueController.tabFreezeChanged(tabId, changeInfo.frozen);
+  }
   const job = await getJob();
   if (!job || job.captureTabId !== tabId || !['starting', 'running', 'paused'].includes(job.status)) return;
 
-  if (changeInfo.frozen === true && job.status !== 'paused') {
-    await setJob({
-      status: 'paused',
-      pauseReason: 'frozen',
-      resumePhase: job.phase === 'paused' ? (job.resumePhase || 'top') : (job.phase || 'top'),
-      message: 'Вкладка сбора временно заморожена. Сбор продолжится после разморозки.',
-      phase: 'paused'
-    });
+  // Freezing is a Chrome lifecycle event, not an explicit user pause.
+  // Converting a running capture into paused used to stop it permanently:
+  // thaw did not restore running, and the content script was never paused.
+  if (typeof changeInfo.frozen === 'boolean') {
+    const transition = freezeTransition(job, changeInfo.frozen);
+    if (transition) {
+      let permitted = true;
+      if (transition.requiresHealth) {
+        const health = await probeLiveCapture(job);
+        permitted = Boolean(health?.ok && health.jobId === job.jobId &&
+          health.running && !health.paused);
+      }
+      const current = await getJob();
+      if (current?.jobId === job.jobId &&
+          ['starting','running','paused'].includes(current.status)) {
+        const patch = permitted ? transition.patch : {
+          tabFrozen: false,
+          tabThawedAt: Date.now(),
+          message: 'Chrome разморозил вкладку, но не удалось подтвердить живой сборщик; сохранённое состояние не перезаписано.'
+        };
+        await appendRunLog(patch, {
+          level: permitted ? 'info' : 'warn',
+          code: permitted ? transition.event : 'CAPTURE_THAW_HEALTH_UNCONFIRMED',
+          message: patch.message || (changeInfo.frozen ? 'Вкладка заморожена.' : 'Вкладка разморожена.'),
+          phase: current.phase || '',
+          count: Number(current.count || 0)
+        });
+      }
+    }
   }
-  // A thaw is not user consent to resume a capture. Keep paused state
-  // until an explicit resume command verifies the live content script.
 
   // ChatGPT changes conversations using client-side routing without leaving
   // chatgpt.com. Detect a changed conversation identity, not just the host.
