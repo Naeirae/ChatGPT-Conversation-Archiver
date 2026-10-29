@@ -55,6 +55,7 @@ import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs
 
 const backgroundFocus = createBackgroundFocusManager(chrome);
 const cancelledStartupJobIds = new Set();
+const launchingCaptureJobIds = new Set();
 
 // A restarted MV3 worker loses in-memory CDP ownership, not the saved job.
 // Restore only after the original content script proves it is still running
@@ -2314,6 +2315,7 @@ async function startCapture({
       ? 'Запуск: жду готовности текущей вкладки ChatGPT…'
       : 'Запуск: открываю и прогреваю рабочую вкладку ChatGPT…'
   }, { replace: true });
+  launchingCaptureJobIds.add(jobId);
 
   try {
     if (captureTarget === 'current') {
@@ -2493,13 +2495,16 @@ async function startCapture({
       });
     }
 
+    await assertLaunchActive();
     cancelledStartupJobIds.delete(jobId);
+    launchingCaptureJobIds.delete(jobId);
     return {
       ok: true,
       job: await getJob(),
       linkedDoc: await getLinkedDoc(inspection.href)
     };
   } catch (error) {
+    launchingCaptureJobIds.delete(jobId);
     const failedCaptureTabId = captureTab?.id || null;
 
     // A failed launch is not an unfinished capture. Stop any collector that may
@@ -2579,7 +2584,9 @@ async function startCapture({
 async function cancelCapture() {
   const job = await getJob();
   if (!job || !['starting', 'running', 'paused'].includes(job.status)) return { ok: true, job };
-  if (job.status === 'starting') cancelledStartupJobIds.add(job.jobId);
+  if (job.status === 'starting' || launchingCaptureJobIds.has(job.jobId)) {
+    cancelledStartupJobIds.add(job.jobId);
+  }
 
   // Stop the job in the worker first. From this point physical scrolling/clicks
   // are rejected immediately, so a slow content-script cleanup cannot keep the
