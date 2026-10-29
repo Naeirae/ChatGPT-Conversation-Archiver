@@ -1014,7 +1014,7 @@ async function saveSettings(patch, noticeId = 'settingsSaved') {
 
 const QUEUE_MODE_OPTIONS = [
   { value: 'two-chats', label: 'Два разных чата параллельно' },
-  { value: 'split-chat', label: 'Эксперимент: один чат, два потока' }
+  { value: 'split-chat', label: 'Эксперимент: один чат, два потока (середина автоматически)' }
 ];
 const QUEUE_STATE_LABELS = {
   queued: 'В очереди', starting: 'Запускается', running: 'Собирается',
@@ -1123,6 +1123,7 @@ function renderQueue(queue) {
       line.className = 'queue-worker';
       const position = Number(worker.physicalScrollTop);
       line.textContent = (worker.lane === 'single' ? 'Сборщик' :
+        worker.lane === 'planner' ? 'Планирование середины' :
         worker.lane === 'first' ? 'Поток 1' : 'Поток 2') +
         ' · ' + (QUEUE_STATE_LABELS[worker.status] || worker.status) +
         ' · ' + Number(worker.count || 0) + ' сообщений' +
@@ -1149,7 +1150,7 @@ function renderQueue(queue) {
     if (item.mode === 'split-chat' && item.status === 'queued') {
       const hint = document.createElement('div');
       hint.className = 'queue-worker';
-      hint.textContent = 'Перед запуском отметьте в этой переписке начало, середину и конец.';
+      hint.textContent = 'Перед запуском достаточно отметить начало и конец. Середина будет найдена автоматически.';
       row.appendChild(hint);
     }
     if (item.error) {
