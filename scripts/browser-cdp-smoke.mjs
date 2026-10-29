@@ -242,6 +242,28 @@ async function main() {
     // A real Chrome scroll through a >20-screen single assistant turn must
     // advance while its ID never changes and the first Markdown block leaves
     // view. This is the geometry reported in the regression screenshot.
+    // Inject the long fixture after about:blank has stabilized. Writing a
+    // full document at target creation could reset its JS context later.
+    const initializedLong=await cdp.send('Runtime.evaluate',{
+      expression: `(() => {
+        document.head.innerHTML = '<style>html,body{margin:0;height:100%}#scroller{position:absolute;top:20px;left:20px;right:20px;height:540px;overflow-y:auto}#long-turn{height:18000px}.markdown{height:200px}.other-block{height:17500px}</style>';
+        document.body.innerHTML = '<div id="scroller"><article id="long-turn" data-message-id="long-single"><div class="markdown">Markdown start</div><div class="other-block">One continuous tall message</div></article></div>';
+        const scroller=document.getElementById('scroller');
+        const turn=document.getElementById('long-turn');
+        const markdown=turn.querySelector('.markdown');
+        window.__captureProbe=()=>({
+          lane:'long-turn',top:scroller.scrollTop,
+          first:'data-message-id:long-single',count:1,
+          markdownBottom:markdown.getBoundingClientRect().bottom,
+          turnBottom:turn.getBoundingClientRect().bottom,
+          scrollportTop:scroller.getBoundingClientRect().top,
+          visibility:document.visibilityState,hidden:document.hidden
+        });
+        return true;
+      })()`,
+      returnByValue:true
+    },longTurn.id);
+    assert.equal(initializedLong.result?.value,true);
     const longBefore=await metrics(longTurn);
     for(let step=0;step<4;step++){
       await cdp.send('Input.dispatchMouseEvent',{
