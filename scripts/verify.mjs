@@ -152,6 +152,33 @@ try {
     fail('marked capture: small measured adjacency and bounded image/finalization progress are required');
   }
 
+  // Missing-seam recovery cannot succeed merely by scrolling backwards
+  // onto an earlier known message. It must re-traverse the gap forwards.
+  const replayStart = contentSource.indexOf('async function recoverDownwardContinuity(');
+  const replayEnd = contentSource.indexOf('async function walkDownFullLegacy(', replayStart);
+  const replayBlock = contentSource.slice(replayStart, replayEnd);
+  if (replayStart < 0 || replayEnd < 0 ||
+      !replayBlock.includes("physicalScroll('down', 1, {") ||
+      !replayBlock.includes('measuredAdjacentScroll(lastSample, nextSample, step)') ||
+      !replayBlock.includes('const reachedAfter =') ||
+      !replayBlock.includes('if (advanced && reachedAfter) return true;')) {
+    fail('long-message seam: returning to an old viewport alone is not successful recovery');
+  }
+
+  // A logical message wrapper may remain visible after its first Markdown
+  // block scrolls away. Do not lose the only identity witness mid-message.
+  const viewportStart = contentSource.indexOf('function turnIntersectsCaptureViewport(');
+  const viewportEnd = contentSource.indexOf('function rectTrailingEdgeInsideCaptureViewport(', viewportStart);
+  const viewportBlock = contentSource.slice(viewportStart, viewportEnd);
+  if (!viewportBlock.includes('intersects(root) || (root !== turn && intersects(turn))')) {
+    fail('long-message seam: logical wrapper visibility witness must survive Markdown scroll');
+  }
+
+  // The 200px cap caused false gaps for Chrome wheel steps inside tall turns.
+  if (!contentSource.includes('const overlapLimit = Math.floor(Math.min(firstHeight, secondHeight) * 0.75)')) {
+    fail('long-message seam: adjacent scroll must respect viewport geometry');
+  }
+
   // A tall marked message must be traversed through its trailing edge;
   // fetching an image must not reposition the scroll independently.
   const endEdgeSource = contentSource.slice(
@@ -442,7 +469,7 @@ try {
     : '';
   if (!fullDownBlock ||
       !fullDownBlock.includes("recoverVisibleLoadError('walk'") ||
-      !fullDownBlock.includes("await physicalScroll('down', 3)") ||
+      !fullDownBlock.includes("await physicalScroll('down', 1, {") ||
       !fullDownBlock.includes('visibleNavigationRefsLightweight()') ||
       !fullDownBlock.includes('navigationWindowsOverlap(beforeRefs, afterRefs)') ||
       !fullDownBlock.includes('recoverDownwardContinuity(') ||
@@ -1270,6 +1297,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-queue-controller.test.mjs',
   'tests/capture-pause-resume.test.mjs',
   'tests/capture-continuity-watchdog.test.mjs',
+  'tests/capture-seam-replay.test.mjs',
   'tests/background-capture-and-autosplit.test.mjs',
   'tests/background-focus-manager.test.mjs',
   'tests/capture-freeze-policy.test.mjs',
