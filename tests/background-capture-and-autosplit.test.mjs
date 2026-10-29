@@ -120,3 +120,43 @@ test('manual fragment capture honors background selection instead of silently fo
   assert.match(seek,/if \(options\.seekMarkedStart\)/);
   assert.doesNotMatch(seek,/state\.queueCapture/);
 });
+
+
+test('focus emulation precedes ChatGPT DOM hydration in single and queued launch paths', () => {
+  const single = between(service, 'async function startCapture({',
+    'async function cancelCapture()');
+  const copy = between(single,
+    "const opened = await createUnfocusedCaptureWindow(inspection.href);",
+    '    const modeLabel');
+  assert.ok(copy.indexOf('await backgroundFocus.enable(captureTab.id') >= 0);
+  assert.ok(copy.indexOf('await backgroundFocus.enable(captureTab.id') <
+    copy.indexOf('domProbe = await waitForChatDomReady(captureTab.id'));
+  const queue = readFileSync(new URL('../lib/capture-queue-controller.mjs', import.meta.url), 'utf8');
+  const launch = between(queue, '  async function launchWorker(worker) {',
+    '  async function pump() {');
+  assert.ok(launch.indexOf('await deps.prepareBackgroundCapture(tab.id') <
+    launch.indexOf('await deps.waitForChatDomReady(tab.id'));
+});
+
+test('MV3 activity cannot silently revert to transient CDP or attach to arbitrary image tabs', () => {
+  assert.match(service,/async function ensureCaptureDebuggerSession\(/);
+  assert.match(service,/type: 'ARCHIVER_CAPTURE_HEALTH', jobId/);
+  assert.match(service,/health\.jobId !== jobId \|\| health\.running !== true/);
+  assert.match(service,/await ensureCaptureDebuggerSession\(tabId, worker\.jobId, worker\.sourceUrl\)/);
+  assert.match(service,/if \(managed && changeInfo\.url &&/);
+  assert.match(service,/conversationKey\(changeInfo\.url\) !== conversationKey\(managed\.expectedUrl \|\| ''\)/);
+  const image = between(service, "case 'ARCHIVER_CAPTURE_RENDERED_IMAGE': {",
+    "case 'ARCHIVER_CHECK_UPDATE':");
+  assert.match(image,/job\.jobId !== message\.jobId/);
+  assert.match(image,/job\.captureTabId !== tabId/);
+});
+
+test('automatic midpoint ignores offscreen DOM messages as physical evidence', () => {
+  const planner = between(content, '  async function planAutomaticSplit(jobId, captureRange) {',
+    '  async function seekQueueMarkedStart(');
+  const addWindow = between(planner, '      const addWindow = () => {',
+    '      for (let step =');
+  assert.match(addWindow,/if \(!turnIntersectsCaptureViewport\(turn\)\) continue;/);
+  assert.match(planner,/navigationWindowsOverlap/);
+  assert.match(planner,/measuredAdjacentScroll/);
+});
