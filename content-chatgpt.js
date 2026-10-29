@@ -6114,7 +6114,13 @@ if (boundaryIsVisible(boundary)) {
             partialArchiveId: existingRecoveryDraft?.partialArchiveId || current.partialArchiveId || '',
             partialSavedAt: existingRecoveryDraft?.partialSavedAt || ''
           };
-          await chrome.storage.local.set({ ['draft:' + draftId]: draft });
+          const previousCheckpoint = (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId];
+          if (['resume-draft', 'retry-walk'].includes(mode) &&
+              previousCheckpoint?.messages?.length > draft.messages.length) {
+            draftCount = previousCheckpoint.messages.length;
+          } else {
+            await chrome.storage.local.set({ ['draft:' + draftId]: draft });
+          }
           // Never delete an earlier recovery attempt. A second interruption
           // must still be able to fall back to its last complete prefix.
         }
