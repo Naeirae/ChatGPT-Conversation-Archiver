@@ -1,16 +1,15 @@
 # 2026-10-29 — 0.4.77: устранение регрессии фонового сбора и автоматическая середина
 
-## Current control point — 2026-10-29, PR #55 still draft
+## Текущая контрольная точка — 2026-10-29, PR #55 (draft)
 
-- Candidate branch: fix/real-background-worker-windows-0.4.77; main remains 0.4.76, fb4deb5cd1026ac760f5c4cb533cc401a07b6d00.
-- Last source/test-verified commit before this documentation update: 18eaf8d02739910cef0a905b62bd0bd02ebac139.
-- GitHub Actions run 40881567548: extension and updater jobs green; 192/192 Node tests passed; package manifest 0.4.77 built and uploaded. This is code/build verification, not installed-browser behavior.
-- Active fixes: background focus emulation before ChatGPT DOM hydration; two isolated persistent CDP sessions; authorized restoration after MV3 restart; same-conversation URL changes do not discard CDP; cancellation/startup race protections; paused-lane recovery; stopped and detached lane isolation; one-slot midpoint planner; visible-only witnesses; persistent cleanup for planner-owned windows.
-- Recovery: retries preserve original drafts and independent split archives. No deletion/migration of user data has been added; no main release/merge.
-- Source/automated control gates: 10/10 verified. Installed-Chrome acceptance: 0/7 verified. Combined checklist 10/17 (58.8%), not a readiness rating; all seven browser scenarios remain mandatory.
-- Outstanding P0: two distinct long ChatGPT chats physically scroll and accumulate messages while user is on a third tab; pause/resume and one-lane failure independence; same chat split midpoint and verified overlap; stalled/persistent draft recovery; very long turn and image handling; Google Docs export validation.
-- Runtime caveat: Chrome 118+ supports debugger-session service-worker keepalive; forced worker termination can still destroy JS memory, so reattachment is guarded by the original content-script health and expected conversation key. Permanent page visibility is not proof of physical progress.
-- First next operation: installed Chrome 0.4.77 branch ZIP smoke with logged-in ChatGPT; log verified per-lane physical scrollTop/count deltas, handle focus/DevTools infobar and stalled virtualized DOM; only merge after live evidence. The terminal CDP visibility+scroll behavior is not yet proven.
+- Ветка: fix/real-background-worker-windows-0.4.77. main = 0.4.76 (fb4deb5cd1026ac760f5c4cb533cc401a07b6d00), не изменён. Выпуска 0.4.77 нет.
+- Доказано исходниками и Node-тестами: независимые debugger-сессии, проверка jobId/URL/видимости, пауза и отмена, восстановление после перезапуска MV3 по health того же сборщика, сохранение прежних архивов и черновиков, автоматическая середина и проверяемый стык; реальная приёмка самих чатов всё ещё нужна.
+- ДОБАВЛЕНО: scripts/browser-cdp-smoke.mjs — независимый реальный Chrome/Chromium CDP smoke без сторонних пакетов и данных пользователей; в about:blank загружаются два синтетических виртуализированных списка и третья пользовательская страница. Проверяет реальное колесо мыши, видимость через Emulation.setFocusEmulationEnabled, физический scrollTop, смену видимых ID, независимость потоков, отключение и повторное подключение CDP в первом потоке.
+- Локально Chromium 144: A=0→750→1430 px; B=0→750 px; пользовательская страница=0. Chrome CI 156, GitHub Actions run 40939326562: A=0→750→1430→1830 px после CDP reconnect, B=0→750 px, пользователь=0. Новая браузерная проверка PASS. Это тест механизма CDP на синтетическом DOM, НЕ E2E установленного расширения и НЕ подтверждение полноты реальных переписок.
+- В .github/workflows/verify.yml создан отдельный job browser-cdp-smoke после Node-верификации расширения. Успешны extension, updater, browser-cdp-smoke в run 40939326562. Затем дополнительно исправлено ожидание видимости после первичного debugger attach и добавлен Node-тест; нужно сверить последний CI по актуальному HEAD.
+- Чек-лист сопоставимых контрольных пунктов: 11/18 = 61,1% подтверждено (было 10/17, добавлена 1 проверенная браузерная CDP-проверка). По обязательной приёмке на живых чатах 0/7 подтверждено, эти семь пунктов нельзя закрывать на основе синтетического стенда.
+- Блокировка: браузер здесь не авторизован в ChatGPT; проверка двух настоящих длинных чатов, split-merge, сохранённых пользовательских черновиков, изображений и Google Docs не выполнена. Не считать PR готовым, не объединять с main и не обновлять пользовательское расширение до приёмки.
+- Следующий этап: E2E с установленной 0.4.77 в Chrome — один длинный фон, два одновременно, пауза/отмена одного, один чат split с доказанным стыком, сохранение/повтор, изображения и Google Docs. Записать фактические физические дельты и счётчики, сохранить исходные draft/archive ключи.
 
 
 ## Состояние и источник
