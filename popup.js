@@ -1013,8 +1013,7 @@ async function saveSettings(patch, noticeId = 'settingsSaved') {
 }
 
 const QUEUE_MODE_OPTIONS = [
-  { value: 'two-chats', label: 'Два разных чата параллельно' },
-  { value: 'split-chat', label: 'Эксперимент: один чат, два потока (середина автоматически)' }
+  { value: 'two-chats', label: 'Два разных чата параллельно' }
 ];
 const QUEUE_STATE_LABELS = {
   queued: 'В очереди', starting: 'Запускается', running: 'Собирается',
