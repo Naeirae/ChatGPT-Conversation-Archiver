@@ -40,36 +40,32 @@ test('split item needs both slots and does not steal an ongoing second-chat slot
   assert.deepEqual(chooseRunnableQueueItems(rows, []).map(v => v.id), ['split']);
 });
 
-test('one chat in experimental mode receives two overlapping verified ranges', () => {
-  const [first, second] = queueLanePlan(item('split', QUEUE_MODES.SPLIT_CHAT));
-  assert.equal(first.captureRange.start.id, anchor('a').id);
-  assert.equal(first.captureRange.end.id, anchor('e').id);
-  assert.equal(second.captureRange.start.id, anchor('c').id);
-  assert.equal(second.captureRange.end.id, anchor('h').id);
+test('two independent range lanes require no midpoint', () => {
+  const range = { start: anchor('a'), end: anchor('h') };
+  const [first, second] = queueLanePlan(item('split', QUEUE_MODES.SPLIT_CHAT, url, range));
+  assert.deepEqual(first.captureRange, range);
+  assert.deepEqual(second.captureRange, range);
+  assert.throws(() => splitLanePlan({ start: { id: 'fallback' }, end: range.end }), /устойчивые/);
+  assert.throws(() => splitLanePlan({ start: range.start, end: range.start }), /начала и конца/);
 });
 
-test('weak, missing and duplicated midpoints fail closed', () => {
-  assert.throws(() => splitLanePlan({ ...markers, middle: { ...markers.middle, previous: { id: 'turn:fallback-2' } } }), /устойчивые ID/);
-  assert.throws(() => splitLanePlan({ ...markers, middle: { ...markers.middle, next: markers.start } }), /не должны совпадать/);
-  assert.throws(() => splitLanePlan({ start: markers.start, end: markers.end }), /середину/);
-});
-
-test('split archives merge only after verified three-message overlap and both boundaries', () => {
-  const left = archive('lane-a', ['a','b','c','d','e'].map(turn));
-  const right = archive('lane-b', ['c','d','e','f','g','h'].map(turn));
-  const joined = joinVerifiedSplitCapture(item('split', QUEUE_MODES.SPLIT_CHAT), left, right);
-  assert.deepEqual(joined.messages.map(m => m.text), ['a','b','c','d','e','f','g','h'].map(v=>'message '+v));
-  assert.equal(joined.overlap, 3);
-  assert.deepEqual(joined.sourceIds, ['lane-a', 'lane-b']);
-});
-
-test('wrong source, unverified ends, wrong order and missing bridge never publish a full archive', () => {
-  const left = archive('lane-a', ['a','b','c','d','e'].map(turn));
-  const right = archive('lane-b', ['c','d','e','f','g','h'].map(turn));
-  assert.throws(() => joinVerifiedSplitCapture(item('split', QUEUE_MODES.SPLIT_CHAT), left, {...right, sourceUrl:other}), /разным перепискам/);
-  assert.throws(() => joinVerifiedSplitCapture(item('split', QUEUE_MODES.SPLIT_CHAT), left, {...right, captureProof: { startVerified: true, endVerified: false }}), /Не подтверждены границы/);
-  assert.throws(() => joinVerifiedSplitCapture(item('split', QUEUE_MODES.SPLIT_CHAT), left, archive('lane-b',['c','x','e','f','g','h'].map(turn))), /стык/);
-  assert.throws(() => joinVerifiedSplitCapture(item('split', QUEUE_MODES.SPLIT_CHAT), left, archive('lane-b',['d','e','f','g','h'].map(turn))), /границы/);
+test('two full-range passes must exactly agree before publishing', () => {
+  const range = { start: anchor('a'), end: anchor('h') };
+  const target = item('split', QUEUE_MODES.SPLIT_CHAT, url, range);
+  const complete = archive('lane-a', ['a','b','c','d','e','f','g','h'].map(turn));
+  const duplicate = archive('lane-b', ['a','b','c','d','e','f','g','h'].map(turn));
+  const joined = joinVerifiedSplitCapture(target, complete, duplicate);
+  assert.equal(joined.messages.length, 8);
+  assert.equal(joined.overlap, 8);
+  assert.throws(() => joinVerifiedSplitCapture(target, complete, {
+    ...duplicate, messages: ['a','b','x','d','e','f','g','h'].map(turn)
+  }), /расходятся/);
+  assert.throws(() => joinVerifiedSplitCapture(target, complete, {
+    ...duplicate, captureProof: { startVerified: true, endVerified: false }
+  }), /Не подтверждены границы/);
+  assert.throws(() => joinVerifiedSplitCapture(target, complete, {
+    ...duplicate, sourceUrl: other
+  }), /разным перепискам/);
 });
 
 test('queue status distinguishes failure from partial or complete work', () => {
