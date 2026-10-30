@@ -4268,7 +4268,11 @@
           recoveriesWithoutAdvance = 0;
           retries.clear();
         } else if (physicalForward) {
-          revisitedSteps++;
+          // Long messages can need many genuine wheel steps. Only a return to
+          // an already traversed position counts as revisiting, while neither
+          // case clears the chronological recovery budget.
+          if (topBeyondFrontier) revisitedSteps = 0;
+          else revisitedSteps++;
           stationarySteps = 0;
         } else if (fingerprint(before, beforeRefs) === fingerprint(after, afterRefs)) {
           stationarySteps++;
