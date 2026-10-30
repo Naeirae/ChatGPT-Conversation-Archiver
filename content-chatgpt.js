@@ -3946,7 +3946,8 @@
 
   async function persistRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
     const jobId = state.jobId;
-    if (!jobId || !boundary?.kind || !boundary?.key || !order.length) return;
+    if (!jobId || !boundary?.kind || !boundary?.key || !order.length ||
+        state.verificationPassActive) return;
 
     const now = Date.now();
     const last = state.recoveryCheckpoint || { at: 0, count: 0 };
@@ -5375,9 +5376,15 @@ if (boundaryIsVisible(boundary)) {
         });
         const verifyMap = new Map();
         const verifyOrder = [];
-        const verifiedWalk = await walkDownFullLegacy(
-          verifyMap, verifyOrder, settings, boundary
-        );
+        let verifiedWalk;
+        state.verificationPassActive = true;
+        try {
+          verifiedWalk = await walkDownFullLegacy(
+            verifyMap, verifyOrder, settings, boundary
+          );
+        } finally {
+          state.verificationPassActive = false;
+        }
         if (!verifiedWalk?.boundaryReached) {
           throw new Error('Контрольный проход не подтвердил конец снимка.');
         }
