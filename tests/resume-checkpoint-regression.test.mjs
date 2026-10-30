@@ -59,28 +59,13 @@ test('full capture uses a second independent bounded pass without replacing chec
   assert.match(checkpoint, /state\.verificationPassActive\) return/);
 });
 
-test('a transient virtualized seam settles before recovery and preserves a checkpoint', () => {
+test('marked-range traversal continues after a transient missing overlap', () => {
   const walk = source.slice(source.indexOf('async function walkDown('),
-    source.indexOf('async function captureConversation('));
-  const start = walk.indexOf('if (!overlapping && !adjacent)');
-  const finish = walk.indexOf('const recovered = await recoverDownwardContinuity(', start);
-  const segment = walk.slice(start, finish);
-  assert.ok(start >= 0 && finish > start);
-  assert.match(segment, /await waitForTurnSettle\(2400, 450\)/);
-  assert.match(segment, /navigationWindowsOverlap\(beforeRefs, settledRefs\)/);
-  assert.doesNotMatch(segment, /navigationWindowsOverlap\(afterRefs, settledRefs\)/);
-  assert.ok(segment.indexOf('await saveRecoveryCheckpoint(map, order, boundary, { force: true })') <
-    segment.indexOf('watchdog.beforeRecovery('));
-});
-
-test('seam retry budget cannot be reset by weak fallback message inflation', () => {
-  assert.match(source, /function verifiedStrongFrontierCount\(map\)/);
-  const matches = source.match(/watchdog\.beforeRecovery\(physicalBefore, beforeRefs, verifiedStrongFrontierCount\(map\)\)/g) || [];
-  assert.equal(matches.length, 2);
-  const watchdog = source.slice(source.indexOf('function createContinuityWatchdog('),
-    source.indexOf('async function recoverDownwardContinuity('));
-  assert.match(watchdog, /const verifiedMovement = Boolean\(physicalForward && newStrongId\)/);
-  assert.match(watchdog, /if \(topBeyondFrontier\) revisitedSteps = 0/);
+    source.indexOf('function chooseAutomaticSplitMiddle(', source.indexOf('async function walkDown(')));
+  assert.match(walk, /await waitForTurnSettle\(2400, 450\)/);
+  assert.match(walk, /await saveRecoveryCheckpoint\(map, order, boundary\)/);
+  assert.doesNotMatch(walk, /watchdog\.beforeRecovery|recoverDownwardContinuity|watchdog\.noteStep/);
+  assert.match(walk, /if \(requireBoundary\)/);
 });
 
 test('recovery reuses the historical overlapping window without pixel replay', () => {
