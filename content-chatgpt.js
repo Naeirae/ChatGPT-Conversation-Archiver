@@ -4676,6 +4676,24 @@ if (boundaryIsVisible(boundary)) {
         adjacent, overlapping
       });
       if (!overlapping && !adjacent) {
+        // ChatGPT may temporarily unmount the old window before hydrating the
+        // next one. Recheck after settling before declaring a physical gap.
+        await waitForTurnSettle(2400, 450);
+        await expandVisible();
+        if (settings.includeReasoning) await expandReasoningVisible();
+        collect(map, order, settings, boundary);
+        const settledRefs = visibleNavigationRefsLightweight();
+        const settledAfter = sampleCaptureScroller();
+        const settledOverlap = navigationWindowsOverlap(beforeRefs, settledRefs) ||
+          navigationWindowsOverlap(afterRefs, settledRefs);
+        const settledAdjacent = measuredAdjacentScroll(
+          physicalBefore, settledAfter, downwardStep
+        );
+        if (settledOverlap || settledAdjacent) {
+          await saveRecoveryCheckpoint(map, order, boundary);
+          continue;
+        }
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
         const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, map.size);
         await progress(
           'Стык не подтверждён · попытка восстановления ' +
