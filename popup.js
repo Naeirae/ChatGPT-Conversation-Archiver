@@ -1292,6 +1292,38 @@ function render(data) {
   if (captureHeading) captureHeading.textContent = isFragmentRun
     ? 'Собирается архив по отметкам'
     : (hasManualRange ? 'Основной архив по отметкам' : 'Собрать чат');
+  // Make failed-pass recovery discoverable without scrolling down to the
+  // unfinished drafts panel. Never treat "Collect marked range" as resume.
+  let recoveryButton = document.getElementById('resumeFailedInline');
+  if (!recoveryButton) {
+    recoveryButton = document.createElement('button');
+    recoveryButton.id = 'resumeFailedInline';
+    recoveryButton.type = 'button';
+    recoveryButton.className = 'primary';
+    recoveryButton.textContent = 'Продолжить сохранённый сбор';
+    const fragmentButton = $('captureFragment');
+    fragmentButton?.parentElement?.insertBefore(recoveryButton, fragmentButton);
+    recoveryButton.onclick = async () => {
+      recoveryButton.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_RESUME_FAILED_CAPTURE'
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Не удалось восстановить сбор.');
+        render({ ...state, job: result.job });
+        startPolling();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+        recoveryButton.disabled = false;
+      }
+    };
+  }
+  const canResumeFailed = Boolean(job &&
+    ['error', 'cancelled'].includes(job.status) &&
+    (job.draftId || job.recoveryDraftId) && job.captureTabId != null);
+  recoveryButton.hidden = !canResumeFailed;
+  recoveryButton.style.display = canResumeFailed ? '' : 'none';
+  recoveryButton.disabled = !canResumeFailed;
   $('captureFragment').disabled = Boolean(running);
   $('markFragment').disabled = Boolean(running);
   $('clearMarkers').disabled = Boolean(running);
