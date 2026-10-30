@@ -99,7 +99,17 @@ test('full chronological pass hydrates visible image binaries during traversal',
   const segment = source.slice(start, end);
   assert.ok(start > 0 && end > start);
   assert.match(segment, /const imageAttempts = new Map\(\)/);
-  assert.match(segment, /visibleTouched\.map\(id => map\.get\(id\)\)/);
-  assert.match(segment, /newlyTouched\.map\(id => map\.get\(id\)\)/);
+  assert.match(segment, /visibleIds\\.map\\(id => map\\.get\\(id\\)\\)/);
+  assert.match(segment, /nextIds\\.map\\(id => map\\.get\\(id\\)\\)/);
   assert.equal((segment.match(/visibleOnly: true, walkStep: i/g) || []).length, 2);
+});
+
+test('full capture restores pre-0.3.97 forward-only traversal, with final verification separate', () => {
+  const start = source.indexOf('async function walkDownFullLegacy(');
+  const end = source.indexOf('async function walkDown(', start);
+  const segment = source.slice(start, end);
+  assert.match(segment, /await physicalScroll\('down', 1/);
+  assert.match(segment, /settleTimeout: 5000, quietWindow: 850/);
+  assert.doesNotMatch(segment, /recoverDownwardContinuity|watchdog\.beforeRecovery/);
+  assert.match(segment, /await saveRecoveryCheckpoint\(map, order, boundary, \{ force: true \}\)/);
 });
