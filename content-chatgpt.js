@@ -4371,139 +4371,72 @@
 
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
-    const imageAttempts = new Map();
-    let stable = 0;
-    let previousSignature = '';
-    let previousSize = -1;
-    const watchdog = createContinuityWatchdog();
+    // Restore the pre-0.3.97 traversal principle: collection must reach the
+    // fixed end; seams are audited in the independent final comparison, not
+    // used to send the main collector endlessly backward.
     const startedAt = Date.now();
-    const timeoutMs = 4 * 60 * 60 * 1000;
+    const imageAttempts = new Map();
+    let unchangedWindows = 0;
+    let previousPosition = null;
+    let previousSignature = '';
+    let previousCount = -1;
 
-    for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
+    for (let i = 0; Date.now() - startedAt < 4 * 60 * 60 * 1000; i++) {
       await waitIfPaused();
-
-      if (await recoverVisibleLoadError('walk', map.size)) {
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
-      }
-
+      await recoverVisibleLoadError('walk', map.size);
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-
-      // 0.3.87 invariant: capture the current viewport before every movement,
-      // especially the first viewport at the confirmed top.
-      const visibleTouched = collect(map, order, settings, boundary);
-      await hydrateSequentialImages(visibleTouched.map(id => map.get(id)).filter(Boolean),
+      const visibleIds = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(visibleIds.map(id => map.get(id)).filter(Boolean),
         imageAttempts, { visibleOnly: true, walkStep: i });
-      const beforeRefs = visibleNavigationRefsLightweight();
-
       if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнута метка конца снимка · ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        await progress('Этап 2/3: дошёл до конца снимка · ' + map.size + ' сообщений',
+          map.size, { phase: 'walk', iteration: i + 1,
+            boundaryReached: true, chronologicalCount: map.size, force: true });
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-      const signature = visibleTurnSignature();
-      await progress('Этап 2/3: физически прохожу вниз через debugger · ' + map.size + ' сообщений', map.size, {
-        phase: 'walk',
-        iteration: i + 1,
-        chronologicalCount: map.size
-      });
+      await progress('Этап 2/3: прохожу вниз · ' + map.size + ' сообщений',
+        map.size, { phase: 'walk', iteration: i + 1, chronologicalCount: map.size });
       await saveRecoveryCheckpoint(map, order, boundary);
-
-      // Fast three-burst steps can jump past whole turns and are impossible
-      // to certify with a virtualized ChatGPT DOM. Use the same short overlap-
-      // preserving step as the marked-range traversal.
-      const physicalBefore = sampleCaptureScroller();
-      const wheel = await physicalScroll('down', 1, {
-        wheelDelta: 120, settleTimeout: 1800, quietWindow: 300
+      const before = sampleCaptureScroller();
+      await physicalScroll('down', 1, {
+        wheelDelta: 120, settleTimeout: 5000, quietWindow: 850
       });
-
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      const newlyTouched = collect(map, order, settings, boundary);
-      await hydrateSequentialImages(newlyTouched.map(id => map.get(id)).filter(Boolean),
+      const nextIds = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(nextIds.map(id => map.get(id)).filter(Boolean),
         imageAttempts, { visibleOnly: true, walkStep: i });
-
-      const afterRefs = visibleNavigationRefsLightweight();
-      const physicalAfter = sampleCaptureScroller();
-      const verifiedOverlap = navigationWindowsOverlap(beforeRefs, afterRefs);
-      watchdog.noteStep({
-        before: physicalBefore, after: physicalAfter, beforeRefs, afterRefs,
-        overlapping: verifiedOverlap,
-        adjacent: measuredAdjacentScroll(physicalBefore, physicalAfter, wheel)
-      });
-      if (!beforeRefs.length || !afterRefs.length || !verifiedOverlap) {
-        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, verifiedStrongFrontierCount(map));
-        await progress(
-          'Восстанавливаю стык: попытка ' + retry.recoveriesWithoutAdvance +
-            ' без подтверждённого продвижения…',
-          map.size, { phase: 'walk', continuityRecovery: true,
-            continuityAttempt: retry.recoveryAttempts, force: true }
-        );
-        const recovered = await recoverDownwardContinuity(
-          beforeRefs, afterRefs, physicalAfter, map, order, settings, boundary
-        );
-        if (!recovered) {
-          throw new Error(
-            'Хронологический debugger-проход потерял перекрытие между соседними участками. ' +
-            'Сбор остановлен, чтобы не сохранить чат с пропуском.'
-          );
-        }
-
-        stable = 0;
-        previousSignature = '';
-        previousSize = -1;
-        await saveRecoveryCheckpoint(map, order, boundary);
-        continue;
-      }
-
-if (boundaryIsVisible(boundary)) {
-        await progress('Этап 2/3: достигнута метка конца снимка · ' + map.size + ' сообщений', map.size, {
-          phase: 'walk',
-          iteration: i + 1,
-          boundaryReached: true,
-          chronologicalCount: map.size,
-          force: true
-        });
+      if (boundaryIsVisible(boundary)) {
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        await progress('Этап 2/3: дошёл до конца снимка · ' + map.size + ' сообщений',
+          map.size, { phase: 'walk', iteration: i + 1,
+            boundaryReached: true, chronologicalCount: map.size, force: true });
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-            await saveRecoveryCheckpoint(map, order, boundary);
-
-      const nextSignature = visibleTurnSignature();
-      if (
-        nextSignature &&
-        nextSignature === signature &&
-        signature === previousSignature &&
-        map.size === previousSize
-      ) {
-        stable++;
+      const after = sampleCaptureScroller();
+      const position = after?.element === before?.element ? Number(after?.top) : null;
+      const signature = visibleTurnSignature();
+      const stationary = position != null && previousPosition != null &&
+        Math.abs(position - previousPosition) < 2;
+      if (stationary && signature === previousSignature && map.size === previousCount) {
+        unchangedWindows++;
       } else {
-        stable = 0;
+        unchangedWindows = 0;
       }
-
-      previousSignature = nextSignature;
-      previousSize = map.size;
-
-      if (stable >= 6) {
-        throw new Error(
-          'Хронологический debugger-проход остановился до зафиксированного конца снимка.'
-        );
+      previousPosition = position;
+      previousSignature = signature;
+      previousCount = map.size;
+      if (unchangedWindows >= 6) {
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        throw new Error('Прокрутка остановилась до зафиксированного конца снимка. Черновик сохранён.');
       }
     }
-
-    throw new Error(
-      'Не удалось дойти до зафиксированного конца снимка в пределах хронологического прохода.'
-    );
+    await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+    throw new Error('Не удалось достичь конца снимка за четыре часа. Черновик сохранён.');
   }
 
   async function walkDown(
