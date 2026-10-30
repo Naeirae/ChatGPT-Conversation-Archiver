@@ -58,3 +58,17 @@ test('full capture uses a second independent bounded pass without replacing chec
     source.indexOf('function visibleNavigationRefsLightweight()'));
   assert.match(checkpoint, /state\.verificationPassActive\) return/);
 });
+
+test('a transient virtualized seam settles before recovery and preserves a checkpoint', () => {
+  const walk = source.slice(source.indexOf('async function walkDown('),
+    source.indexOf('async function captureConversation('));
+  const start = walk.indexOf('if (!overlapping && !adjacent)');
+  const finish = walk.indexOf('const recovered = await recoverDownwardContinuity(', start);
+  const segment = walk.slice(start, finish);
+  assert.ok(start >= 0 && finish > start);
+  assert.match(segment, /await waitForTurnSettle\(2400, 450\)/);
+  assert.match(segment, /navigationWindowsOverlap\(beforeRefs, settledRefs\)/);
+  assert.doesNotMatch(segment, /navigationWindowsOverlap\(afterRefs, settledRefs\)/);
+  assert.ok(segment.indexOf('await saveRecoveryCheckpoint(map, order, boundary, { force: true })') <
+    segment.indexOf('watchdog.beforeRecovery('));
+});
