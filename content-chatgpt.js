@@ -2086,6 +2086,16 @@
     }
   }
 
+  function verifiedStrongFrontierCount(map) {
+    // Weak fallback keys may change as adjacent virtualized turns mount/unmount.
+    // They must never reset the same-seam retry budget.
+    let count = 0;
+    for (const message of map.values()) {
+      if (messageStrongId(message)) count++;
+    }
+    return count;
+  }
+
   function capturedImageStats(messages) {
     const images = (messages || []).flatMap(item => item?.images || []);
     return {
@@ -4247,8 +4257,9 @@
 
         // A truly new strong message in an adjacent/overlapping window is
         // evidence of progress even if virtualized scrollTop has rebased.
-        const verifiedMovement = Boolean(physicalForward &&
-          (topBeyondFrontier || newStrongId));
+        const verifiedMovement = Boolean(physicalForward && newStrongId);
+        // ScrollTop may advance inside a single long message; it is movement,
+        // not proof of a new chronological message frontier.
 
         if (verifiedMovement) {
           forwardSteps++;
@@ -4475,7 +4486,7 @@
         adjacent: measuredAdjacentScroll(physicalBefore, physicalAfter, wheel)
       });
       if (!beforeRefs.length || !afterRefs.length || !verifiedOverlap) {
-        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, map.size);
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, verifiedStrongFrontierCount(map));
         await progress(
           'Восстанавливаю стык: попытка ' + retry.recoveriesWithoutAdvance +
             ' без подтверждённого продвижения…',
@@ -4693,7 +4704,7 @@ if (boundaryIsVisible(boundary)) {
           continue;
         }
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, map.size);
+        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, verifiedStrongFrontierCount(map));
         await progress(
           'Стык не подтверждён · попытка восстановления ' +
             retry.recoveriesWithoutAdvance +
