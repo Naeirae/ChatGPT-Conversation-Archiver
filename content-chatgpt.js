@@ -4371,6 +4371,7 @@
 
 
   async function walkDownFullLegacy(map, order, settings, boundary) {
+    const imageAttempts = new Map();
     let stable = 0;
     let previousSignature = '';
     let previousSize = -1;
@@ -4392,7 +4393,9 @@
 
       // 0.3.87 invariant: capture the current viewport before every movement,
       // especially the first viewport at the confirmed top.
-      collect(map, order, settings, boundary);
+      const visibleTouched = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(visibleTouched.map(id => map.get(id)).filter(Boolean),
+        imageAttempts, { visibleOnly: true, walkStep: i });
       const beforeRefs = visibleNavigationRefsLightweight();
 
       if (boundaryIsVisible(boundary)) {
@@ -4425,7 +4428,9 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      collect(map, order, settings, boundary);
+      const newlyTouched = collect(map, order, settings, boundary);
+      await hydrateSequentialImages(newlyTouched.map(id => map.get(id)).filter(Boolean),
+        imageAttempts, { visibleOnly: true, walkStep: i });
 
       const afterRefs = visibleNavigationRefsLightweight();
       const physicalAfter = sampleCaptureScroller();
