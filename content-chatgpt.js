@@ -5397,8 +5397,6 @@ if (boundaryIsVisible(boundary)) {
         );
         if (verification.unresolvedCount || reverse.unresolvedCount ||
             verification.messages.length !== reverse.messages.length ||
-            verification.messages.length !== firstMessages.length ||
-            verification.messages.length !== verifyMessages.length ||
             verification.messages.some((message, index) =>
               !sameNavigationRef(navigationRef(message),
                 navigationRef(reverse.messages[index])))) {
