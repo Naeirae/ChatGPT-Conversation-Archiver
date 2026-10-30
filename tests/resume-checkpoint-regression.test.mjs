@@ -72,3 +72,13 @@ test('a transient virtualized seam settles before recovery and preserves a check
   assert.ok(segment.indexOf('await saveRecoveryCheckpoint(map, order, boundary, { force: true })') <
     segment.indexOf('watchdog.beforeRecovery('));
 });
+
+test('seam retry budget cannot be reset by weak fallback message inflation', () => {
+  assert.match(source, /function verifiedStrongFrontierCount\(map\)/);
+  const matches = source.match(/watchdog\.beforeRecovery\(physicalBefore, beforeRefs, verifiedStrongFrontierCount\(map\)\)/g) || [];
+  assert.equal(matches.length, 2);
+  const watchdog = source.slice(source.indexOf('function createContinuityWatchdog('),
+    source.indexOf('async function recoverDownwardContinuity('));
+  assert.match(watchdog, /const verifiedMovement = Boolean\(physicalForward && newStrongId\)/);
+  assert.match(watchdog, /if \(topBeyondFrontier\) revisitedSteps = 0/);
+});
