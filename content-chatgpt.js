@@ -4684,8 +4684,7 @@ if (boundaryIsVisible(boundary)) {
         collect(map, order, settings, boundary);
         const settledRefs = visibleNavigationRefsLightweight();
         const settledAfter = sampleCaptureScroller();
-        const settledOverlap = navigationWindowsOverlap(beforeRefs, settledRefs) ||
-          navigationWindowsOverlap(afterRefs, settledRefs);
+        const settledOverlap = navigationWindowsOverlap(beforeRefs, settledRefs);
         const settledAdjacent = measuredAdjacentScroll(
           physicalBefore, settledAfter, downwardStep
         );
