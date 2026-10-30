@@ -5359,6 +5359,64 @@ if (boundaryIsVisible(boundary)) {
         );
       }
 
+      // Final verification is independent of the first canonical walk.
+      // The second pass enumerates messages and image references, but does not
+      // download image binaries. Those are hydrated only after reconciliation.
+      if (mode === 'full') {
+        const firstMessages = order.map(id => map.get(id)).filter(Boolean);
+        const firstRefs = firstMessages.map(navigationRef);
+        await progress(
+          'Этап 3/3: контрольный проход — сверяю сообщения и изображения…',
+          firstMessages.length,
+          { phase: 'finalizing', force: true }
+        );
+        await reachTopWithoutCapture(firstMessages.length, {
+          fullCapture: true, timeoutMs: 20 * 60 * 1000
+        });
+        const verifyMap = new Map();
+        const verifyOrder = [];
+        const verifiedWalk = await walkDownFullLegacy(
+          verifyMap, verifyOrder, settings, boundary
+        );
+        if (!verifiedWalk?.boundaryReached) {
+          throw new Error('Контрольный проход не подтвердил конец снимка.');
+        }
+        const verifyMessages = verifyOrder.map(id => verifyMap.get(id)).filter(Boolean);
+        const verification = reconcileNavigationCoverage(
+          firstMessages, verifyMessages, verifyMessages.map(navigationRef)
+        );
+        const reverse = reconcileNavigationCoverage(
+          verifyMessages, firstMessages, firstRefs
+        );
+        if (verification.unresolvedCount || reverse.unresolvedCount ||
+            verification.messages.length !== reverse.messages.length ||
+            verification.messages.length !== firstMessages.length ||
+            verification.messages.length !== verifyMessages.length ||
+            verification.messages.some((message, index) =>
+              !sameNavigationRef(navigationRef(message),
+                navigationRef(reverse.messages[index])))) {
+          throw new Error(
+            'Контрольный проход обнаружил расхождение сообщений. ' +
+            'Основной сбор оставлен как незавершённый, без объявления полноты.'
+          );
+        }
+        // Reconcile image references captured in each viewport, retaining
+        // existing ready binaries and the richer text, without losing order.
+        const verifiedMessages = verification.messages.map((message, index) =>
+          mergeRicherCapture(message, reverse.messages[index])
+        );
+        rebuildCaptureMap(map, order, verifiedMessages);
+        await progress(
+          'Контрольный проход завершён: ' + verifiedMessages.length +
+            ' сообщений подтверждено · проверяю недостающие изображения…',
+          verifiedMessages.length,
+          { phase: 'finalizing', force: true,
+            firstPassCount: firstMessages.length,
+            secondPassCount: verifyMessages.length,
+            passCountMatch: true, comparisonComplete: true }
+        );
+      }
+
       await progress(
         mode === 'compare'
           ? 'Этап 3/3: считаю новые сообщения…'
