@@ -32,3 +32,13 @@ test('a failed resumed pass does not replace a larger checkpoint', () => {
   assert.match(failure, /previousCheckpoint\?\.messages\?\.length > draft\.messages\.length/);
   assert.match(failure, /draftCount = previousCheckpoint\.messages\.length/);
 });
+
+test('capture failure breadcrumbs survive a missing background acknowledgement', async () => {
+  const worker = await readFile('service-worker.js', 'utf8');
+  const write = source.indexOf("['archiverCaptureFailure:' + jobId]");
+  const report = source.indexOf("type: 'ARCHIVER_CAPTURE_FAILED'", write);
+  assert.ok(write > 0 && report > write);
+  const read = worker.indexOf("const failureKey = 'archiverCaptureFailure:' + current.jobId");
+  const show = worker.indexOf("'Первичная ошибка сборщика: '", read);
+  assert.ok(read > 0 && show > read);
+});
