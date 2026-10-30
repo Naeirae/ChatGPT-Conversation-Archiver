@@ -1077,7 +1077,7 @@ function renderQueue(queue) {
   if (!items.length) {
     const empty = document.createElement('p');
     empty.className = 'muted';
-    empty.textContent = 'Очередь пуста. Добавьте чаты и выберите режим отдельно для каждого.';
+    empty.textContent = 'Очередь пуста. Добавьте ссылки на два разных чата; отмечать начало и конец не нужно.';
     list.appendChild(empty);
   }
   for (const item of items) {
@@ -1208,7 +1208,7 @@ async function queueAdd(sourceUrl) {
   const mode = $('queueAddMode').value;
   await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode });
   $('queueChatUrl').value = '';
-  setStatus('Чат добавлен в очередь. Режим можно изменить в его карточке.');
+  setStatus('Чат добавлен в очередь. Второй чат добавляется отдельной ссылкой, без разметки.');
 }
 
 $('queueAddUrl').onclick = async () => {
