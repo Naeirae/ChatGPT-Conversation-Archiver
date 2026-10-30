@@ -92,3 +92,14 @@ test('recovery reuses the historical overlapping window without pixel replay', (
   assert.match(block, /await physicalScroll\(/);
   assert.doesNotMatch(block, /originalAfter\.top|replaySeen|reachedAfter/);
 });
+
+test('full chronological pass hydrates visible image binaries during traversal', () => {
+  const start = source.indexOf('async function walkDownFullLegacy(');
+  const end = source.indexOf('async function walkDown(', start);
+  const segment = source.slice(start, end);
+  assert.ok(start > 0 && end > start);
+  assert.match(segment, /const imageAttempts = new Map\(\)/);
+  assert.match(segment, /visibleTouched\.map\(id => map\.get\(id\)\)/);
+  assert.match(segment, /newlyTouched\.map\(id => map\.get\(id\)\)/);
+  assert.equal((segment.match(/visibleOnly: true, walkStep: i/g) || []).length, 2);
+});
