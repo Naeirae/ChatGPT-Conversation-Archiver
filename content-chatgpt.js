@@ -5939,6 +5939,12 @@ if (boundaryIsVisible(boundary)) {
     } catch (error) {
       const message = error && error.message ? error.message : String(error);
       const status = /отменен/i.test(message) ? 'cancelled' : 'error';
+      // Write the primary failure before salvage: follow-up storage work or
+      // background messaging may fail, but the original cause must survive.
+      await chrome.storage.local.set({ ['archiverCaptureFailure:' + jobId]: {
+        jobId, message, phase: chronologicalStarted ? 'walk' : 'top',
+        capturedCount: map.size, occurredAt: Date.now()
+      } }).catch(() => {});
       const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
       const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
 
