@@ -4566,59 +4566,20 @@
           }
         );
       }
-      const overlapping = navigationWindowsOverlap(beforeRefs, afterRefs);
-      const adjacent = measuredAdjacentScroll(
-        physicalBefore, physicalAfter, downwardStep
-      );
-      const movement = watchdog.noteStep({
-        before: physicalBefore, after: physicalAfter, beforeRefs, afterRefs,
-        adjacent, overlapping
-      });
-      if (!overlapping && !adjacent) {
-        // ChatGPT may temporarily unmount the old window before hydrating the
-        // next one. Recheck after settling before declaring a physical gap.
+      // Collection is forward-only, as in the functioning 0.3.x fragment path.
+      // A transient virtualized gap must not abort the physical walk. The
+      // fixed lower marker is still required, and incomplete coverage is
+      // retained for reconciliation rather than certified by scrolling alone.
+      if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
+          !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
         await waitForTurnSettle(2400, 450);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
         collect(map, order, settings, boundary);
-        const settledRefs = visibleNavigationRefsLightweight();
-        const settledAfter = sampleCaptureScroller();
-        const settledOverlap = navigationWindowsOverlap(beforeRefs, settledRefs);
-        const settledAdjacent = measuredAdjacentScroll(
-          physicalBefore, settledAfter, downwardStep
-        );
-        if (settledOverlap || settledAdjacent) {
-          await saveRecoveryCheckpoint(map, order, boundary);
-          continue;
-        }
-        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
-        const retry = watchdog.beforeRecovery(physicalBefore, beforeRefs, verifiedStrongFrontierCount(map));
-        await progress(
-          'Стык не подтверждён · попытка восстановления ' +
-            retry.recoveriesWithoutAdvance +
-            ' без проверенного движения вперёд…',
-          map.size, {
-            phase: 'walk', continuityRecovery: true,
-            continuityAttempt: retry.recoveryAttempts,
-            continuityFrontierRepeat: retry.repeats, force: true
-          }
-        );
-        const recovered = await recoverDownwardContinuity(
-          beforeRefs, afterRefs, physicalAfter, map, order, settings, boundary
-        );
-        if (!recovered) {
-          throw new Error(
-            'Хронологический проход потерял перекрытие между соседними участками. ' +
-            'Сбор остановлен, чтобы не сохранить чат с пропуском.'
-          );
-        }
-
-        scrollRuntime().resetStabilityState(stability);
         await saveRecoveryCheckpoint(map, order, boundary);
-        continue;
       }
 
-if (boundaryIsVisible(boundary)) {
+      if (boundaryIsVisible(boundary)) {
         const boundaryImageStats = capturedImageStats([...map.values()]);
         await progress(
           'Этап 2/3: достигнута метка конца снимка · ' +
