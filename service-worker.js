@@ -1428,9 +1428,14 @@ async function inspectStalledSingleCapture() {
     const draftId = current.draftId || current.recoveryDraftId ||
       ('draft-' + current.jobId);
     const draft = await getDraft(draftId).catch(() => null);
+    const failureKey = 'archiverCaptureFailure:' + current.jobId;
+    const failure = (await chrome.storage.local.get(failureKey).catch(() => ({})))[failureKey];
+    const originalReason = failure?.jobId === current.jobId && failure?.message
+      ? 'Первичная ошибка сборщика: ' + String(failure.message) + '. '
+      : '';
     await finishJobWithError(
       current.jobId, current.sourceTabId ?? current.tabId,
-      'Скрипт сбора завершился, но интерфейс продолжал показывать активный проход. ' +
+      originalReason + 'Скрипт сбора завершился, но интерфейс продолжал показывать активный проход. ' +
       'Сохранённая часть доступна в незавершённых сборах.',
       draft?.id || current.draftId || current.recoveryDraftId || '',
       Math.max(Number(draft?.messages?.length || 0), Number(current.draftCount || 0)),
