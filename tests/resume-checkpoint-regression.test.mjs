@@ -82,3 +82,13 @@ test('seam retry budget cannot be reset by weak fallback message inflation', () 
   assert.match(watchdog, /const verifiedMovement = Boolean\(physicalForward && newStrongId\)/);
   assert.match(watchdog, /if \(topBeyondFrontier\) revisitedSteps = 0/);
 });
+
+test('recovery reuses the historical overlapping window without pixel replay', () => {
+  const start = source.indexOf('async function recoverDownwardContinuity(');
+  const end = source.indexOf('async function walkDownFullLegacy(', start);
+  const block = source.slice(start, end);
+  assert.ok(start > 0 && end > start);
+  assert.match(block, /navigationWindowsOverlap\(beforeRefs, currentRefs\)/);
+  assert.match(block, /await physicalScroll\(/);
+  assert.doesNotMatch(block, /originalAfter\.top|replaySeen|reachedAfter/);
+});
