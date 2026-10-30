@@ -1102,7 +1102,7 @@ function renderQueue(queue) {
       option.textContent = mode.label;
       selector.appendChild(option);
     }
-    selector.value = item.mode;
+    selector.value = 'two-chats';
     selector.disabled = item.status !== 'queued';
     selector.onchange = async () => {
       const value = selector.value;
@@ -1146,10 +1146,10 @@ function renderQueue(queue) {
         row.appendChild(laneActions);
       }
     }
-    if (item.mode === 'split-chat' && item.status === 'queued') {
+    if (item.mode === 'split-chat') {
       const hint = document.createElement('div');
       hint.className = 'queue-worker';
-      hint.textContent = 'Перед запуском достаточно отметить начало и конец. Середина будет найдена автоматически.';
+      hint.textContent = 'Старое разделение одного чата отключено. Черновики сохранены; для работы добавьте два разных чата.';
       row.appendChild(hint);
     }
     if (item.error) {
