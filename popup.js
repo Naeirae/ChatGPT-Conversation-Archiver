@@ -1024,9 +1024,15 @@ const QUEUE_STATE_LABELS = {
 let lastQueueDoneIds = new Set();
 
 async function queueCall(type, extra = {}) {
-  const result = await chrome.runtime.sendMessage({ type, ...extra });
+  const reply = chrome.runtime.sendMessage({ type, ...extra });
+  const timeout = new Promise((_, reject) => setTimeout(
+    () => reject(new Error('Очередь не ответила за 15 секунд. Проверьте состояние перед повторным добавлением.')),
+    15000
+  ));
+  const result = await Promise.race([reply, timeout]);
   if (!result?.ok) throw new Error(result?.error || 'Не удалось изменить очередь.');
-  await refreshQueue();
+  // A slow queue-state refresh must not block the add/enable command UI.
+  void refreshQueue().catch(error => setStatus(error.message || String(error), true));
   return result;
 }
 
