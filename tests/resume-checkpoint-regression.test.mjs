@@ -42,3 +42,19 @@ test('capture failure breadcrumbs survive a missing background acknowledgement',
   const show = worker.indexOf("'Первичная ошибка сборщика: '", read);
   assert.ok(read > 0 && show > read);
 });
+
+test('full capture uses a second independent bounded pass without replacing checkpoints', () => {
+  const checkStart = source.indexOf('// Final verification is independent of the first canonical walk.');
+  const finalStart = source.indexOf("mode === 'compare'\n          ? 'Этап 3/3: считаю новые сообщения", checkStart);
+  assert.ok(checkStart > 0 && finalStart > checkStart);
+  const block = source.slice(checkStart, finalStart);
+  assert.match(block, /await reachTopWithoutCapture\(firstMessages\.length/);
+  assert.match(block, /verifiedWalk = await walkDownFullLegacy\(/);
+  assert.match(block, /state\.verificationPassActive = true/);
+  assert.match(block, /state\.verificationPassActive = false/);
+  assert.match(block, /reconcileNavigationCoverage\(/);
+  assert.match(block, /rebuildCaptureMap\(map, order, verifiedMessages\)/);
+  const checkpoint = source.slice(source.indexOf('async function persistRecoveryCheckpoint('),
+    source.indexOf('function visibleNavigationRefsLightweight()'));
+  assert.match(checkpoint, /state\.verificationPassActive\) return/);
+});
