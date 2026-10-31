@@ -567,10 +567,36 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
     groups.set(groupKey, { members, mergedMessages: component.messages });
   }
 
+  // Suggestions only: never delete Google Docs automatically. The shared
+  // conversation-level linkedDocUrl is not per-draft provenance.
+  const suggestedDocsByScope = new Map();
+  for (const draft of candidateDrafts) {
+    const url = String(draft.pendingDocUrl || '').trim();
+    if (!/^https:\/\/docs\.google\.com\/document\//.test(url)) continue;
+    const key = unfinishedGroupKey(draft);
+    if (!suggestedDocsByScope.has(key)) suggestedDocsByScope.set(key, new Map());
+    const docs = suggestedDocsByScope.get(key);
+    const count = Number(draft.messages?.length || 0);
+    const existing = docs.get(url);
+    if (!existing || count > existing.messageCount) {
+      docs.set(url, { url, messageCount: count, draftId: draft.id });
+    }
+  }
+  const deletionSuggestions = new Map();
+  for (const [scope, urls] of suggestedDocsByScope) {
+    const docs = [...urls.values()].sort((a, b) => b.messageCount - a.messageCount);
+    if (docs.length < 2 || docs[0].messageCount === docs[1].messageCount) continue;
+    deletionSuggestions.set(scope, {
+      keep: docs[0],
+      candidates: docs.slice(1).filter(item => item.messageCount < docs[0].messageCount)
+    });
+  }
+
   const result = [];
   for (const [groupKey, { members, mergedMessages }] of groups.entries()) {
     members.sort((a, b) => String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')));
     const latest = members[0];
+    const baseKeyForSuggestion = unfinishedGroupKey(candidateDrafts.find(item => item.id === latest.id) || latest);
 
     // One user-facing card per logical capture chain (conversation + fixed
     // snapshot boundary + manual range). Internally there may still be several
@@ -634,7 +660,8 @@ async function buildUnfinishedCaptureGroups(drafts = []) {
       capturePhase: primary.capturePhase || contentCandidate?.capturePhase || '',
       capturedAt: primary.capturedAt || contentCandidate?.capturedAt || '',
       hasBoundary: chain.some(item => item.hasBoundary),
-      linkedDocUrl: linkedDoc?.url || ''
+      linkedDocUrl: linkedDoc?.url || '',
+      docCleanupSuggestion: deletionSuggestions.get(baseKeyForSuggestion) || null
     });
   }
 
