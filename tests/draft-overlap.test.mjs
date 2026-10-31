@@ -255,3 +255,25 @@ test('newer checkpoint image bytes override equally ready older image bytes', ()
     'new-image'
   );
 });
+
+test('joins saved drafts with one uniquely shared stable turn', () => {
+  const left = seq('a', 'b', 'c');
+  const right = seq('c', 'd', 'e');
+  const aligned = verifiedChronologicalOverlap(left, right);
+  assert.equal(aligned?.offset, 2);
+  assert.deepEqual(mergeVerifiedTurns(left, right, aligned).messages.map(m => m.id),
+    seq('a','b','c','d','e').map(m => m.id));
+  const url = 'https://chatgpt.com/c/one-turn-bridge';
+  const groups = groupVerifiedDraftWindows([
+    { ...scope(url), id: 'old', messages: left },
+    { ...scope(url), id: 'new', messages: right }
+  ]);
+  assert.equal(groups.length, 1);
+});
+
+test('does not merge single shared weak text or ambiguous repeated stable IDs', () => {
+  assert.equal(verifiedChronologicalOverlap(
+    [msg('a', { weak: true })], [msg('a', { weak: true })]), null);
+  const duplicated = [msg('a'), msg('b'), msg('a')];
+  assert.equal(verifiedChronologicalOverlap(duplicated, [msg('a')]), null);
+});
