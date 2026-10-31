@@ -119,3 +119,11 @@ test('marked range discovers images without viewport filter and bounds inline bi
   assert.match(source, /quickAttempt \? 4000 : 15000/);
   assert.match(source, /quickAttempt: true/);
 });
+
+test('retry-walk cannot replace a longer stored draft with a short virtual window', () => {
+  const start = source.indexOf("if (mode === 'retry-walk') {", source.indexOf('let messages = capturedMessages;'));
+  const end = source.indexOf('} else {', start);
+  assert.ok(start > 0 && end > start);
+  assert.match(source.slice(start, end), /capturedMessages\.length < existing\.messages\.length/);
+  assert.match(source.slice(start, end), /Черновик сохранён без сокращения/);
+});
