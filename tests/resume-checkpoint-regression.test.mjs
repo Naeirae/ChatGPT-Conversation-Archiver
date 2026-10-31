@@ -98,3 +98,14 @@ test('full capture restores pre-0.3.97 forward-only traversal, with final verifi
   assert.doesNotMatch(segment, /recoverDownwardContinuity|watchdog\.beforeRecovery/);
   assert.match(segment, /await saveRecoveryCheckpoint\(map, order, boundary, \{ force: true \}\)/);
 });
+
+test('marked-range walk uses bounded quicker steps and avoids unnecessary seam waits', () => {
+  const a = source.indexOf('async function walkDown(');
+  const b = source.indexOf('function chooseAutomaticSplitMiddle(', a);
+  const walk = source.slice(a, b);
+  assert.match(walk, /settleTimeout: 1400/);
+  assert.match(walk, /quietWindow: 220/);
+  assert.match(walk, /wheelDelta: 180/);
+  assert.match(walk, /const physicalMovedForward = Boolean/);
+  assert.match(walk, /if \(!physicalMovedForward &&/);
+});
