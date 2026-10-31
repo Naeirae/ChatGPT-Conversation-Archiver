@@ -3695,6 +3695,39 @@ async function compareUnfinishedPass(passId = '') {
   };
 }
 
+async function explicitlyMergeUnfinishedGroup(passIds = []) {
+  const unique = [...new Set((passIds || []).map(String).filter(Boolean))];
+  if (unique.length < 2) {
+    throw new Error('Для объединения нужны как минимум два сохранённых черновика.');
+  }
+  const drafts = [];
+  for (const id of unique) {
+    const draft = await getDraft(id);
+    if (draft?.messages?.length) drafts.push(draft);
+  }
+  if (drafts.length < 2) {
+    throw new Error('Не удалось найти два сохранённых черновика с сообщениями.');
+  }
+  const components = groupVerifiedDraftComponents(drafts, mergeStoredMessageCapture);
+  if (components.length !== 1) {
+    throw new Error('Черновики пока не соединяются доказанным перекрытием: осталось ' +
+      components.length + ' отдельных участков. Исходные черновики и Google Docs не изменены.');
+  }
+  const newest = [...drafts].sort((a,b) =>
+    String(b.capturedAt || '').localeCompare(String(a.capturedAt || '')))[0];
+  const merged = await reconcileUnfinishedPrefix(newest);
+  if (!merged?.verifiedMerge || !merged?.id ||
+      !Array.isArray(merged.verifiedMergedFromDraftIds) ||
+      !unique.every(id => merged.verifiedMergedFromDraftIds.includes(id))) {
+    throw new Error('Объединённый черновик не удалось подтвердить и сохранить. Исходные данные не изменены.');
+  }
+  return {
+    ok: true, draftId: merged.id, messageCount: merged.messages.length,
+    mergedCount: merged.verifiedMergedFromDraftIds.length,
+    linkedDocsPreserved: true
+  };
+}
+
 async function reconcileUnfinishedPassIntoArchive(passId = '') {
   const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
   if (!draft?.messages?.length) {
@@ -6954,6 +6987,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       }
       case 'ARCHIVER_COMPARE_UNFINISHED_PASS':
         return await compareUnfinishedPass(message.passId || message.draftId || '');
+      case 'ARCHIVER_MERGE_UNFINISHED_GROUP':
+        return await explicitlyMergeUnfinishedGroup(message.passIds || []);
       case 'ARCHIVER_RECONCILE_UNFINISHED_PASS':
         return await reconcileUnfinishedPassIntoArchive(message.passId || message.draftId || '');
       case 'ARCHIVER_HYDRATE_UNFINISHED_IMAGES':
