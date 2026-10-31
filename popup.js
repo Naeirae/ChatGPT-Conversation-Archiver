@@ -260,6 +260,34 @@ function renderUnfinishedPasses(items = []) {
       documentStatus.append(text, link);
     }
 
+    if (item.docCleanupSuggestion?.candidates?.length) {
+      const suggestion = item.docCleanupSuggestion;
+      const notice = document.createElement('div');
+      notice.className = 'unfinished-save-hint';
+      const title = document.createElement('div');
+      title.textContent = 'Предложение по очистке Google Docs: оставить документ с ' +
+        suggestion.keep.messageCount + ' сообщениями, меньшие проверить перед удалением.';
+      notice.appendChild(title);
+      const keepLink = document.createElement('a');
+      keepLink.href = suggestion.keep.url;
+      keepLink.target = '_blank';
+      keepLink.rel = 'noopener noreferrer';
+      keepLink.textContent = 'Оставить: ' + suggestion.keep.messageCount + ' сообщений';
+      notice.appendChild(keepLink);
+      for (const candidate of suggestion.candidates) {
+        const line = document.createElement('div');
+        const link = document.createElement('a');
+        link.href = candidate.url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = 'Проверить перед удалением: ' +
+          candidate.messageCount + ' сообщений';
+        line.appendChild(link);
+        notice.appendChild(line);
+      }
+      row.appendChild(notice);
+    }
+
     const primaryActions = document.createElement('div');
     primaryActions.className = 'unfinished-primary-actions';
 
