@@ -201,11 +201,17 @@ function renderUnfinishedPasses(items = []) {
   const count = $('unfinishedPassesCount');
   if (!list || !count) return;
 
-  const rows = Array.isArray(items) ? items : [];
-  count.textContent = String(rows.length);
+  const allRows = Array.isArray(items) ? items : [];
+  const query = String($('unfinishedSearch')?.value || '').trim().toLocaleLowerCase('ru');
+  const rows = query ? allRows.filter(item => [item.title, item.sourceUrl, item.linkedDocUrl].some(value =>
+    String(value || '').toLocaleLowerCase('ru').includes(query))) : allRows;
+  count.textContent = query ? rows.length + ' из ' + allRows.length : String(allRows.length);
   list.textContent = '';
 
-  if (!rows.length) return;
+  if (!rows.length) {
+    if (query) list.textContent = 'По запросу черновики не найдены.';
+    return;
+  }
 
   const busy = Boolean(state?.job && ['starting', 'running', 'paused'].includes(state.job.status));
 
@@ -1572,6 +1578,10 @@ async function loadUnfinishedGroups() {
       ? 'Обновить черновики' : 'Показать черновики';
   }
 }
+
+$('unfinishedSearch').addEventListener('input', () => {
+  if (cachedUnfinishedGroups) renderUnfinishedPasses(cachedUnfinishedGroups);
+});
 
 $('loadUnfinishedPasses').onclick = () => { void loadUnfinishedGroups(); };
 
