@@ -109,3 +109,13 @@ test('marked-range walk uses bounded quicker steps and avoids unnecessary seam w
   assert.match(walk, /const physicalMovedForward = Boolean/);
   assert.match(walk, /if \(!physicalMovedForward &&/);
 });
+
+test('marked range discovers images without viewport filter and bounds inline binary latency', () => {
+  const a = source.indexOf('async function walkDown(');
+  const b = source.indexOf('function chooseAutomaticSplitMiddle(', a);
+  const walk = source.slice(a, b);
+  assert.equal((walk.match(/visibleOnly: false, walkStep: i/g) || []).length, 2);
+  assert.match(source, /quickAttempt \? 6000 : 45000/);
+  assert.match(source, /quickAttempt \? 4000 : 15000/);
+  assert.match(source, /quickAttempt: true/);
+});
