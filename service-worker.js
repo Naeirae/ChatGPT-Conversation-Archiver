@@ -1139,6 +1139,15 @@ async function fetchImageBinaryForContent(src = '') {
     throw new Error('Worker fallback supports only http(s) image URLs.');
   }
 
+  // A content script can see CDN images that the worker is not allowed
+  // to fetch. Report the missing host permission explicitly.
+  const parsed = new URL(url);
+  const originPattern = parsed.origin + '/*';
+  const allowed = await chrome.permissions.contains({ origins: [originPattern] });
+  if (!allowed) {
+    throw new Error('Нет разрешения расширения на загрузку изображения с ' +
+      parsed.hostname + '. Требуется разрешение хоста ' + originPattern);
+  }
   const response = await fetch(url, {
     credentials: 'include',
     cache: 'force-cache',
