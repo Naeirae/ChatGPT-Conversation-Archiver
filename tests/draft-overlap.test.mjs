@@ -277,3 +277,12 @@ test('does not merge single shared weak text or ambiguous repeated stable IDs', 
   const duplicated = [msg('a'), msg('b'), msg('a')];
   assert.equal(verifiedChronologicalOverlap(duplicated, [msg('a')]), null);
 });
+
+test('merges unique long weak-ID sequence', () => {
+  const weak = key => msg(key, { weak: true });
+  const left = ['a','b','c','d'].map(weak);
+  const right = ['b','c','d','e'].map(weak);
+  const alignment = verifiedChronologicalOverlap(left, right);
+  assert.equal(alignment?.offset, 1);
+  assert.equal(mergeVerifiedTurns(left, right, alignment).messages.length, 5);
+});
