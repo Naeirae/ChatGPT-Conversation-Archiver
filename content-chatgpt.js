@@ -5516,6 +5516,16 @@
         previousCount = existing.messages.length;
 
         if (mode === 'retry-walk') {
+          // Never replace a longer saved prefix with a shorter re-scan.
+          // A bounded/virtualized 11-turn window is not proof that hundreds
+          // of previously saved turns ceased to exist.
+          if (capturedMessages.length < existing.messages.length) {
+            throw new Error(
+              'Повторный проход обнаружил только ' + capturedMessages.length +
+              ' сообщений вместо ' + existing.messages.length +
+              ' сохранённых. Черновик сохранён без сокращения.'
+            );
+          }
           // retry-walk has just rebuilt the prefix chronologically from the real
           // top to the fixed lower boundary. Treat that pass as canonical;
           // concatenating the old prefix here can duplicate or reorder messages
