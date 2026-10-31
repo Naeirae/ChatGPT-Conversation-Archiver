@@ -4526,9 +4526,9 @@
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
       const downwardStep = await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
-        settleTimeout: 1800,
-        quietWindow: 300,
-        wheelDelta: 120
+        settleTimeout: 1400,
+        quietWindow: 220,
+        wheelDelta: 180
       });
 
       await expandVisible();
@@ -4570,7 +4570,12 @@
       // A transient virtualized gap must not abort the physical walk. The
       // fixed lower marker is still required, and incomplete coverage is
       // retained for reconciliation rather than certified by scrolling alone.
-      if (!navigationWindowsOverlap(beforeRefs, afterRefs) &&
+      const physicalMovedForward = Boolean(
+        physicalBefore?.element && physicalBefore.element === physicalAfter?.element &&
+        Number(physicalAfter?.top) > Number(physicalBefore?.top) + 2
+      );
+      if (!physicalMovedForward &&
+          !navigationWindowsOverlap(beforeRefs, afterRefs) &&
           !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
         await waitForTurnSettle(2400, 450);
         await expandVisible();
