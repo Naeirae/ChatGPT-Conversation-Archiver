@@ -1856,7 +1856,7 @@
     }
   }
 
-  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true } = {}) {
+  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true, quickAttempt = false } = {}) {
     const unique = new Map();
     for (const message of messages || []) {
       for (const image of message.images || []) {
@@ -1877,10 +1877,10 @@
 
       try {
         const blob = await withCaptureOperationTimeout(
-          fetchImageBinary(refs[0]), 45000, 'Получение изображения'
+          fetchImageBinary(refs[0]), quickAttempt ? 6000 : 45000, 'Получение изображения'
         );
         const dataUrl = await withCaptureOperationTimeout(
-          blobToDataUrl(blob), 15000, 'Кодирование изображения'
+          blobToDataUrl(blob), quickAttempt ? 4000 : 15000, 'Кодирование изображения'
         );
         for (const image of refs) {
           image.dataUrl = dataUrl;
@@ -1969,7 +1969,8 @@
     if (!targets.length) return { embedded: 0, failed: 0, unique: 0 };
     const result = await hydrateMessageImages(targets, {
       onlyMissing: false,
-      reportProgress: false
+      reportProgress: false,
+      quickAttempt: true
     });
 
     for (const src of targetSources) {
@@ -4476,7 +4477,7 @@
         await hydrateSequentialImages(
           firstTouchedIds.map(id => map.get(id)).filter(Boolean),
           attemptedImageSources,
-          { visibleOnly: hydrateVisibleImages, walkStep: i }
+          { visibleOnly: false, walkStep: i }
         );
       }
       const beforeRefs = visibleNavigationRefsLightweight();
@@ -4538,7 +4539,7 @@
         await hydrateSequentialImages(
           secondTouchedIds.map(id => map.get(id)).filter(Boolean),
           attemptedImageSources,
-          { visibleOnly: hydrateVisibleImages, walkStep: i }
+          { visibleOnly: false, walkStep: i }
         );
       }
 
