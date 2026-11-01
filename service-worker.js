@@ -1085,9 +1085,29 @@ async function captureSavedArchive(archiveId = '', mode = 'continue', captureTar
     restoreLastArchiveId = last?.id && last.id !== archive.id ? last.id : '';
   }
 
+  // A repair must never treat whichever virtualized window happened to be
+  // visible as the saved archive's lower boundary.
+  const savedBoundary = repairOnly && archive.captureBoundaryKind &&
+    archive.captureBoundaryKey
+    ? {
+        kind: archive.captureBoundaryKind,
+        key: archive.captureBoundaryKey,
+        role: archive.captureBoundaryRole || '',
+        strictStable: archive.captureBoundaryKind === 'stable'
+      }
+    : null;
+  if (repairOnly && !savedBoundary) {
+    throw new Error(
+      'У сохранённого архива нет подтверждённой нижней границы. ' +
+      'Добор не запущен: случайное видимое окно не будет принято за конец. ' +
+      'Исходный архив сохранён.'
+    );
+  }
+
   return await startCapture({
     mode,
     existingArchive: archive,
+    fixedCaptureBoundary: savedBoundary,
     captureTarget,
     restoreCanonicalArchiveId,
     restoreLastArchiveId
