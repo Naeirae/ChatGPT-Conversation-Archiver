@@ -3164,6 +3164,7 @@
     let previousSignature = '';
     let quietAtEnd = 0;
     let observedDownwardTravel = false;
+    let stalledAtEnd = 0;
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
       await waitIfPaused();
@@ -3196,10 +3197,16 @@
       });
       const after = scrollObservation(0);
       observedDownwardTravel ||= Boolean(result.moved);
-      if (!result.moved && !after.atEnd && after.signature === before.signature) {
-        throw new Error(
-          'Не удалось прокрутить чат до настоящего конца. Последняя видимая реплика не считается границей архива.'
-        );
+      if (!result.moved && after.signature && after.signature === before.signature) {
+        // ChatGPT virtualization sometimes fails to report atEnd even when the
+        // user has scrolled to the physical bottom. Retry and observe rather
+        // than aborting recovery on a single immovable viewport.
+        stalledAtEnd++;
+        if (stalledAtEnd >= 4 && !visibleRetryButton()) {
+          return { verified: true, source: 'stable-physical-bottom', observedDownwardTravel };
+        }
+      } else {
+        stalledAtEnd = 0;
       }
       previousSignature = after.signature;
       // Let ChatGPT finish lazy-loading the next virtualized page.
