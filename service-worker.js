@@ -1096,13 +1096,7 @@ async function captureSavedArchive(archiveId = '', mode = 'continue', captureTar
         strictStable: archive.captureBoundaryKind === 'stable'
       }
     : null;
-  if (repairOnly && !savedBoundary) {
-    throw new Error(
-      'У сохранённого архива нет подтверждённой нижней границы. ' +
-      'Добор не запущен: случайное видимое окно не будет принято за конец. ' +
-      'Исходный архив сохранён.'
-    );
-  }
+
 
   return await startCapture({
     mode,
