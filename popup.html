@@ -245,17 +245,14 @@
         <small id="queueStatus">Нет заданий</small>
       </div>
       <p class="muted queue-intro">
-        Режим выбирается отдельно для каждого чата. Сборщики работают в отдельных
-        нефокусируемых окнах: можно продолжать работу в браузере.
-        Экспериментальный режим сам определяет стык между двумя отмеченными границами.
+        Вставьте ссылки на чаты, по одной на строку. Очередь запустит до двух независимых сборов одновременно.
       </p>
       <label class="field queue-field">
-        <span>Ссылка на переписку</span>
-        <input id="queueChatUrl" type="url" autocomplete="off"
-          placeholder="https://chatgpt.com/c/..." />
+        <span>Ссылки на переписки (по одной на строку)</span>
+        <textarea id="queueChatUrl" rows="3" autocomplete="off" placeholder="https://chatgpt.com/c/..."></textarea>
       </label>
-      <label class="field queue-field">
-        <span>Режим нового задания</span>
+      <label class="field queue-field" id="queueAdvancedMode" style="display:none">
+        <span>Экспериментальный режим</span>
         <select id="queueAddMode">
           <option value="two-chats">Параллельный сбор разных чатов</option>
           <option value="split-chat">Эксперимент: один чат, два потока</option>
@@ -263,13 +260,9 @@
       </label>
       <div class="queue-actions">
         <button id="queueAddCurrent" class="compact-button" type="button">Добавить текущий чат</button>
-        <button id="queueAddUrl" class="compact-button" type="button">Добавить по ссылке</button>
+        <button id="queueAddUrl" class="compact-button" type="button">Добавить ссылки</button>
       </div>
-      <p class="muted queue-hint">
-        Для одного чата в два потока отметьте только «Начало» и «Конец».
-        Архиватор предварительно найдёт безопасную середину и запустит два фоновых прохода.
-        Ручная середина необязательна; без подтверждённого перекрытия части не объединяются.
-      </p>
+      <p class="muted queue-hint">Каждый чат сохраняется отдельно. Добавление ссылок не запускает сбор до нажатия «Запустить очередь».</p>
       <div id="queueList" class="queue-list" aria-live="polite"></div>
       <div class="queue-actions queue-run-actions">
         <button id="queueRun" class="compact-button primary" type="button">Запустить очередь</button>
