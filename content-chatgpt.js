@@ -5501,7 +5501,7 @@
       }
 
       let messages = capturedMessages;
-      const archiveId = existingArchiveId || (String(Date.now()) + '-' + hashText(location.href) +
+      const archiveId = (mode === 'reconcile' ? '' : existingArchiveId) || (String(Date.now()) + '-' + hashText(location.href) +
         (state.queueCapture ? '-q-' + jobId : ''));
       let addedCount = capturedMessages.length;
       let previousCount = 0;
@@ -5585,7 +5585,13 @@
           );
         }
 
-        messages = reconciled.messages;
+        // Include images discovered while navigating as well as during the
+        // final chronological pass, without altering saved text identities.
+        const imageRecovery = mergeRecoveredImagesIntoArchive(
+          reconciled.messages, buildImageScanPool([...navigationMessages, ...capturedMessages])
+        );
+        messages = imageRecovery.messages;
+        recoveredImageRefs = imageRecovery.recovered;
         addedCount = reconciled.addedCount;
 
         // One reconcile pass owns both text and images. Track images that are
