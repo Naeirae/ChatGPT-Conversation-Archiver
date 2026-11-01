@@ -1468,6 +1468,7 @@ function render(data) {
   $('openPlanner').disabled = Boolean(running || !archive);
   $('continueArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
   $('reconcileArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
+  $('recoverMissingArchive').disabled = Boolean(running || !archive || !archive.sourceUrl);
   $('editCurrentDoc').disabled = Boolean(running || !archive || !archive.sourceUrl);
   $('currentDocUrl').value = linkedUrl || savedDocUrl || '';
   $('clearCurrentDocLink').classList.toggle('hidden', !linkedUrl);
@@ -2067,6 +2068,30 @@ $('clearHistory').onclick = async () => {
     $('clearHistory').disabled = false;
   }
 };
+$('recoverMissingArchive').onclick = async () => {
+  if (!state?.archive?.id) {
+    setStatus('Выбери сохранённый локальный архив для добора.', true);
+    return;
+  }
+  const button = $('recoverMissingArchive');
+  button.disabled = true;
+  setStatus('Добираю сообщения и изображения из исходного чата. Google Docs не открываю…', false, true);
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'ARCHIVER_RECONCILE_SAVED_ARCHIVE',
+      archiveId: state.archive.id,
+      captureTarget: $('captureTarget').value
+    });
+    if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить добор.');
+    render({ ...state, job: result.job, archive: state.archive });
+    startPolling();
+  } catch (error) {
+    setStatus(error.message || String(error), true);
+  } finally {
+    button.disabled = false;
+  }
+};
+
 $('reconcileArchive').onclick = async () => {
   if (!state?.archive) {
     setStatus('Сначала нужен локальный архив этого чата.', true);
