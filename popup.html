@@ -251,11 +251,11 @@
         <span>Ссылки на переписки (по одной на строку)</span>
         <textarea id="queueChatUrl" rows="3" autocomplete="off" placeholder="https://chatgpt.com/c/..."></textarea>
       </label>
-      <label class="field queue-field" id="queueAdvancedMode" style="display:none">
-        <span>Экспериментальный режим</span>
+      <label class="field queue-field" id="queueAdvancedMode">
+        <span>Что сделать со ссылками</span>
         <select id="queueAddMode">
-          <option value="two-chats">Параллельный сбор разных чатов</option>
-          <option value="split-chat">Эксперимент: один чат, два потока</option>
+          <option value="two-chats">Собрать переписки</option>
+          <option value="recover">Добрать сообщения и картинки в сохранённых архивах</option>
         </select>
       </label>
       <div class="queue-actions">
