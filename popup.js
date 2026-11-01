@@ -1250,12 +1250,20 @@ async function queueAdd(sourceUrl) {
   if (invalid.length) throw new Error('Некорректная ссылка на чат: ' + invalid[0]);
   let added = 0;
   for (const url of urls) {
-    await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode: 'two-chats' });
+    await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode: $('queueAddMode').value === 'recover' ? 'recover' : 'two-chats' });
     added++;
   }
   $('queueChatUrl').value = '';
+  await chrome.storage.local.remove('archiverQueueInputDraft');
   setStatus('Добавлено ссылок: ' + added + '. Для начала нажмите «Запустить очередь».');
 }
+
+$('queueChatUrl').addEventListener('input', () => {
+  void chrome.storage.local.set({ archiverQueueInputDraft: $('queueChatUrl').value });
+});
+void chrome.storage.local.get('archiverQueueInputDraft').then(data => {
+  if (!$('queueChatUrl').value) $('queueChatUrl').value = data.archiverQueueInputDraft || '';
+}).catch(() => {});
 
 $('queueAddUrl').onclick = async () => {
   const button = $('queueAddUrl');
