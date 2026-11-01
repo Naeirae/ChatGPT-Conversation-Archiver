@@ -1297,9 +1297,11 @@ $('queueAddCurrent').onclick = async () => {
 };
 $('queueRun').onclick = async () => {
   try {
-    await queueCall('ARCHIVER_QUEUE_ENABLE', { enabled: true });
+    const result = await queueCall('ARCHIVER_QUEUE_ENABLE', { enabled: true });
     startPolling();
-    setStatus('Очередь запущена. Максимум два независимых прохода одновременно.');
+    setStatus(result.blockedBySoloCapture
+      ? 'Очередь включена, но одиночный сбор ещё активен. После его завершения запустятся два задания.'
+      : 'Очередь включена. Запускаю до двух независимых заданий.');
   } catch (error) { setStatus(error.message || String(error), true); }
 };
 $('queueStop').onclick = async () => {
