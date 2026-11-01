@@ -337,6 +337,31 @@ function renderUnfinishedPasses(items = []) {
     };
     primaryActions.appendChild(resume);
 
+    const saveLocal = document.createElement('button');
+    saveLocal.className = 'unfinished-save-local';
+    saveLocal.textContent = 'Сохранить собранное локально';
+    saveLocal.disabled = !item.copyPassId || !Number(item.messageCount || 0);
+    saveLocal.title = 'Создаёт отдельную локальную копию собранных сообщений и изображений. Не объявляет черновик завершённым.';
+    saveLocal.onclick = async () => {
+      saveLocal.disabled = true;
+      setStatus('Создаю отдельную локальную копию собранного черновика…', false, true);
+      try {
+        const result = await chrome.runtime.sendMessage({
+          type: 'ARCHIVER_SAVE_UNFINISHED_PARTIAL',
+          passId: item.copyPassId
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Локальная копия не сохранена.');
+        setStatus('Локальная копия сохранена: ' + Number(result.messageCount || 0) +
+          ' сообщений. Исходный черновик сохранён отдельно.');
+        await getState();
+      } catch (error) {
+        setStatus(error.message || String(error), true);
+      } finally {
+        saveLocal.disabled = false;
+      }
+    };
+    primaryActions.appendChild(saveLocal);
+
     const saveCurrent = document.createElement('button');
     saveCurrent.className = 'unfinished-save';
     saveCurrent.textContent = 'Сохранить текущую часть в документ Google Docs';
