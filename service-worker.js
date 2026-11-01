@@ -6776,6 +6776,7 @@ const queueController = createCaptureQueueController(chrome, {
   prepareBackgroundCapture: (tabId, jobId, url) => backgroundFocus.enable(tabId, jobId, url),
   releaseBackgroundCapture: (tabId, jobId) => backgroundFocus.release(tabId, jobId),
   getArchive,
+  getArchiveForUrl,
   mergeMessage: (older, newer) => mergeStoredMessageCapture(older, newer),
   publishArchive: async archive => {
     await putArchive({ ...archive, partial: false, complete: true });
