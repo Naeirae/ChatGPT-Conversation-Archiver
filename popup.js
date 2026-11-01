@@ -1236,7 +1236,7 @@ function renderQueue(queue) {
   lastQueueDoneIds = doneIds;
 }
 
-async function queueAdd(sourceUrl) {
+async function queueAdd(sourceUrl, mode = 'two-chats', fieldId = 'queueChatUrl') {
   const urls = [...new Set(String(sourceUrl || '').split(/[\s,;]+/)
     .map(value => value.trim()).filter(Boolean))];
   if (!urls.length) throw new Error('Введите хотя бы одну ссылку на чат ChatGPT.');
@@ -1250,11 +1250,11 @@ async function queueAdd(sourceUrl) {
   if (invalid.length) throw new Error('Некорректная ссылка на чат: ' + invalid[0]);
   let added = 0;
   for (const url of urls) {
-    await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode: $('queueAddMode').value === 'recover' ? 'recover' : 'two-chats' });
+    await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode });
     added++;
   }
-  $('queueChatUrl').value = '';
-  await chrome.storage.local.remove('archiverQueueInputDraft');
+  $(fieldId).value = '';
+  await chrome.storage.local.remove(fieldId === 'queueRecoverUrl' ? 'archiverQueueRecoverDraft' : 'archiverQueueInputDraft');
   setStatus('Добавлено ссылок: ' + added + '. Для начала нажмите «Запустить очередь».');
 }
 
@@ -1265,6 +1265,19 @@ void chrome.storage.local.get('archiverQueueInputDraft').then(data => {
   if (!$('queueChatUrl').value) $('queueChatUrl').value = data.archiverQueueInputDraft || '';
 }).catch(() => {});
 
+$('queueRecoverUrl').addEventListener('input', () => {
+  void chrome.storage.local.set({ archiverQueueRecoverDraft: $('queueRecoverUrl').value });
+});
+void chrome.storage.local.get('archiverQueueRecoverDraft').then(data => {
+  if (!$('queueRecoverUrl').value) $('queueRecoverUrl').value = data.archiverQueueRecoverDraft || '';
+}).catch(() => {});
+$('queueAddRecover').onclick = async () => {
+  const button = $('queueAddRecover');
+  button.disabled = true;
+  try { await queueAdd($('queueRecoverUrl').value, 'recover', 'queueRecoverUrl'); }
+  catch (error) { setStatus(error.message || String(error), true); }
+  finally { button.disabled = false; }
+};
 $('queueAddUrl').onclick = async () => {
   const button = $('queueAddUrl');
   button.disabled = true;
