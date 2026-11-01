@@ -251,16 +251,16 @@
         <span>Ссылки на переписки (по одной на строку)</span>
         <textarea id="queueChatUrl" rows="3" autocomplete="off" placeholder="https://chatgpt.com/c/..."></textarea>
       </label>
-      <label class="field queue-field" id="queueAdvancedMode">
-        <span>Что сделать со ссылками</span>
-        <select id="queueAddMode">
-          <option value="two-chats">Собрать переписки</option>
-          <option value="recover">Добрать сообщения и картинки в сохранённых архивах</option>
-        </select>
+      <div class="queue-actions">
+        <button id="queueAddCurrent" class="compact-button" type="button">Добавить текущий чат на сбор</button>
+        <button id="queueAddUrl" class="compact-button" type="button">Добавить на обычный сбор</button>
+      </div>
+      <label class="field queue-field">
+        <span>Добор: ссылки на чаты с сохранёнными архивами</span>
+        <textarea id="queueRecoverUrl" rows="2" autocomplete="off" placeholder="https://chatgpt.com/c/..."></textarea>
       </label>
       <div class="queue-actions">
-        <button id="queueAddCurrent" class="compact-button" type="button">Добавить текущий чат</button>
-        <button id="queueAddUrl" class="compact-button" type="button">Добавить ссылки</button>
+        <button id="queueAddRecover" class="compact-button" type="button">Добавить на добор сообщений и картинок</button>
       </div>
       <p class="muted queue-hint">Каждый чат сохраняется отдельно. Добавление ссылок не запускает сбор до нажатия «Запустить очередь».</p>
       <div id="queueList" class="queue-list" aria-live="polite"></div>
