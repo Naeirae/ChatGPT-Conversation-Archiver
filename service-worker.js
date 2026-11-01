@@ -6760,7 +6760,8 @@ async function exportTabbedConversation(planText = '', archiveId = '') {
 const queueController = createCaptureQueueController(chrome, {
   isConversationUrl,
   legacyCaptureActive: async () => {
-    const job = await getJob();
+    // A failed single-chat scan must not permanently block all queued work.
+    const job = await refreshCaptureJobHealth();
     return Boolean(job && ['starting', 'running', 'paused'].includes(job.status));
   },
   waitForChatTabComplete,
