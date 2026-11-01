@@ -127,3 +127,14 @@ test('retry-walk cannot replace a longer stored draft with a short virtual windo
   assert.match(source.slice(start, end), /capturedMessages\.length < existing\.messages\.length/);
   assert.match(source.slice(start, end), /Черновик сохранён без сокращения/);
 });
+
+test('saved archive repair uses its recorded lower boundary, never a visible random window', async () => {
+  const worker = await readFile('service-worker.js', 'utf8');
+  const start = worker.indexOf("async function captureSavedArchive(");
+  const end = worker.indexOf("async function continueSavedArchive(", start);
+  const block = worker.slice(start, end);
+  assert.match(block, /archive\.captureBoundaryKind/);
+  assert.match(block, /archive\.captureBoundaryKey/);
+  assert.match(block, /fixedCaptureBoundary: savedBoundary/);
+  assert.match(block, /if \(repairOnly && !savedBoundary\)/);
+});
