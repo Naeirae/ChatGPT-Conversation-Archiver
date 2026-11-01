@@ -1237,12 +1237,24 @@ function renderQueue(queue) {
 }
 
 async function queueAdd(sourceUrl) {
-  const url = String(sourceUrl || '').trim();
-  if (!url) throw new Error('Введите ссылку на чат ChatGPT.');
-  const mode = $('queueAddMode').value;
-  await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode });
+  const urls = [...new Set(String(sourceUrl || '').split(/[\s,;]+/)
+    .map(value => value.trim()).filter(Boolean))];
+  if (!urls.length) throw new Error('Введите хотя бы одну ссылку на чат ChatGPT.');
+  const invalid = urls.filter(url => {
+    try {
+      const parsed = new URL(url);
+      return !['chatgpt.com', 'chat.openai.com'].includes(parsed.hostname) ||
+        !/^\/c\//.test(parsed.pathname);
+    } catch (_) { return true; }
+  });
+  if (invalid.length) throw new Error('Некорректная ссылка на чат: ' + invalid[0]);
+  let added = 0;
+  for (const url of urls) {
+    await queueCall('ARCHIVER_QUEUE_ADD', { sourceUrl: url, mode: 'two-chats' });
+    added++;
+  }
   $('queueChatUrl').value = '';
-  setStatus('Чат добавлен в очередь. Второй чат добавляется отдельной ссылкой, без разметки.');
+  setStatus('Добавлено ссылок: ' + added + '. Для начала нажмите «Запустить очередь».');
 }
 
 $('queueAddUrl').onclick = async () => {
