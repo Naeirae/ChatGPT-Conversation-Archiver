@@ -3278,7 +3278,8 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
     throw new Error('Незавершённый сбор не найден.');
   }
 
-  const id = draft.partialArchiveId || partialArchiveIdForSource(draft.sourceUrl);
+  // Each recovery snapshot has its own key: never overwrite an older partial.
+  const id = 'partial-snapshot:' + hashText(draft.id + '|' + Date.now());
   if (!id) throw new Error('Не удалось определить исходный чат для частичного архива.');
 
   const existing = await getArchive(id);
@@ -3346,8 +3347,12 @@ async function syncPartialArchiveFromDraft(draft, { enable = false } = {}) {
 }
 
 async function saveUnfinishedAsPartial(passId = '') {
-  const draft = await reconcileUnfinishedPrefix(await getDraft(passId));
-  return syncPartialArchiveFromDraft(draft, { enable: true });
+  // Snapshot the exact stored draft, including top-navigation checkpoints.
+  // Do not coerce it into a verified chronological complete archive.
+  const draft = await getDraft(passId);
+  if (!draft?.messages?.length) throw new Error('Черновик с сообщениями не найден.');
+  const saved = await syncPartialArchiveFromDraft(draft, { enable: true });
+  return { ok: true, ...saved, messageCount: draft.messages.length };
 }
 
 async function exportUnfinishedPassToNewDoc(passId = '') {
