@@ -4527,9 +4527,9 @@
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
       const downwardStep = await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
-        settleTimeout: 1400,
-        quietWindow: 220,
-        wheelDelta: 180
+        settleTimeout: 1150,
+        quietWindow: 190,
+        wheelDelta: 220
       });
 
       await expandVisible();
@@ -4946,7 +4946,10 @@
       // Auto/full mode must first navigate to the real end. The final turn
       // of an arbitrary initial viewport is not a snapshot boundary.
       // Manual end/start marking bypasses this navigation entirely.
-      if (mode === 'full') {
+      if (mode === 'full' ||
+          (['reconcile', 'images'].includes(mode) && !fixedCaptureBoundary)) {
+        // Legacy archive: establish the real current end, never the arbitrary
+        // last visible item, then verify saved messages before accepting repair.
         verifiedSnapshotEnd = await reachSnapshotEndWithoutCapture();
         turns = await waitForTurns(10000);
         if (!turns.length) throw new Error('Реплики исчезли при проверке конца переписки.');
