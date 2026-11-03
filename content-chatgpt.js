@@ -5191,9 +5191,37 @@
             turn, anchor: fragmentAnchor(turn),
             visible: turnIntersectsCaptureViewport(turn)
           }));
-          const visibleStart = anchors.find(({ anchor, visible }) =>
+          const matching = anchors.filter(({ anchor, visible }) =>
             anchor && visible && markerIdentityMatches(selectedFragment.start, anchor)
-          )?.turn;
+          );
+          // Weak virtual wrapper keys and preceding DOM context can change
+          // when ChatGPT remounts a conversation window. If the same substantial
+          // user text is visible exactly once, rebind to that visible occurrence.
+          // Short/repeated messages are deliberately not guessed.
+          const weakTextCandidates = strongStart ? [] : anchors.filter(({ anchor, visible }) =>
+            anchor && visible &&
+            (!selectedFragment.start.role || anchor.role === selectedFragment.start.role) &&
+            anchor.signature === selectedFragment.start.signature
+          );
+          const uniqueWeakText = !strongStart && matching.length === 0 &&
+            weakTextCandidates.length === 1 &&
+            normalizeMatchText(turnMessageText(weakTextCandidates[0].turn)).length >= 48
+              ? weakTextCandidates[0] : null;
+          const resolvedStart = matching.length === 1 ? matching[0] : uniqueWeakText;
+          const visibleStart = resolvedStart?.turn || null;
+          if (uniqueWeakText) {
+            // The start of this pass is independently observed, so stale
+            // preceding-window context must not reject it again at final trim.
+            // Final trim still demands a UNIQUE occurrence of this signature.
+            selectedFragment.start = {
+              ...selectedFragment.start,
+              id: uniqueWeakText.anchor.id,
+              role: uniqueWeakText.anchor.role,
+              contextBefore: []
+            };
+            await progress('Отмеченное начало подтверждено по уникальному видимому тексту; начинаю сбор вниз…',
+              0, { phase: 'walk', manualRange: true, force: true });
+          }
           if (!visibleStart) {
             const matchingOffscreen = anchors.some(({ anchor, visible }) =>
               anchor && !visible && markerIdentityMatches(selectedFragment.start, anchor)
