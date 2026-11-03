@@ -19,7 +19,7 @@ test('a shorter or different resumed prefix cannot overwrite stored messages', (
   const block = source.slice(source.indexOf('async function persistRecoveryCheckpoint('),
     source.indexOf('function visibleNavigationRefsLightweight()'));
   const guard = block.indexOf('const oldPrefix = storedBeforeWrite.messages');
-  const write = block.indexOf("await chrome.storage.local.set({ ['draft:' + draftId]: draft })");
+  const write = block.indexOf("chrome.storage.local.set({ ['draft:' + draftId]: draft })");
   assert.ok(guard > 0 && write > guard);
   assert.match(block.slice(guard,write), /draft\.messages\.length < oldPrefix\.length/);
   assert.match(block.slice(guard,write), /oldPrefix\.some\(\(oldMessage, index\)/);
