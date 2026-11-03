@@ -5170,14 +5170,32 @@
           // Manual range is authoritative. Do not search upward or visit the
           // lower boundary first. The user positions the current tab at the
           // marked start; collection then moves only downward to the marked end.
-          const visibleStart = orderedTurns().find(turn => {
-            const anchor = fragmentAnchor(turn);
-            return anchor && turnIntersectsCaptureViewport(turn) &&
-              markerIdentityMatches(selectedFragment.start, anchor);
-          });
+          await progress('Проверяю отмеченное начало в текущей области переписки…',
+            0, { phase: 'top', force: true, manualRange: true });
+          const mounted = orderedTurns();
+          const anchors = mounted.map(turn => ({
+            turn, anchor: fragmentAnchor(turn),
+            visible: turnIntersectsCaptureViewport(turn)
+          }));
+          const visibleStart = anchors.find(({ anchor, visible }) =>
+            anchor && visible && markerIdentityMatches(selectedFragment.start, anchor)
+          )?.turn;
           if (!visibleStart) {
+            const matchingOffscreen = anchors.some(({ anchor, visible }) =>
+              anchor && !visible && markerIdentityMatches(selectedFragment.start, anchor)
+            );
+            const sameTextVisible = anchors.some(({ anchor, visible }) =>
+              anchor && visible && selectedFragment.start?.signature &&
+              anchor.signature === selectedFragment.start.signature
+            );
+            const explanation = matchingOffscreen
+              ? 'Отмеченная реплика загружена, но не находится в видимой области.'
+              : sameTextVisible
+                ? 'Текст отмеченной реплики виден, но её идентификатор или контекст не совпал с сохранённой отметкой.'
+                : 'Отмеченная реплика не найдена среди видимых сообщений.';
             throw new Error(
-              'Отмеченное начало не найдено в рабочей вкладке. Диапазон не был сохранён с пропуском.'
+              explanation + ' Сбор не начат, чтобы не сдвинуть хронологию. ' +
+              'Загружено реплик: ' + mounted.length + '.'
             );
           }
           verifiedMarkedStart = true;
