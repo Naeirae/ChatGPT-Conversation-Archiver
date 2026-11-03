@@ -74,11 +74,18 @@ function renderCaptureProgress(job, running) {
   };
   const imageHydrationActive = job?.phase === 'finalizing' &&
     Number(job?.imageBinaryTotal || 0) > 0;
-  $('capturePhase').textContent = imageHydrationActive
-    ? 'Этап 3/3 · Загружаю картинки'
-    : isFragment
-      ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
-      : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
+  // The generic 'top' phase does NOT prove the collector is seeking the
+  // start marker. Show the actual preflight operation until the walk begins.
+  const fragmentPreflight = isFragment && job?.phase === 'top'
+    ? String(job?.message || '').trim()
+    : '';
+  $('capturePhase').textContent = fragmentPreflight
+    ? fragmentPreflight
+    : imageHydrationActive
+      ? 'Этап 3/3 · Загружаю картинки'
+      : isFragment
+        ? (fragmentPhaseLabels[job?.phase] || 'Сбор выбранного фрагмента')
+        : (PHASE_LABELS[job?.phase] || 'Сбор переписки');
   const parts = [];
   const resumed = ['resume-draft', 'retry-walk'].includes(job?.captureMode || '') &&
     Number(job?.resumeBaseCount || job?.draftCount || 0) > 0;
