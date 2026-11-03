@@ -1350,11 +1350,9 @@ function render(data) {
   $('capture').textContent = 'Собрать чат';
   if (!running && hasManualRange) {
     $('fragmentHint').textContent =
-      'Начало и конец основного архива отмечены. ' +
-        (String($('captureTarget').value) === 'current'
-          ? 'Для сбора в текущей вкладке оставьте начало видимым.'
-          : 'Фоновый сбор откроет отдельную рабочую копию и сам найдёт начало.') +
-        ' Нажмите «Собрать отмеченный диапазон».';
+      'Начало и конец отмечены. Оставьте начало видимым в этом чате: ' +
+      'сбор по отметкам пойдёт прямо отсюда вниз, без поиска в новой копии. ' +
+      'Настройка фоновой вкладки относится к другим режимам.';
   }
 
   renderQueue(state.queue);
@@ -1827,8 +1825,8 @@ $('openMarkingTab').onclick = async () => {
     if (!result?.ok) throw new Error(result?.error || 'Не удалось открыть рабочую вкладку для разметки.');
     $('fragmentHint').textContent =
       'Рабочая вкладка открыта для разметки. Отметьте «Начало» и «Конец». ' +
-      'При выборе фонового сбора архиватор самостоятельно найдёт начало в своей копии; ' +
-      'оставаться на этой вкладке не нужно.';
+      'Для сбора отмеченного диапазона оставьте начальную реплику видимой: ' +
+      'сбор начнётся здесь и пойдёт только вниз.';
   } catch (error) {
     setStatus(error.message || String(error), true);
     button.disabled = false;
@@ -1840,7 +1838,10 @@ $('captureFragment').onclick = async () => {
   try {
     const result = await chrome.runtime.sendMessage({
       type: 'ARCHIVER_CAPTURE_FRAGMENT',
-      captureTarget: $('captureTarget').value
+      // A marked-range run starts at the already positioned source tab.
+      // Opening a fresh background copy discards the scroll position and
+      // can spend hours searching for the saved first turn from another end.
+      captureTarget: 'current'
     });
     if (!result?.ok) throw new Error(result?.error || 'Не удалось запустить сбор диапазона.');
     $('fragmentHint').textContent = 'Сбор отмеченного диапазона запущен.';
