@@ -134,6 +134,21 @@ test('far offscreen mounted turns do not contaminate captured window', () => {
   assert.deepEqual(h.order, ['visible']);
 });
 
+test('an offscreen shell in main cannot exclude visible conversation turns outside main', () => {
+  const h = harness();
+  // If a renderer splits the virtualized conversation across hosts, a stale
+  // offscreen <main> shell must not claim ownership of the visible window.
+  const before = source.indexOf('const mainContainsVisibleTurn =');
+  assert.ok(before > 0);
+  assert.match(source.slice(before, before + 250), /main\.contains\(turn\) && viewportHit\(turn\)/);
+});
+
+test('marked range cannot scroll indefinitely after capturing zero first-window turns', () => {
+  const walk = source.slice(source.indexOf('  async function walkDown('), source.indexOf('  async function planAutomaticSplit('));
+  assert.match(walk, /i === 0 && requireBoundary && map\.size === 0/);
+  assert.match(walk, /Прокрутка остановлена до потери диапазона/);
+});
+
 test('full verification does not collect a new final viewport after reconciliation', () => {
   assert.match(source, /const finalTouchedIds = mode === 'full'\s*\? \[\]\s*: collect\(/);
 });
