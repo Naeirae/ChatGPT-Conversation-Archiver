@@ -4479,6 +4479,11 @@
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       const visibleIds = collect(map, order, settings, boundary);
+      if (i === 0) {
+        await progress('Этап 2/3: начальный участок сохранён · ' + map.size + ' сообщений · иду вниз',
+          map.size, { phase: 'walk', chronologicalCount: map.size, force: true });
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+      }
       await hydrateSequentialImages(visibleIds.map(id => map.get(id)).filter(Boolean),
         imageAttempts, { visibleOnly: true, walkStep: i });
       if (boundaryIsVisible(boundary)) {
@@ -4566,6 +4571,12 @@
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
       const firstTouchedIds = collect(map, order, settings, boundary);
+      if (i === 0) {
+        await progress('Этап 2/3: начало подтверждено · найдено ' + map.size +
+          ' сообщений · сохраняю текст перед обработкой изображений…',
+          map.size, { phase: 'walk', chronologicalCount: map.size, force: true });
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+      }
       if (hydrateImages) {
         await hydrateSequentialImages(
           firstTouchedIds.map(id => map.get(id)).filter(Boolean),
