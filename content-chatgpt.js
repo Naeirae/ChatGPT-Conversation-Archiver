@@ -5100,7 +5100,11 @@
         }
       );
 
-      collect(map, order, settings, boundary);
+      // The initial collect was thrown away again before any fragment walk.
+      // On long DOM windows it performed expensive HTML cloning and neighbour
+      // signature scans synchronously, freezing the preflight at 0 messages.
+      // The marked range must verify its starting anchor BEFORE capturing text.
+      if (mode !== 'fragment') collect(map, order, settings, boundary);
 
       if (mode === 'full' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile' || mode === 'fragment') {
         const navigationWindows = [];
@@ -5173,7 +5177,17 @@
           await progress('Проверяю отмеченное начало в текущей области переписки…',
             0, { phase: 'top', force: true, manualRange: true });
           const mounted = orderedTurns();
-          const anchors = mounted.map(turn => ({
+          // Do not call fragmentAnchor() for EVERY turn: it re-enumerates the
+          // entire conversation and rehashes preceding text every time.
+          // For a strong saved ID compare that ID directly; for weak markers
+          // calculate expensive context only on matching candidates.
+          const strongStart = isStrongMessageId(selectedFragment.start?.id);
+          const candidates = mounted.filter(turn =>
+            strongStart
+              ? turnStableKey(turn) === selectedFragment.start.id
+              : turnTextSignature(turn) === selectedFragment.start.signature
+          );
+          const anchors = candidates.map(turn => ({
             turn, anchor: fragmentAnchor(turn),
             visible: turnIntersectsCaptureViewport(turn)
           }));
