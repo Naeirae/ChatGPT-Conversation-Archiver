@@ -30,7 +30,7 @@ test('fragment begin still validates visible identity before saving', () => {
   const end = capture.indexOf('verifiedMarkedStart = true', begin);
   assert.ok(begin > 0 && end > begin);
   const block = capture.slice(begin, end);
-  assert.match(block, /turnIntersectsCaptureViewport/); // candidate visibility check
+  assert.match(capture, /visible: turnIntersectsCaptureViewport\(turn\)/);
   assert.match(block, /markerIdentityMatches/);
   assert.match(block, /throw new Error/);
 });
