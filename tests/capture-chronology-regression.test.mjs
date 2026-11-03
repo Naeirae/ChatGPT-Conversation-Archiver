@@ -115,3 +115,25 @@ test('main conversation wins over other visible role-bearing panels', () => {
 test('full verification does not collect a new final viewport after reconciliation', () => {
   assert.match(source, /const finalTouchedIds = mode === 'full'\s*\? \[\]\s*: collect\(/);
 });
+
+test('start of a marked walk checkpoints text before image work', () => {
+  const start = source.indexOf('  async function walkDown(');
+  const end = source.indexOf('  function chooseAutomaticSplitMiddle(', start);
+  const walk = source.slice(start, end);
+  const first = walk.indexOf('const firstTouchedIds = collect(');
+  const checkpoint = walk.indexOf('await saveRecoveryCheckpoint(map, order, boundary, { force: true });', first);
+  const images = walk.indexOf('await hydrateSequentialImages(', first);
+  assert.ok(first >= 0 && checkpoint > first && images > checkpoint,
+    'initial text must be visible and checkpointed before image hydration');
+});
+
+test('physical down-step is independent chronology evidence when DOM overlap vanishes', () => {
+  const sourceBlock = collectorSource;
+  assert.match(sourceBlock, /verifiedForwardStep = false/);
+  assert.match(sourceBlock, /!verifiedForwardStep/);
+  const h = harness();
+  h.scan(['first','second']);
+  h.scan(['third'], { verifiedForwardStep: true });
+  assert.deepEqual(h.order, ['first','second','third']);
+});
+
