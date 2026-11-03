@@ -865,13 +865,31 @@
     return true;
   }
 
+  // User turns are sometimes rendered as nested text blocks whose innerText
+  // does not retain paragraph separators. Extract direct semantic paragraphs
+  // when their concatenated words match the visible text; never invent text.
+  function messageTextWithParagraphs(root, role = '') {
+    const displayed = cleanMessageText(String(root?.innerText || root?.textContent || ''), role);
+    if (role !== 'user' || !root) return displayed;
+    const paragraphs = [...root.querySelectorAll('p')]
+      .filter(node => !node.closest('blockquote, li, pre, table'))
+      .map(node => cleanMessageText(node.innerText || node.textContent || '', role))
+      .filter(Boolean);
+    if (paragraphs.length < 2) return displayed;
+    const semantic = paragraphs.join('\n\n');
+    if (normalizeMatchText(semantic) !== normalizeMatchText(displayed)) return displayed;
+    return semantic.split('\n').length > displayed.split('\n').length ? semantic : displayed;
+  }
+
   function turnMessageText(turn) {
     const role = roleOf(turn) || 'unknown';
     const root = contentRoot(turn, role);
     if (!root) return '';
     const copy = root.cloneNode(true);
     copy.querySelectorAll('.archiver-fragment-buttons,[data-archiver-ui="true"]').forEach(node => node.remove());
-    return cleanMessageText(String(copy.innerText || copy.textContent || ''), role);
+    // Read layout text from the live node: innerText on a detached clone falls
+    // back to textContent and silently concatenates paragraph boundaries.
+    return messageTextWithParagraphs(root, role);
   }
 
   function turnTextSignature(turn) {
@@ -1627,7 +1645,7 @@
 
     const root = contentRoot(turn, role);
     const clone = cleanClone(root);
-    const text = cleanMessageText(String(root.innerText || root.textContent || ''), role);
+    const text = messageTextWithParagraphs(root, role);
 
     const imageNodes = turnImageNodes(turn, role);
     const images = [];
@@ -1871,16 +1889,27 @@
     let failed = 0;
     let processed = 0;
     const total = unique.size;
+    // Do not hold an otherwise complete text archive hostage to hundreds of
+    // slow/unavailable image URLs. Missing binaries stay recoverable later.
+    const deadline = Date.now() + (quickAttempt ? 30000 : 180000);
 
     for (const [src, refs] of unique) {
       if (state.cancel) throw new Error('Сбор отменен.');
 
       try {
+        const timeLeft = () => Math.max(0, deadline - Date.now());
+        if (timeLeft() < 1000) {
+          throw new Error('Превышено общее время добора изображений; текст архива сохранится.');
+        }
         const blob = await withCaptureOperationTimeout(
-          fetchImageBinary(refs[0]), quickAttempt ? 6000 : 45000, 'Получение изображения'
+          fetchImageBinary(refs[0]),
+          Math.min(quickAttempt ? 6000 : 45000, timeLeft()),
+          'Получение изображения'
         );
         const dataUrl = await withCaptureOperationTimeout(
-          blobToDataUrl(blob), quickAttempt ? 4000 : 15000, 'Кодирование изображения'
+          blobToDataUrl(blob),
+          Math.max(1, Math.min(quickAttempt ? 4000 : 15000, timeLeft())),
+          'Кодирование изображения'
         );
         for (const image of refs) {
           image.dataUrl = dataUrl;
@@ -4080,14 +4109,18 @@
     // Persist the large checkpoint independently. The background worker is
     // the sole writer of the active job: do not overwrite a newer state with
     // the copy read before storage I/O.
-    await chrome.storage.local.set({ ['draft:' + draftId]: draft });
-    await chrome.runtime.sendMessage({
+    await withCaptureOperationTimeout(
+      chrome.storage.local.set({ ['draft:' + draftId]: draft }),
+      45000,
+      'Сохранение контрольной точки'
+    );
+    await withCaptureOperationTimeout(chrome.runtime.sendMessage({
       type: 'ARCHIVER_CHECKPOINT_SAVED',
       queueCapture: state.queueCapture,
       jobId,
       draftId,
       draftCount: messages.length
-    }).catch(() => {});
+    }), 12000, 'Подтверждение контрольной точки').catch(() => {});
     state.recoveryCheckpoint = { at: now, count: messages.length };
   }
 

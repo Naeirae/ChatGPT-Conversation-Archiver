@@ -387,7 +387,10 @@ async function reconcileUnfinishedPrefix(draft) {
       n + (item.images || []).filter(image => image?.binaryStatus === 'failed').length, 0),
     capturedAt: newest.capturedAt || draft.capturedAt || '',
     capturePhase: 'walk',
-    captureRange: draft.captureRange || frontier.captureRange || null,
+    // After joining captures with different snapshot ends, resume against the
+    // boundary of the rightmost verified frontier, not an older seed draft.
+    captureBoundary: frontier.captureBoundary || draft.captureBoundary || null,
+    captureRange: frontier.captureRange || draft.captureRange || null,
     navigationHighWater: Math.max(...compatible.map(item =>
       Number(item.navigationHighWater || 0)), 0),
     resumeWindowSignatures: Array.isArray(frontier.resumeWindowSignatures)
