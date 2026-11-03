@@ -36,7 +36,8 @@
     boundarySearchActive: false,
     queueCapture: false,
     pauseSnapshotWriter: null,
-    captureStartProof: null
+    captureStartProof: null,
+    strictChronology: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -2033,20 +2034,23 @@
   }
 
   function collect(map, order, settings, stopBoundary = null) {
-    const turns = orderedTurns();
+    // Mounted turns are not necessarily visible turns. In particular a stale
+    // virtualized window or another ChatGPT panel must not enter the archive.
+    const mountedTurns = orderedTurns();
+    const main = typeof document === 'undefined' ? null : document.querySelector('main');
+    const mainContainsTurns = Boolean(main && mountedTurns.some(turn => main.contains(turn)));
+    const turns = mountedTurns.filter(turn =>
+      (!mainContainsTurns || main.contains(turn)) &&
+      turnIntersectsCaptureViewport(turn)
+    );
+    const windowMessages = [];
     const touchedIds = [];
-
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
       const message = captureTurn(turn, ordinal, settings);
-
       if (message) {
         let messageId = message.id;
-        let existing = map.get(messageId);
-
-        // A virtual wrapper/text ID is only a weak identity. If the same weak ID
-        // reappears with incompatible neighbours, keep both occurrences instead
-        // of silently merging a repeated message into the earlier one.
+        const existing = map.get(messageId);
         if (existing && !message.identityStrong &&
             !identityContextsCompatible(existing.identityContext, message.identityContext)) {
           const contextKey = hashText([
@@ -2054,32 +2058,75 @@
             messageTextSignature(message),
             message.identityContext?.next || ''
           ].join('|'));
-          messageId = message.id + ':ctx:' + contextKey;
+          messageId += ':ctx:' + contextKey;
           message.id = messageId;
-          existing = map.get(messageId);
         }
-
+        windowMessages.push(message);
         touchedIds.push(messageId);
-        if (!existing) {
-          order.push(messageId);
-          map.set(messageId, message);
-        } else {
-          // Virtualization can recreate the same turn after a prepared image has
-          // disappeared or been recreated as a fresh pending <img>. Preserve the
-          // richer snapshot, including ready image binaries even when image counts
-          // are equal.
-          map.set(messageId, mergeRicherCapture(message, existing));
-        }
       }
-
-      // A full capture is a snapshot. Messages created after the bottom marker
-      // must never be absorbed just because they became visible while we were
-      // walking back down.
-      // A mounted offscreen end marker must not truncate the current window.
       if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
           turnTrailingEdgeVisible(turn)) break;
     }
 
+    // A chronological pass must NEVER interpret discovery time as chronology.
+    // Any visible, already captured anchors must occur in the same order as
+    // their saved positions; otherwise preserve the unfinished draft.
+    if (state.strictChronology) {
+      const anchored = windowMessages.filter(item => map.has(item.id));
+      let previousPosition = -1;
+      for (const item of anchored) {
+        const position = order.indexOf(item.id);
+        if (position < previousPosition) {
+          throw new Error('Нарушен порядок уже собранных реплик при прокрутке. Архив оставлен черновиком.');
+        }
+        previousPosition = position;
+      }
+      if (map.size && !anchored.length && windowMessages.some(item => !map.has(item.id))) {
+        throw new Error('Новая область переписки не перекрывается с сохранённой. Позиции реплик не подтверждены; черновик сохранён.');
+      }
+    }
+
+    for (let i = 0; i < windowMessages.length; i++) {
+      const message = windowMessages[i];
+      const id = message.id;
+      if (map.has(id)) {
+        map.set(id, mergeRicherCapture(message, map.get(id)));
+        continue;
+      }
+      // Position the new turn by its actually observed DOM neighbours, never
+      // simply at the end of a global map when earlier turns are remounted.
+      let beforeId = '';
+      let afterId = '';
+      for (let j = i - 1; j >= 0; j--) {
+        if (map.has(windowMessages[j].id)) {
+          beforeId = windowMessages[j].id;
+          break;
+        }
+      }
+      for (let j = i + 1; j < windowMessages.length; j++) {
+        if (map.has(windowMessages[j].id)) {
+          afterId = windowMessages[j].id;
+          break;
+        }
+      }
+      const before = beforeId ? order.indexOf(beforeId) : -1;
+      const after = afterId ? order.indexOf(afterId) : -1;
+      if (state.strictChronology) {
+        if (before >= 0 && after >= 0 && before >= after) {
+          throw new Error('Противоречивые соседние реплики: невозможно подтвердить позицию. Черновик сохранён.');
+        }
+        // One-sided evidence is safe only at the corresponding edge. A newly
+        // discovered turn after a middle anchor might belong after other
+        // previously saved turns which are currently virtualized away.
+        if ((before >= 0 && after < 0 && before !== order.length - 1) ||
+            (after >= 0 && before < 0 && after !== 0)) {
+          throw new Error('Односторонняя привязка внутри архива неоднозначна. Черновик сохранён без перестановок.');
+        }
+      }
+      const insertAt = after >= 0 ? after : before >= 0 ? before + 1 : order.length;
+      order.splice(insertAt, 0, id);
+      map.set(id, message);
+    }
     return [...new Set(touchedIds)];
   }
 
@@ -2476,12 +2523,12 @@
       const nextIndex = nextRef ? findResultIndex(nextRef) : -1;
       let insertAt = -1;
 
-      if (previousRef && nextRef && previousIndex >= 0 && nextIndex > previousIndex) {
+      // Only two stable, ordered neighbours prove a missing turn's exact
+      // position. Weak text matches and one-sided guesses are not chronology
+      // evidence: leave an unresolved gap rather than move a legitimate repeat.
+      if (previousRef?.strongId && nextRef?.strongId &&
+          previousIndex >= 0 && nextIndex > previousIndex) {
         insertAt = nextIndex;
-      } else if (!previousRef && nextRef && nextIndex >= 0) {
-        insertAt = nextIndex;
-      } else if (previousRef && !nextRef && previousIndex >= 0) {
-        insertAt = previousIndex + 1;
       }
 
       if (insertAt < 0) {
@@ -5255,6 +5302,7 @@
 
       map.clear();
       order.length = 0;
+      state.strictChronology = true;
       chronologicalStarted = true;
 
       const resumedQueueMode = state.queueCapture && mode === 'resume-draft'
@@ -5362,13 +5410,11 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      const finalTouchedIds = collect(map, order, settings, boundary);
-      if (mode === 'full') {
-        await hydrateSequentialImages(
-          finalTouchedIds.map(id => map.get(id)).filter(Boolean),
-          sequentialImageSources
-        );
-      }
+      // A verified full pass is immutable: do not add a newly mounted,
+      // potentially older turn after both chronological walks were reconciled.
+      const finalTouchedIds = mode === 'full'
+        ? []
+        : collect(map, order, settings, boundary);
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const rawCollectedCount = capturedMessages.length;
@@ -6177,6 +6223,7 @@
       state.lastScrollDirection = '';
       state.manualTopConfirmed = false;
       state.boundarySearchActive = false;
+      state.strictChronology = false;
     }
   }
 
