@@ -2508,12 +2508,12 @@
       const nextIndex = nextRef ? findResultIndex(nextRef) : -1;
       let insertAt = -1;
 
-      if (previousRef && nextRef && previousIndex >= 0 && nextIndex > previousIndex) {
+      // Only two stable, ordered neighbours prove a missing turn's exact
+      // position. Weak text matches and one-sided guesses are not chronology
+      // evidence: leave an unresolved gap rather than move a legitimate repeat.
+      if (previousRef?.strongId && nextRef?.strongId &&
+          previousIndex >= 0 && nextIndex > previousIndex) {
         insertAt = nextIndex;
-      } else if (!previousRef && nextRef && nextIndex >= 0) {
-        insertAt = nextIndex;
-      } else if (previousRef && !nextRef && previousIndex >= 0) {
-        insertAt = previousIndex + 1;
       }
 
       if (insertAt < 0) {
