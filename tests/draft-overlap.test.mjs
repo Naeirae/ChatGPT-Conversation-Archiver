@@ -150,13 +150,13 @@ test('same title and even equal content never group different conversation IDs',
   const messages = seq('a','b','c');
   const a = { ...scope('https://chatgpt.com/c/first-chat'), id: 'first', messages };
   const b = { ...scope('https://chatgpt.com/c/second-chat'), id: 'second', messages };
-  assert.equal(groupVerifiedDraftWindows([a,b]).length, 1);
+  assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
 });
 
 test('different snapshot ends merge only when chronology is verified', () => {
   const a = { ...scope('https://chatgpt.com/c/same-chat', 'first-end'), id: 'a', messages: seq('a','b','c') };
   const b = { ...scope('https://chatgpt.com/c/same-chat', 'second-end'), id: 'b', messages: seq('a','b','c') };
-  assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
+  assert.equal(groupVerifiedDraftWindows([a,b]).length, 1);
 });
 
 test('different snapshot ends with no shared chronological evidence stay separate', () => {
