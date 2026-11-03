@@ -109,9 +109,9 @@ test('different conversation IDs with identical titles never share a draft scope
   assert.equal(sameDraftCaptureScope(a, { ...b, sourceUrl: a.sourceUrl }), true);
 });
 
-test('different fixed lower boundaries or manual marks are never merged', () => {
+test('later snapshot boundaries can share scope but manual marks remain distinct', () => {
   const a = scope('https://chatgpt.com/c/chat-one');
-  assert.equal(sameDraftCaptureScope(a, scope(a.sourceUrl, 'another-end')), false);
+  assert.equal(sameDraftCaptureScope(a, scope(a.sourceUrl, 'another-end')), true);
   const b = scope(a.sourceUrl);
   b.captureRange = { start: { id: 'different' }, end: { id: 'last' } };
   assert.equal(sameDraftCaptureScope(a, b), false);
@@ -150,12 +150,19 @@ test('same title and even equal content never group different conversation IDs',
   const messages = seq('a','b','c');
   const a = { ...scope('https://chatgpt.com/c/first-chat'), id: 'first', messages };
   const b = { ...scope('https://chatgpt.com/c/second-chat'), id: 'second', messages };
+  assert.equal(groupVerifiedDraftWindows([a,b]).length, 1);
+});
+
+test('different snapshot ends merge only when chronology is verified', () => {
+  const a = { ...scope('https://chatgpt.com/c/same-chat', 'first-end'), id: 'a', messages: seq('a','b','c') };
+  const b = { ...scope('https://chatgpt.com/c/same-chat', 'second-end'), id: 'b', messages: seq('a','b','c') };
   assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
 });
 
-test('different lower capture bounds stay separate despite matching messages', () => {
-  const a = { ...scope('https://chatgpt.com/c/same-chat', 'first-end'), id: 'a', messages: seq('a','b','c') };
-  const b = { ...scope('https://chatgpt.com/c/same-chat', 'second-end'), id: 'b', messages: seq('a','b','c') };
+test('different snapshot ends with no shared chronological evidence stay separate', () => {
+  const url = 'https://chatgpt.com/c/same-chat';
+  const a = { ...scope(url, 'first-end'), id: 'a', messages: seq('a','b','c') };
+  const b = { ...scope(url, 'second-end'), id: 'b', messages: seq('d','e','f') };
   assert.equal(groupVerifiedDraftWindows([a,b]).length, 2);
 });
 
