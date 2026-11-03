@@ -2036,7 +2036,13 @@
   function collect(map, order, settings, stopBoundary = null) {
     // Mounted turns are not necessarily visible turns. In particular a stale
     // virtualized window or another ChatGPT panel must not enter the archive.
-    const turns = orderedTurns().filter(turnIntersectsCaptureViewport);
+    const mountedTurns = orderedTurns();
+    const main = typeof document === 'undefined' ? null : document.querySelector('main');
+    const mainContainsTurns = Boolean(main && mountedTurns.some(turn => main.contains(turn)));
+    const turns = mountedTurns.filter(turn =>
+      (!mainContainsTurns || main.contains(turn)) &&
+      turnIntersectsCaptureViewport(turn)
+    );
     const windowMessages = [];
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
@@ -2105,8 +2111,17 @@
       }
       const before = beforeId ? order.indexOf(beforeId) : -1;
       const after = afterId ? order.indexOf(afterId) : -1;
-      if (state.strictChronology && before >= 0 && after >= 0 && before >= after) {
-        throw new Error('Противоречивые соседние реплики: невозможно подтвердить позицию. Черновик сохранён.');
+      if (state.strictChronology) {
+        if (before >= 0 && after >= 0 && before >= after) {
+          throw new Error('Противоречивые соседние реплики: невозможно подтвердить позицию. Черновик сохранён.');
+        }
+        // One-sided evidence is safe only at the corresponding edge. A newly
+        // discovered turn after a middle anchor might belong after other
+        // previously saved turns which are currently virtualized away.
+        if ((before >= 0 && after < 0 && before !== order.length - 1) ||
+            (after >= 0 && before < 0 && after !== 0)) {
+          throw new Error('Односторонняя привязка внутри архива неоднозначна. Черновик сохранён без перестановок.');
+        }
       }
       const insertAt = after >= 0 ? after : before >= 0 ? before + 1 : order.length;
       order.splice(insertAt, 0, id);
