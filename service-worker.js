@@ -6892,7 +6892,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'ARCHIVER_CAPTURE_FRAGMENT':
         return await startCapture({
           mode: 'fragment',
-          captureTarget: message.captureTarget || 'copy'
+          // The manual range starts at the already positioned source tab.
+          // Only explicit experimental/queued callers open a separate copy.
+          captureTarget: message.captureTarget || 'current'
         });
       case 'ARCHIVER_CAPTURE_CURRENT':
         return await startCapture({
