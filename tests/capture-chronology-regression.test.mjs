@@ -25,7 +25,9 @@ function harness() {
     matchesBoundary: () => false,
     messageTextSignature: item => item.id,
     hashText: text => text,
-    state
+    state,
+    window: { innerHeight: 700 },
+    document: { querySelector: () => null, documentElement: { clientHeight: 700 } }
   };
   const collect = runInNewContext(collectorSource + '\ncollect', sandbox);
   const map = new Map();
@@ -110,6 +112,41 @@ test('main conversation wins over other visible role-bearing panels', () => {
   assert.deepEqual(h.order, ['a','b']);
   assert.match(collectorSource, /mainContainsTurns/);
   assert.match(collectorSource, /main\.contains\(turn\)/);
+});
+
+test('one preloaded message immediately outside viewport is retained with chronological neighbours', () => {
+  const h = harness();
+  h.scan([
+    { id: 'before', visible: false, getBoundingClientRect: () => ({ top: -110, bottom: -10 }) },
+    { id: 'visible', visible: true },
+    { id: 'after', visible: false, getBoundingClientRect: () => ({ top: 710, bottom: 780 }) }
+  ]);
+  assert.deepEqual(h.order, ['before', 'visible', 'after']);
+});
+
+test('far offscreen mounted turns do not contaminate captured window', () => {
+  const h = harness();
+  h.scan([
+    { id: 'far-earlier', visible: false, getBoundingClientRect: () => ({ top: -3500, bottom: -2500 }) },
+    { id: 'visible', visible: true },
+    { id: 'far-later', visible: false, getBoundingClientRect: () => ({ top: 3000, bottom: 3200 }) }
+  ]);
+  assert.deepEqual(h.order, ['visible']);
+});
+
+test('an offscreen shell in main cannot exclude visible conversation turns outside main', () => {
+  const h = harness();
+  // If a renderer splits the virtualized conversation across hosts, a stale
+  // offscreen <main> shell must not claim ownership of the visible window.
+  const before = source.indexOf('const mainContainsVisibleTurn =');
+  assert.ok(before > 0);
+  assert.match(source.slice(before, before + 250), /main\.contains\(turn\) && viewportHit\(turn\)/);
+});
+
+test('marked range cannot scroll indefinitely after capturing zero first-window turns', () => {
+  const walk = source.slice(source.indexOf('  async function walkDown('), source.indexOf('  async function planAutomaticSplit('));
+  assert.match(walk, /i === 0 && requireBoundary && map\.size === 0/);
+  assert.match(walk, /Прокрутка остановлена до потери диапазона/);
 });
 
 test('full verification does not collect a new final viewport after reconciliation', () => {

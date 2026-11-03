@@ -2038,11 +2038,55 @@
     // virtualized window or another ChatGPT panel must not enter the archive.
     const mountedTurns = orderedTurns();
     const main = typeof document === 'undefined' ? null : document.querySelector('main');
-    const mainContainsTurns = Boolean(main && mountedTurns.some(turn => main.contains(turn)));
-    const turns = mountedTurns.filter(turn =>
-      (!mainContainsTurns || main.contains(turn)) &&
-      turnIntersectsCaptureViewport(turn)
+    // A ChatGPT shell may render part of the actual conversation outside the
+    // first <main>. The old test admitted ANY mounted main turn, even an
+    // offscreen shell, then excluded every visible message outside that main.
+    // Scope to main only when it contains an actually visible conversation turn.
+    const viewportHit = turn => {
+      if (turnIntersectsCaptureViewport(turn)) return true;
+      // Some ChatGPT scroll roots report a stale scrollport rect even though
+      // the logical role node is visibly rendered in the browser viewport.
+      const rect = turn.getBoundingClientRect?.();
+      const width = window.innerWidth || document.documentElement.clientWidth || 0;
+      const height = window.innerHeight || document.documentElement.clientHeight || 0;
+      return Boolean(turn.isConnected && rect &&
+        rect.right > 0 && rect.left < width && rect.bottom > 0 && rect.top < height &&
+        rect.width > 1 && rect.height > 1);
+    };
+    const mainContainsVisibleTurn = Boolean(main && mountedTurns.some(turn =>
+      main.contains(turn) && viewportHit(turn)
+    ));
+    const conversationTurns = mountedTurns.filter(turn =>
+      !mainContainsVisibleTurn || main.contains(turn)
     );
+    // The 0.5.9 viewport-only collector silently omitted prefetched turns just
+    // outside the screen. Keep at most two adjacent mounted turns on each side
+    // when their rectangles are within one viewport. Never accept detached
+    // windows elsewhere in the page, nor infer chronology from discovery time.
+    const visibleIndices = conversationTurns.flatMap((turn, index) =>
+      viewportHit(turn) ? [index] : []
+    );
+    const visibleSet = new Set(visibleIndices);
+    const first = visibleIndices[0] ?? -1;
+    const last = visibleIndices[visibleIndices.length - 1] ?? -1;
+    const viewportHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
+    const adjacent = (turn, index) => {
+      if (first < 0 || index < first - 2 || index > last + 2) return false;
+      const rect = turn.getBoundingClientRect?.();
+      return Boolean(rect && Number.isFinite(rect.top) && Number.isFinite(rect.bottom) &&
+        rect.bottom >= -viewportHeight && rect.top <= 2 * viewportHeight);
+    };
+    const turns = conversationTurns.filter((turn, index) =>
+      visibleSet.has(index) || adjacent(turn, index)
+    );
+    state.captureWindowEvidence = {
+      mounted: conversationTurns.length,
+      mountedGlobal: mountedTurns.length,
+      mainContainsVisibleTurn,
+      visible: visibleIndices.length,
+      adjacent: Math.max(0, turns.length - visibleIndices.length),
+      selected: turns.length
+    };
     const windowMessages = [];
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
@@ -4481,7 +4525,8 @@
       const visibleIds = collect(map, order, settings, boundary);
       if (i === 0) {
         await progress('Этап 2/3: начальный участок сохранён · ' + map.size + ' сообщений · иду вниз',
-          map.size, { phase: 'walk', chronologicalCount: map.size, force: true });
+          map.size, { phase: 'walk', chronologicalCount: map.size,
+            captureWindowEvidence: state.captureWindowEvidence, force: true });
         await saveRecoveryCheckpoint(map, order, boundary, { force: true });
       }
       await hydrateSequentialImages(visibleIds.map(id => map.get(id)).filter(Boolean),
@@ -4571,6 +4616,17 @@
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
       const firstTouchedIds = collect(map, order, settings, boundary);
+      // Marked-range capture is a single downward collecting pass. Scrolling
+      // past hundreds of messages with an empty map is never a valid mode.
+      if (i === 0 && requireBoundary && map.size === 0) {
+        const evidence = state.captureWindowEvidence || {};
+        throw new Error('Сбор по отметкам не видит ни одной сохраняемой реплики в начальном окне: ' +
+          'DOM=' + (evidence.mountedGlobal ?? '?') +
+          ', область=' + (evidence.mounted ?? '?') +
+          ', видимых=' + (evidence.visible ?? '?') +
+          ', отобрано=' + (evidence.selected ?? '?') +
+          '. Прокрутка остановлена до потери диапазона.');
+      }
       if (i === 0) {
         await progress('Этап 2/3: начало подтверждено · найдено ' + map.size +
           ' сообщений · сохраняю текст перед обработкой изображений…',
@@ -5499,6 +5555,9 @@
 
       let capturedMessages = order.map(id => map.get(id)).filter(Boolean);
       const rawCollectedCount = capturedMessages.length;
+      // Store evidence of the last traversed viewport for count-loss triage.
+      // It is a diagnostic, not proof of complete coverage.
+      const lastCaptureWindowEvidence = state.captureWindowEvidence || null;
       let trimmedBeforeMarkedStart = 0;
       if (mode === 'fragment') {
         const markedStart = trimMessagesFromMarkedStart(capturedMessages, selectedFragment?.start);
@@ -5537,6 +5596,7 @@
             phase: 'finalizing',
             captureMode: mode,
             rawCollectedCount,
+            lastCaptureWindowEvidence,
             trimmedBeforeMarkedStart,
             trimmedAfterMarkedEnd: bounded.trimmed || 0,
             force: true
