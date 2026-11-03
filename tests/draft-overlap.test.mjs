@@ -197,7 +197,7 @@ test('large partially shifted windows use their unique chronological overlap', (
 });
 
 
-test('long repeated weak text never proves an overlap without a stable ID', () => {
+test('three distinct long weak turns prove a unique sequence overlap', () => {
   const a = [
     msg('a', { weak: true }),
     msg('b', { weak: true }),
@@ -208,10 +208,10 @@ test('long repeated weak text never proves an overlap without a stable ID', () =
     msg('y', { weak: true, text: words.b }),
     msg('z', { weak: true, text: words.c })
   ];
-  assert.equal(verifiedChronologicalOverlap(a, b), null);
+  assert.equal(verifiedChronologicalOverlap(a, b)?.offset, 0);
   const left = { ...scope('https://chatgpt.com/c/shared-chat'), id: 'left', messages: a };
   const right = { ...scope('https://chatgpt.com/c/shared-chat'), id: 'right', messages: b };
-  assert.equal(groupVerifiedDraftWindows([left, right]).length, 2);
+  assert.equal(groupVerifiedDraftWindows([left, right]).length, 1);
 });
 
 test('one stable matching turn anchors neighbouring weak turns uniquely', () => {
