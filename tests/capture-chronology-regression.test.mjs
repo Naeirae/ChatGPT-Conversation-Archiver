@@ -81,6 +81,23 @@ test('disconnected window is not appended based on discovery time', () => {
   assert.deepEqual(h.order, ['a','b']);
 });
 
+test('a one-sided middle anchor is not evidence of exact chronology', () => {
+  const h = harness();
+  h.scan(['a','b','c','d']);
+  assert.throws(() => h.scan(['b','new-turn']), /Односторонняя привязка/);
+  assert.deepEqual(h.order, ['a','b','c','d']);
+});
+
+test('main conversation wins over other visible role-bearing panels', () => {
+  const h = harness();
+  // The production collector is tested with a synthetic main region.
+  // Existing offscreen and foreign panels must never enter the same archive.
+  h.scan(['a','b']);
+  assert.deepEqual(h.order, ['a','b']);
+  assert.match(collectorSource, /mainContainsTurns/);
+  assert.match(collectorSource, /main\.contains\(turn\)/);
+});
+
 test('full verification does not collect a new final viewport after reconciliation', () => {
   assert.match(source, /const finalTouchedIds = mode === 'full'\s*\? \[\]\s*: collect\(/);
 });
