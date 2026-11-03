@@ -1889,16 +1889,27 @@
     let failed = 0;
     let processed = 0;
     const total = unique.size;
+    // Do not hold an otherwise complete text archive hostage to hundreds of
+    // slow/unavailable image URLs. Missing binaries stay recoverable later.
+    const deadline = Date.now() + (quickAttempt ? 30000 : 180000);
 
     for (const [src, refs] of unique) {
       if (state.cancel) throw new Error('Сбор отменен.');
 
       try {
+        const timeLeft = () => Math.max(0, deadline - Date.now());
+        if (timeLeft() < 1000) {
+          throw new Error('Превышено общее время добора изображений; текст архива сохранится.');
+        }
         const blob = await withCaptureOperationTimeout(
-          fetchImageBinary(refs[0]), quickAttempt ? 6000 : 45000, 'Получение изображения'
+          fetchImageBinary(refs[0]),
+          Math.min(quickAttempt ? 6000 : 45000, timeLeft()),
+          'Получение изображения'
         );
         const dataUrl = await withCaptureOperationTimeout(
-          blobToDataUrl(blob), quickAttempt ? 4000 : 15000, 'Кодирование изображения'
+          blobToDataUrl(blob),
+          Math.max(1, Math.min(quickAttempt ? 4000 : 15000, timeLeft())),
+          'Кодирование изображения'
         );
         for (const image of refs) {
           image.dataUrl = dataUrl;
