@@ -2033,7 +2033,7 @@
     return clicks;
   }
 
-  function collect(map, order, settings, stopBoundary = null) {
+  function collect(map, order, settings, stopBoundary = null, { verifiedForwardStep = false } = {}) {
     // Mounted turns are not necessarily visible turns. In particular a stale
     // virtualized window or another ChatGPT panel must not enter the archive.
     const mountedTurns = orderedTurns();
@@ -2081,8 +2081,12 @@
         }
         previousPosition = position;
       }
-      if (map.size && !anchored.length && windowMessages.some(item => !map.has(item.id))) {
-        throw new Error('Новая область переписки не перекрывается с сохранённой. Позиции реплик не подтверждены; черновик сохранён.');
+      // A short verified downward physical movement establishes spatial
+      // continuity even when ChatGPT unmounts the only shared turn between
+      // two DOM snapshots. This is not permission to accept jumps.
+      if (map.size && !anchored.length && windowMessages.some(item => !map.has(item.id)) &&
+          !verifiedForwardStep) {
+        throw new Error('Новая область переписки не перекрывается с сохранённой и физический переход не подтверждён. Черновик сохранён.');
       }
     }
 
@@ -4475,6 +4479,11 @@
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       const visibleIds = collect(map, order, settings, boundary);
+      if (i === 0) {
+        await progress('Этап 2/3: начальный участок сохранён · ' + map.size + ' сообщений · иду вниз',
+          map.size, { phase: 'walk', chronologicalCount: map.size, force: true });
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+      }
       await hydrateSequentialImages(visibleIds.map(id => map.get(id)).filter(Boolean),
         imageAttempts, { visibleOnly: true, walkStep: i });
       if (boundaryIsVisible(boundary)) {
@@ -4489,12 +4498,14 @@
         map.size, { phase: 'walk', iteration: i + 1, chronologicalCount: map.size });
       await saveRecoveryCheckpoint(map, order, boundary);
       const before = sampleCaptureScroller();
-      await physicalScroll('down', 1, {
+      const step = await physicalScroll('down', 1, {
         wheelDelta: 120, settleTimeout: 5000, quietWindow: 850
       });
+      const afterStep = sampleCaptureScroller();
+      const verifiedForwardStep = measuredAdjacentScroll(before, afterStep, step);
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      const nextIds = collect(map, order, settings, boundary);
+      const nextIds = collect(map, order, settings, boundary, { verifiedForwardStep });
       await hydrateSequentialImages(nextIds.map(id => map.get(id)).filter(Boolean),
         imageAttempts, { visibleOnly: true, walkStep: i });
       if (boundaryIsVisible(boundary)) {
@@ -4560,6 +4571,12 @@
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
       const firstTouchedIds = collect(map, order, settings, boundary);
+      if (i === 0) {
+        await progress('Этап 2/3: начало подтверждено · найдено ' + map.size +
+          ' сообщений · сохраняю текст перед обработкой изображений…',
+          map.size, { phase: 'walk', chronologicalCount: map.size, force: true });
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+      }
       if (hydrateImages) {
         await hydrateSequentialImages(
           firstTouchedIds.map(id => map.get(id)).filter(Boolean),
@@ -4621,7 +4638,9 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
-      const secondTouchedIds = collect(map, order, settings, boundary);
+      const secondTouchedIds = collect(map, order, settings, boundary, {
+        verifiedForwardStep: measuredAdjacentScroll(physicalBefore, sampleCaptureScroller(), downwardStep)
+      });
       if (hydrateImages) {
         await hydrateSequentialImages(
           secondTouchedIds.map(id => map.get(id)).filter(Boolean),
@@ -4668,7 +4687,9 @@
         await waitForTurnSettle(2400, 450);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
-        collect(map, order, settings, boundary);
+        collect(map, order, settings, boundary, {
+          verifiedForwardStep: measuredAdjacentScroll(physicalBefore, sampleCaptureScroller(), downwardStep)
+        });
         await saveRecoveryCheckpoint(map, order, boundary);
       }
 
