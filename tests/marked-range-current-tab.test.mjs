@@ -19,6 +19,7 @@ test('the primary marked-range button uses the already positioned current tab', 
 
 test('the worker only asks to seek the marked start in a background copy', () => {
   assert.match(worker, /seekMarkedStart: mode === 'fragment' && captureTarget === 'copy'/);
+  assert.match(worker, /case 'ARCHIVER_CAPTURE_FRAGMENT':[\s\S]*?captureTarget: message\.captureTarget \|\| 'current'/);
   const fragment = collector.slice(
     collector.indexOf("} else if (mode === 'fragment') {", collector.indexOf('async function captureConversation(')),
     collector.indexOf("} else if (mode === 'retry-walk')")
