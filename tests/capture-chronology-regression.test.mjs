@@ -32,9 +32,9 @@ function harness() {
   const order = [];
   return {
     map, order, state,
-    scan: turns => {
+    scan: (turns, options = {}) => {
       mounted = turns.map(turn => typeof turn === 'string' ? { id: turn } : turn);
-      return collect(map, order, {}, null);
+      return collect(map, order, {}, null, options);
     }
   };
 }
@@ -79,6 +79,20 @@ test('disconnected window is not appended based on discovery time', () => {
   h.scan(['a','b']);
   assert.throws(() => h.scan(['x','y']), /не перекрывается/);
   assert.deepEqual(h.order, ['a','b']);
+});
+
+test('physically adjacent downward step can continue a newly virtualized window without a DOM anchor', () => {
+  const h = harness();
+  h.scan(['marked-start','following-turn']);
+  h.scan(['third-turn','fourth-turn'], { verifiedForwardStep: true });
+  assert.deepEqual(h.order, ['marked-start','following-turn','third-turn','fourth-turn']);
+});
+
+test('an unverified jump still cannot append a disconnected viewport', () => {
+  const h = harness();
+  h.scan(['marked-start','following-turn']);
+  assert.throws(() => h.scan(['unrelated-turn']), /не перекрывается/);
+  assert.deepEqual(h.order, ['marked-start','following-turn']);
 });
 
 test('a one-sided middle anchor is not evidence of exact chronology', () => {
