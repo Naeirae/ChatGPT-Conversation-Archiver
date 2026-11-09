@@ -35,5 +35,5 @@ test('images without ready binary data are reported without changing text order'
   const imagePass = exporter.indexOf('const imageMessages = orderedMessages.filter');
   const block = exporter.slice(imagePass);
   assert.match(block, /image\.binaryStatus !== 'ready' \|\| !image\?\.dataUrl/);
-  assert.match(block, /Текст сохранён/);
+  assert.match(block, /imageFailedCount\+\+/);
 });
