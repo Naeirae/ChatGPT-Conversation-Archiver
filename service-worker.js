@@ -5876,65 +5876,93 @@ async function pasteArchiveIntoGoogleDoc(
       await sleep(180);
     }
 
-    let buffer = [];
-    let headerPending = includeHeader;
+    // First write the complete chronological text stream in ONE rich-text
+    // clipboard operation. Interleaving image clipboard writes with message
+    // chunks is unsafe in Google Docs: image upload/paste can be asynchronous,
+    // and a later Ctrl+End may land before the preceding image insertion has
+    // committed, splitting an earlier message around a later user turn.
+    const orderedMessages = Array.isArray(messages) ? messages : [];
+    await pasteChunk(orderedMessages, includeHeader, { stripImages: true });
 
-    for (const message of messages || []) {
-      const images = (message.images || []).filter(image => image?.src || image?.dataUrl);
-      if (!images.length) {
-        buffer.push(message);
-        continue;
-      }
-
-      // Restore the pre-34f7bcb path that was observed to work in Google Docs:
-      // text and image markup for an image-bearing message travel through one
-      // rich HTML clipboard paste, using the original ChatGPT image URL first.
-      if (buffer.length) {
-        await pasteChunk(buffer, headerPending, { stripImages: true });
-        buffer = [];
-        headerPending = false;
-      }
-
-      try {
-        await pasteChunk([message], headerPending, {
-          stripImages: false,
-          preferOriginalImageSrc: true
-        });
-        headerPending = false;
-        imageInlinePasteCount += images.length;
-      } catch (error) {
-        // If the old rich-HTML route itself errors, keep the newer binary
-        // clipboard path as a fallback instead of losing the whole export.
-        await pasteChunk([message], headerPending, { stripImages: true });
-        headerPending = false;
-        await pasteBinaryImages(message);
-        if (!imageInsertedCount && !imageFailedCount) {
-          failedImages.push({
-            src: images[0]?.src || '',
-            error: error?.message || String(error)
-          });
-        }
-      }
-    }
-
-    await pasteChunk(buffer, headerPending, { stripImages: true });
-
-    // A successful CDP Ctrl+V is not evidence that Docs accepted the text.
-    // Read the current document tab back before recording an export as saved.
-    // A missing tail leaves the document open and the archive unlinked.
-    const expectedTail = [...(messages || [])].reverse()
-      .map(item => String(item?.text || '').replace(/\s+/g, ' ').trim())
+    // Verify the text stream before adding any images. Image processing is a
+    // separate, anchored second pass and can no longer reorder message text.
+    const expectedTail = [...orderedMessages].reverse()
+      .map(item => String(item?.text || '').replace(/\\s+/g, ' ').trim())
       .find(text => text.length >= 48);
+    let actualText = '';
     if (expectedTail) {
       await sleep(650);
-      const actualText = await copyCurrentGoogleDocTabText(tabId);
-      const actual = String(actualText || '').replace(/\s+/g, ' ').trim();
+      actualText = await copyCurrentGoogleDocTabText(tabId);
+      const actual = String(actualText || '').replace(/\\s+/g, ' ').trim();
       const sample = expectedTail.slice(0, 48);
       if (!actual.includes(sample)) {
         throw new Error(
           'Google Docs не подтвердил вставку последнего текстового сообщения. ' +
           'Документ оставлен открытым, экспорт не отмечен как сохранённый.'
         );
+      }
+    }
+
+    // Images are deliberately inserted only AFTER all message text is in
+    // chronological order. Each group is positioned by a unique message-text
+    // anchor, never by the current end-of-document caret.
+    const imageMessages = orderedMessages.filter(message =>
+      Array.isArray(message?.images) && message.images.length
+    );
+    if (imageMessages.length) {
+      if (!actualText) actualText = await copyCurrentGoogleDocTabText(tabId);
+      for (const message of imageMessages) {
+        const images = message.images || [];
+        const anchor = uniqueMessageAnchor(actualText, message);
+        if (!anchor) {
+          for (const image of images) {
+            imageFailedCount++;
+            failedImages.push({
+              src: image?.src || '',
+              error: 'Не найден уникальный текстовый якорь сообщения; картинка пропущена, текст сохранён.'
+            });
+          }
+          continue;
+        }
+
+        const located = await locateGoogleDocAnchor(tabId, anchor);
+        if (!located) {
+          for (const image of images) {
+            imageFailedCount++;
+            failedImages.push({
+              src: image?.src || '',
+              error: 'Google Docs не подтвердил позицию сообщения; картинка пропущена, текст сохранён.'
+            });
+          }
+          continue;
+        }
+
+        for (const image of images) {
+          if (image?.binaryStatus !== 'ready' || !image?.dataUrl) {
+            imageFailedCount++;
+            failedImages.push({
+              src: image?.src || '',
+              error: image?.binaryError || 'Бинарные данные изображения не подготовлены.'
+            });
+            continue;
+          }
+          const copied = await copyImageClipboardInGoogleDocs(tabId, image);
+          if (!copied?.ok) {
+            imageFailedCount++;
+            failedImages.push({
+              src: image.src || '',
+              error: copied?.error || 'clipboard failed'
+            });
+            continue;
+          }
+
+          await dispatchKey(tabId, 'v', 'KeyV', 86, 2);
+          await sleep(1100);
+          await dispatchKey(tabId, 'Enter', 'Enter', 13, 0);
+          await sleep(180);
+          imageInsertedCount++;
+          imageInlinePasteCount++;
+        }
       }
     }
   } finally {
