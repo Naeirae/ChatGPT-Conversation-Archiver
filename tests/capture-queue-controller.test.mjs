@@ -488,7 +488,11 @@ test('an interrupted service worker can finish the same split publication withou
   // archive was published but before the final status write completed.
   f.failNextDoneStateWrite();
   await f.controller.complete({jobId:second.jobId,archiveId:b.id},second.captureTabId);
-  let interrupted=await f.controller.getState();
+  // Lane completion ACK no longer waits for the much larger two-lane merge.
+  // The merger remains recoverable and will enter finalizing asynchronously.
+  let interrupted=await f.settled(s =>
+    s.items[0].status === 'finalizing' && s.items[0].finalizationStarted &&
+    f.published.length === 1);
   assert.equal(interrupted.items[0].status,'finalizing');
   assert.equal(interrupted.items[0].finalizationStarted,true);
   assert.equal(f.published.length,1);

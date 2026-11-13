@@ -847,8 +847,10 @@
     return /^(?:data-message-id|data-turn-id):/.test(String(id || ''));
   }
 
-  function turnIdentityContext(turn) {
-    const turns = orderedTurns();
+  function turnIdentityContext(turn, knownTurns = null) {
+    // Collection already knows the ordered DOM window. Re-enumerating and
+    // sorting the complete list for every turn is quadratic on long chats.
+    const turns = knownTurns || orderedTurns();
     const index = turns.indexOf(turn);
     if (index < 0) return { previous: '', next: '' };
     const previousTurn = index > 0 ? turns[index - 1] : null;
@@ -1640,7 +1642,7 @@
     return clone;
   }
 
-  function captureTurn(turn, ordinal, settings) {
+  function captureTurn(turn, ordinal, settings, knownTurns = null) {
     const role = roleOf(turn);
     if (!role) return null;
 
@@ -1711,7 +1713,7 @@
       : { html: '', text: '', label: '', count: 0 };
 
     const stableId = turnStableKey(turn);
-    const identityContext = turnIdentityContext(turn);
+    const identityContext = turnIdentityContext(turn, knownTurns);
     return {
       id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       identityStrong: isStrongMessageId(stableId),
@@ -2091,7 +2093,7 @@
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
-      const message = captureTurn(turn, ordinal, settings);
+      const message = captureTurn(turn, ordinal, settings, mountedTurns);
       if (message) {
         let messageId = message.id;
         const existing = map.get(messageId);
@@ -4327,6 +4329,17 @@
       Math.min(Math.max(2, Number(maxPixels) || Infinity), overlapLimit);
   }
 
+  // A weaker physical-motion test used ONLY to avoid false stall detection.
+  // It does not prove chronological overlap when the page height changes.
+  function moderateDownwardProgress(before, after, transport) {
+    if (!before?.element || before.element !== after?.element ||
+        transport?.direction !== 'down' || transport?.ok === false) return false;
+    const delta = Number(after.top) - Number(before.top);
+    const height = Math.min(Number(before.clientHeight), Number(after.clientHeight));
+    return Number.isFinite(delta) && Number.isFinite(height) &&
+      height > 0 && delta >= 2 && delta <= height * 0.75;
+  }
+
   function createContinuityWatchdog({
     maxSameFrontier = 2,
     maxRecoveriesWithoutAdvance = 6,
@@ -4600,6 +4613,11 @@
     const stability = scrollRuntime().createStabilityState();
     const watchdog = createContinuityWatchdog();
     let physicalStepCount = 0;
+    // Preserve independently measured physical continuity across the next
+    // loop's first collect. Previously only the immediate post-wheel collect
+    // received this proof, and the next iteration could reject that SAME
+    // virtualized window before moving again.
+    let previousVerifiedForwardStep = false;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4615,7 +4633,9 @@
 
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
-      const firstTouchedIds = collect(map, order, settings, boundary);
+      const firstTouchedIds = collect(map, order, settings, boundary, {
+        verifiedForwardStep: previousVerifiedForwardStep
+      });
       // Marked-range capture is a single downward collecting pass. Scrolling
       // past hundreds of messages with an empty map is never a valid mode.
       if (i === 0 && requireBoundary && map.size === 0) {
@@ -4694,8 +4714,11 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      const secondForwardStep = measuredAdjacentScroll(
+        physicalBefore, sampleCaptureScroller(), downwardStep
+      );
       const secondTouchedIds = collect(map, order, settings, boundary, {
-        verifiedForwardStep: measuredAdjacentScroll(physicalBefore, sampleCaptureScroller(), downwardStep)
+        verifiedForwardStep: secondForwardStep
       });
       if (hydrateImages) {
         await hydrateSequentialImages(
@@ -4707,6 +4730,9 @@
 
       const afterRefs = visibleNavigationRefsLightweight();
       const physicalAfter = sampleCaptureScroller();
+      previousVerifiedForwardStep = measuredAdjacentScroll(
+        physicalBefore, physicalAfter, downwardStep
+      );
       physicalStepCount += Number(Boolean(downwardStep?.moved));
       const physicalDelta = physicalBefore?.element === physicalAfter?.element
         ? Number(physicalAfter.top) - Number(physicalBefore.top)
@@ -4776,9 +4802,21 @@
       const after = scrollObservation(map.size);
       // No new message text is expected while crossing a 20-screen turn.
       // Only a non-moving viewport contributes to the stall counter.
-      const physicallyAdvanced = measuredAdjacentScroll(
+      // Keep two different notions of motion: a strong *continuity proof*
+      // (measuredAdjacentScroll) and a weaker *stall-reset proof*. Long
+      // messages may load media or expand their layout while scrolling,
+      // changing scrollHeight by >6%. That invalidates chronology overlap
+      // evidence, but must not count six genuinely advancing wheel steps as
+      // a stationary viewport and abort the capture near its beginning.
+      const measuredContinuity = measuredAdjacentScroll(
         physicalBefore, physicalAfter, downwardStep
       );
+      const moderatePhysicalProgress = moderateDownwardProgress(
+        physicalBefore, physicalAfter, downwardStep
+      );
+      const physicallyAdvanced = measuredContinuity || moderatePhysicalProgress;
+      // Moderate progress resets the STALL timer only; it never authorizes
+      // joining disconnected messages or declaring chronological overlap.
       if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability);
       const stall = physicallyAdvanced
         ? { stable: 0 }
