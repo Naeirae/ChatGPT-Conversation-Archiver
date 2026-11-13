@@ -4329,6 +4329,17 @@
       Math.min(Math.max(2, Number(maxPixels) || Infinity), overlapLimit);
   }
 
+  // A weaker physical-motion test used ONLY to avoid false stall detection.
+  // It does not prove chronological overlap when the page height changes.
+  function moderateDownwardProgress(before, after, transport) {
+    if (!before?.element || before.element !== after?.element ||
+        transport?.direction !== 'down' || transport?.ok === false) return false;
+    const delta = Number(after.top) - Number(before.top);
+    const height = Math.min(Number(before.clientHeight), Number(after.clientHeight));
+    return Number.isFinite(delta) && Number.isFinite(height) &&
+      height > 0 && delta >= 2 && delta <= height * 0.75;
+  }
+
   function createContinuityWatchdog({
     maxSameFrontier = 2,
     maxRecoveriesWithoutAdvance = 6,
@@ -4800,14 +4811,8 @@
       const measuredContinuity = measuredAdjacentScroll(
         physicalBefore, physicalAfter, downwardStep
       );
-      const moderatePhysicalProgress = Boolean(
-        physicalBefore?.element && physicalBefore.element === physicalAfter?.element &&
-        downwardStep?.direction === 'down' && downwardStep?.ok !== false &&
-        Number.isFinite(physicalDelta) && physicalDelta >= 2 &&
-        physicalDelta <= Math.max(2, Math.min(
-          Number(physicalBefore?.clientHeight || 0),
-          Number(physicalAfter?.clientHeight || 0)
-        ) * 0.75)
+      const moderatePhysicalProgress = moderateDownwardProgress(
+        physicalBefore, physicalAfter, downwardStep
       );
       const physicallyAdvanced = measuredContinuity || moderatePhysicalProgress;
       // Moderate progress resets the STALL timer only; it never authorizes
