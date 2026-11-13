@@ -4791,9 +4791,27 @@
       const after = scrollObservation(map.size);
       // No new message text is expected while crossing a 20-screen turn.
       // Only a non-moving viewport contributes to the stall counter.
-      const physicallyAdvanced = measuredAdjacentScroll(
+      // Keep two different notions of motion: a strong *continuity proof*
+      // (measuredAdjacentScroll) and a weaker *stall-reset proof*. Long
+      // messages may load media or expand their layout while scrolling,
+      // changing scrollHeight by >6%. That invalidates chronology overlap
+      // evidence, but must not count six genuinely advancing wheel steps as
+      // a stationary viewport and abort the capture near its beginning.
+      const measuredContinuity = measuredAdjacentScroll(
         physicalBefore, physicalAfter, downwardStep
       );
+      const moderatePhysicalProgress = Boolean(
+        physicalBefore?.element && physicalBefore.element === physicalAfter?.element &&
+        downwardStep?.direction === 'down' && downwardStep?.ok !== false &&
+        Number.isFinite(physicalDelta) && physicalDelta >= 2 &&
+        physicalDelta <= Math.max(2, Math.min(
+          Number(physicalBefore?.clientHeight || 0),
+          Number(physicalAfter?.clientHeight || 0)
+        ) * 0.75)
+      );
+      const physicallyAdvanced = measuredContinuity || moderatePhysicalProgress;
+      // Moderate progress resets the STALL timer only; it never authorizes
+      // joining disconnected messages or declaring chronological overlap.
       if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability);
       const stall = physicallyAdvanced
         ? { stable: 0 }
