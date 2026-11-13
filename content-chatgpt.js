@@ -847,8 +847,10 @@
     return /^(?:data-message-id|data-turn-id):/.test(String(id || ''));
   }
 
-  function turnIdentityContext(turn) {
-    const turns = orderedTurns();
+  function turnIdentityContext(turn, knownTurns = null) {
+    // Collection already knows the ordered DOM window. Re-enumerating and
+    // sorting the complete list for every turn is quadratic on long chats.
+    const turns = knownTurns || orderedTurns();
     const index = turns.indexOf(turn);
     if (index < 0) return { previous: '', next: '' };
     const previousTurn = index > 0 ? turns[index - 1] : null;
@@ -1640,7 +1642,7 @@
     return clone;
   }
 
-  function captureTurn(turn, ordinal, settings) {
+  function captureTurn(turn, ordinal, settings, knownTurns = null) {
     const role = roleOf(turn);
     if (!role) return null;
 
@@ -1711,7 +1713,7 @@
       : { html: '', text: '', label: '', count: 0 };
 
     const stableId = turnStableKey(turn);
-    const identityContext = turnIdentityContext(turn);
+    const identityContext = turnIdentityContext(turn, knownTurns);
     return {
       id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       identityStrong: isStrongMessageId(stableId),
@@ -2091,7 +2093,7 @@
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
-      const message = captureTurn(turn, ordinal, settings);
+      const message = captureTurn(turn, ordinal, settings, mountedTurns);
       if (message) {
         let messageId = message.id;
         const existing = map.get(messageId);
@@ -4600,6 +4602,11 @@
     const stability = scrollRuntime().createStabilityState();
     const watchdog = createContinuityWatchdog();
     let physicalStepCount = 0;
+    // Preserve independently measured physical continuity across the next
+    // loop's first collect. Previously only the immediate post-wheel collect
+    // received this proof, and the next iteration could reject that SAME
+    // virtualized window before moving again.
+    let previousVerifiedForwardStep = false;
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
@@ -4615,7 +4622,9 @@
 
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
-      const firstTouchedIds = collect(map, order, settings, boundary);
+      const firstTouchedIds = collect(map, order, settings, boundary, {
+        verifiedForwardStep: previousVerifiedForwardStep
+      });
       // Marked-range capture is a single downward collecting pass. Scrolling
       // past hundreds of messages with an empty map is never a valid mode.
       if (i === 0 && requireBoundary && map.size === 0) {
@@ -4694,8 +4703,11 @@
 
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      const secondForwardStep = measuredAdjacentScroll(
+        physicalBefore, sampleCaptureScroller(), downwardStep
+      );
       const secondTouchedIds = collect(map, order, settings, boundary, {
-        verifiedForwardStep: measuredAdjacentScroll(physicalBefore, sampleCaptureScroller(), downwardStep)
+        verifiedForwardStep: secondForwardStep
       });
       if (hydrateImages) {
         await hydrateSequentialImages(
@@ -4707,6 +4719,9 @@
 
       const afterRefs = visibleNavigationRefsLightweight();
       const physicalAfter = sampleCaptureScroller();
+      previousVerifiedForwardStep = measuredAdjacentScroll(
+        physicalBefore, physicalAfter, downwardStep
+      );
       physicalStepCount += Number(Boolean(downwardStep?.moved));
       const physicalDelta = physicalBefore?.element === physicalAfter?.element
         ? Number(physicalAfter.top) - Number(physicalBefore.top)
