@@ -2325,6 +2325,24 @@
     };
   }
 
+  // At the verified physical bottom a weak marked-end anchor can have lost
+  // its original neighbouring DOM context through virtualization. Rebind only
+  // if the marked text signature identifies exactly one substantial message
+  // of the expected role in the entire collected chronological sequence.
+  // Never guess short/repeated turns or override a strong message ID.
+  function uniqueMarkedEndAtPhysicalBottom(messages, marker) {
+    if (!marker?.signature || isStrongMessageId(marker.id)) return -1;
+    const rows = messages || [];
+    const matches = [];
+    for (let i = 0; i < rows.length; i++) {
+      const message = rows[i];
+      if (marker.role && message.role !== marker.role) continue;
+      if (normalizeMatchText(message.text || '').length < 48) continue;
+      if (messageTextSignature(message) === marker.signature) matches.push(i);
+    }
+    return matches.length === 1 ? matches[0] : -1;
+  }
+
   function trimMessagesThroughBoundary(messages, boundary) {
     const rows = [...(messages || [])];
     const index = uniqueBoundaryIndex(rows, boundary);
@@ -4651,7 +4669,8 @@
       recoverLoadErrors = true,
       hydrateImages = false,
       hydrateVisibleImages = false,
-      attemptedImageSources = new Map()
+      attemptedImageSources = new Map(),
+      markedEnd = null
     } = {}
   ) {
     const stability = scrollRuntime().createStabilityState();
@@ -4908,9 +4927,46 @@
 
       if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
+          const completeRows = order.map(id => map.get(id)).filter(Boolean);
+          // The full collected sequence may contain the original neighbour
+          // context even when the currently mounted viewport no longer does.
+          // This exact check also works for short marked messages.
+          const exactIndex = uniqueBoundaryIndex(completeRows, boundary);
+          if (exactIndex >= 0) {
+            await progress(
+              'Этап 2/3: отмеченный конец найден в сохранённой хронологии · ' +
+                'реплика ' + (exactIndex + 1) + ' из ' + completeRows.length,
+              map.size,
+              { phase: 'walk', boundaryReached: true,
+                boundaryRecoveredFromCollected: true, force: true }
+            );
+            await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+            return { boundaryReached: true, physicalEndReached: true,
+              boundaryRecoveredFromCollected: true, markedEndIndex: exactIndex };
+          }
+          const reboundIndex = uniqueMarkedEndAtPhysicalBottom(completeRows, markedEnd);
+          if (reboundIndex >= 0 && boundary.kind === 'signature' &&
+              boundary.key === markedEnd.signature) {
+            // Only remove the stale DOM-neighbour requirement. The immutable
+            // marked text signature, role and unique occurrence still identify
+            // exactly which turn ends the selected range. Final trim will
+            // discard everything after it, never save the physical tail.
+            boundary.contextBefore = [];
+            await progress(
+              'Этап 2/3: отмеченный конец подтверждён по уникальному тексту · ' +
+                'реплика ' + (reboundIndex + 1) + ' из ' + completeRows.length,
+              map.size,
+              { phase: 'walk', boundaryReached: true,
+                boundaryRebound: true, force: true }
+            );
+            await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+            return { boundaryReached: true, physicalEndReached: true,
+              markedEndRebound: true, markedEndIndex: reboundIndex };
+          }
           throw new Error(
             'Достигнут физический конец, но отмеченная нижняя граница не найдена. ' +
-            'Ручной диапазон не сохранён, чтобы не выдать локальное окно за полный участок.'
+            'Уникальное совпадение отмеченного текста не подтверждено. ' +
+            'Собрано ' + completeRows.length + ' сообщений; черновик сохранён.'
           );
         }
         const endImageStats = capturedImageStats([...map.values()]);
@@ -5576,8 +5632,17 @@
             hydrateImages: queueFragmentResume || mode === 'fragment' ||
               mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
             hydrateVisibleImages: queueFragmentResume || mode === 'fragment',
-            attemptedImageSources: sequentialImageSources
+            attemptedImageSources: sequentialImageSources,
+            markedEnd: mode === 'fragment' ? selectedFragment?.end
+              : queueFragmentResume ? resumedDraft?.captureRange?.end : null
           });
+
+      if (walkResult?.markedEndRebound && mode === 'fragment') {
+        selectedFragment.end = {
+          ...selectedFragment.end,
+          contextBefore: []
+        };
+      }
 
       if (mode === 'full' &&
           (!verifiedSnapshotEnd?.verified || !verifiedFullStart?.verified ||
