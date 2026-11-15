@@ -7473,6 +7473,9 @@ chrome.tabs.onRemoved.addListener(tabId => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // Capture the event time before async handlers. A URL event emitted for a
+  // previous conversation/job must never terminate a newer current-tab run.
+  const eventObservedAt = Date.now();
   const managed = backgroundFocus.details(tabId);
   if (managed && changeInfo.url &&
       conversationKey(changeInfo.url) !== conversationKey(managed.expectedUrl || '')) {
@@ -7551,19 +7554,31 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     }
   }
 
-  // ChatGPT changes conversations using client-side routing without leaving
-  // chatgpt.com. Detect a changed conversation identity, not just the host.
+  // Chrome can deliver stale onUpdated snapshots after several async storage
+  // writes. Do not stop a collector because a non-URL event carries an old tab
+  // object, or because a URL event from the previous job completes late.
+  // Verify both an explicit URL change AND the actual current tab identity.
   const expectedConversation = conversationKey(job.sourceUrl || '');
-  const actualConversation = conversationKey(tab.url || changeInfo.url || '');
-  if (expectedConversation && actualConversation && actualConversation !== expectedConversation) {
-    await finishJobWithError(
-      job.jobId,
-      job.sourceTabId ?? job.tabId,
-      'Сбор остановлен: вкладка переключилась на другую переписку. Сохранённые контрольные точки не удалены.',
-      job.draftId || '',
-      Number(job.draftCount || 0)
-    );
-    return;
+  const eventConversation = conversationKey(changeInfo.url || '');
+  if (expectedConversation && eventConversation &&
+      eventConversation !== expectedConversation &&
+      eventObservedAt >= Number(job.startedAt || 0)) {
+    const liveTab = await chrome.tabs.get(tabId).catch(() => null);
+    const liveConversation = conversationKey(liveTab?.url || '');
+    const latestJob = await getJob();
+    if (latestJob?.jobId === job.jobId && latestJob.captureTabId === tabId &&
+        ['starting', 'running', 'paused'].includes(latestJob.status) &&
+        liveConversation === eventConversation) {
+      await finishJobWithError(
+        job.jobId,
+        job.sourceTabId ?? job.tabId,
+        'Сбор остановлен: подтверждён переход вкладки на другую переписку. ' +
+          'Сохранённые контрольные точки не удалены.',
+        job.draftId || '',
+        Number(job.draftCount || 0)
+      );
+      return;
+    }
   }
   if (changeInfo.status === 'loading' && !isChatGptUrl(tab.url || '')) {
     await finishJobWithError(
