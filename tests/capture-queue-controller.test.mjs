@@ -28,6 +28,7 @@ function fixture({
   const failNextDoneStateWrite = () => { failFinalStateWrite = true; };
   const archives = new Map();
   const published = [];
+  const registrations = [];
   const launches = [];
   const backgroundWindows = [];
   const cancelledMessages = [];
@@ -123,6 +124,10 @@ function fixture({
     },
     getArchive: async id => archives.get(id),
     publishArchive: async value => { published.push(value); archives.set(value.id, value); },
+    registerExistingArchive: async value => {
+      assert.equal(archives.get(value.id), value, 'the original durable archive must exist');
+      registrations.push(value.id);
+    },
     mergeMessage: (a, b) => ({ ...a, images: b.images || a.images || [] })
   };
   const controller = createCaptureQueueController(chrome, dependencies);
@@ -135,12 +140,30 @@ function fixture({
     throw new Error('Queue did not settle');
   }
   return {
-    controller, chrome, storage, data, archives, published, launches, settled,
+    controller, chrome, storage, data, archives, published, registrations, launches, settled,
     backgroundWindows, cancelledMessages, removedTabs,
     failNextDoneStateWrite,
     freshController: () => createCaptureQueueController(chrome, dependencies)
   };
 }
+
+test('completed full copy registers its existing blob without publishing it twice', async () => {
+  const f = fixture();
+  await f.controller.versionCheck('0.5.17');
+  await f.controller.enqueue({ sourceUrl: chat(91), mode: 'two-chats' });
+  await f.controller.enable(true);
+  const state = await f.settled(s => s.workers.length === 1 && s.workers[0].status === 'running');
+  const worker = state.workers[0];
+  const blob = archive('saved-q-' + worker.jobId, worker.sourceUrl, ['a', 'b']);
+  f.archives.set(blob.id, blob);
+  const completed = await f.controller.complete({jobId:worker.jobId,archiveId:blob.id},worker.captureTabId);
+  assert.equal(completed.ok, true);
+  assert.equal(f.published.length, 0, 'no second large archive write');
+  assert.deepEqual(f.registrations, [blob.id]);
+  const done = await f.controller.getState();
+  assert.equal(done.workers[0].status, 'done');
+  assert.equal(done.items[0].archiveId, blob.id);
+});
 
 test('two independent chats run at once and publish without cross-job progress changes', async () => {
   const f = fixture();
