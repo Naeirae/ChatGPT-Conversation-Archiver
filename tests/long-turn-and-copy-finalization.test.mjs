@@ -68,3 +68,16 @@ test('queued physical scroll has a bounded acknowledgement and preserves fail-cl
   assert.match(block, /20000,\\s*'Физическая прокрутка переписки'/);
   assert.match(block, /throw new Error\\(result\\?\\.error/);
 });
+
+
+test('checkpoint reads cannot silently block the marked-range walk', () => {
+  const start = content.indexOf('  async function persistRecoveryCheckpoint(');
+  const end = content.indexOf('  async function ', start + 20);
+  assert.ok(start >= 0 && end > start);
+  const block = content.slice(start, end);
+  assert.match(block, /const readCheckpointKey = async key =>/);
+  assert.match(block, /withCaptureOperationTimeout\\(\\s*chrome\\.storage\\.local\\.get\\(key\\),\\s*15000/);
+  assert.match(block, /readCheckpointKey\\(activeKey\\)/);
+  assert.match(block, /readCheckpointKey\\('draft:' \\+ draftId\\)/);
+  assert.doesNotMatch(block, /await chrome\\.storage\\.local\\.get\\(/);
+});
