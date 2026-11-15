@@ -116,3 +116,32 @@ test('first marked walk steps emit ordered diagnostic stage boundaries', () => {
     position = next;
   }
 });
+
+test('unchanged mounted turn is reused, but changed content or images are recaptured', () => {
+  const start = content.indexOf('  function reusableVisibleCapture(');
+  const end = content.indexOf('  function collect(', start);
+  assert.ok(start >= 0 && end > start);
+  const source = content.slice(start, end) + '\nreusableVisibleCapture';
+  const turn = { id: 'data-message-id:abc', text: 'long message', images: [] };
+  const saved = { id: turn.id, role: 'assistant', text: turn.text, images: [] };
+  const getCapture = runInNewContext(source, {
+    turnStableKey: value => value.id,
+    roleOf: () => 'assistant',
+    isStrongMessageId: id => id.startsWith('data-message-id:'),
+    turnIdentityContext: () => ({}),
+    identityContextsCompatible: () => true,
+    turnImageNodes: value => value.images,
+    imageSource: image => image.src,
+    contentRoot: value => value,
+    messageTextWithParagraphs: value => value.text
+  });
+  const map = new Map([[turn.id, saved]]);
+  assert.equal(getCapture(turn, map, {}, [turn]), saved);
+  turn.text = 'long message updated';
+  assert.equal(getCapture(turn, map, {}, [turn]), null);
+  turn.text = saved.text;
+  turn.images = [{ src: 'https://example.com/image.png' }];
+  assert.equal(getCapture(turn, map, {}, [turn]), null);
+  turn.images = [];
+  assert.equal(getCapture(turn, map, { includeReasoning: true }, [turn]), null);
+});
