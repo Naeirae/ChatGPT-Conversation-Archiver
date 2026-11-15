@@ -51,6 +51,7 @@ import {
 import { completedBoundedPass, fullTopEvidence } from './lib/capture-evidence.mjs';
 import { planVerifiedCompletedMerges } from './lib/completed-archive-merge.mjs';
 import { createCaptureQueueController } from './lib/capture-queue-controller.mjs';
+import { confirmedCaptureNavigation } from './lib/capture-navigation-guard.mjs';
 import { createBackgroundFocusManager } from './lib/background-focus-manager.mjs';
 import { freezeTransition } from './lib/capture-freeze-policy.mjs';
 import { shouldInspectCapture, captureStallEvidence, stallDiagnosticText } from './lib/capture-health-diagnostics.mjs';
@@ -7564,11 +7565,13 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
       eventConversation !== expectedConversation &&
       eventObservedAt >= Number(job.startedAt || 0)) {
     const liveTab = await chrome.tabs.get(tabId).catch(() => null);
-    const liveConversation = conversationKey(liveTab?.url || '');
     const latestJob = await getJob();
-    if (latestJob?.jobId === job.jobId && latestJob.captureTabId === tabId &&
-        ['starting', 'running', 'paused'].includes(latestJob.status) &&
-        liveConversation === eventConversation) {
+    if (confirmedCaptureNavigation({
+      job, liveJob: latestJob, tabId,
+      eventUrl: changeInfo.url,
+      liveUrl: liveTab?.url || '',
+      eventObservedAt
+    })) {
       await finishJobWithError(
         job.jobId,
         job.sourceTabId ?? job.tabId,
