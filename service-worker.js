@@ -6813,6 +6813,13 @@ const queueController = createCaptureQueueController(chrome, {
     await putArchive({ ...archive, partial: false, complete: true });
     await indexArchive(archive);
     await registerArchive(archive);
+  },
+  // Full queued captures are written and verified by the content collector
+  // before COMPLETE is sent. Re-index without serializing the full archive
+  // a second time. Split merges still use publishArchive for their new blob.
+  registerExistingArchive: async archive => {
+    await indexArchive(archive);
+    await registerArchive(archive);
   }
 });
 
