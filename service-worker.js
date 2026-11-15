@@ -7187,7 +7187,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           ...(countAdvance ? { lastCountAdvanceAt: Date.now() } : {})
         };
         const phaseChanged = message.patch?.phase && message.patch.phase !== job.phase;
-        const notable = phaseChanged || message.patch?.boundaryReached || message.patch?.anchorReached;
+        // Preserve first-window diagnostic checkpoints in the copied run log.
+        // Without this, cancelling a stalled capture overwrites its last UI
+        // message and hides the exact stage where DOM processing stopped.
+        const walkStage = String(message.patch?.walkDiagnosticStage || '');
+        const notable = phaseChanged || message.patch?.boundaryReached ||
+          message.patch?.anchorReached || Boolean(walkStage);
         if (notable) {
           await appendRunLog(
             { ...message.patch, ...evidencePatch,
@@ -7198,7 +7203,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 ? 'BOUNDARY_REACHED'
                 : message.patch?.anchorReached
                   ? 'RESUME_ANCHOR_REACHED'
-                  : 'PHASE_CHANGED',
+                  : walkStage
+                    ? 'WALK_' + walkStage.toUpperCase().replace(/-/g, '_')
+                    : 'PHASE_CHANGED',
               message: message.patch?.message || '',
               phase: message.patch?.phase || job.phase,
               count: Number(message.patch?.count || 0)
