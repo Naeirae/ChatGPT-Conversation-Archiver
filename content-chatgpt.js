@@ -4745,26 +4745,38 @@
             result?.observedEdge || wheelAttempt === 1) break;
       }
 
-      await progress(
-        'Этап 2/3: проверка физического сдвига · ' + map.size +
-          ' сообщений · позиция ' +
-          (physicalAfterWheel ? Math.round(physicalAfterWheel.top) + ' px' : 'не определена'),
-        map.size,
-        {
-          phase: 'walk',
-          physicalScrollTop: physicalAfterWheel?.top ?? null,
-          physicalScrollHeight: physicalAfterWheel?.scrollHeight ?? null,
-          force: true
-        }
-      );
+      // First-steps probes distinguish a physically stuck viewport from a
+      // synchronous DOM-processing stall. These are progress records, not
+      // claims of message coverage or boundary verification.
+      const traceWalkStage = async (stage, label) => {
+        if (i >= 3) return;
+        await progress(
+          'Этап 2/3: ' + label + ' · ' + map.size + ' сообщений · позиция ' +
+            (physicalAfterWheel ? Math.round(physicalAfterWheel.top) + ' px' : 'не определена'),
+          map.size,
+          {
+            phase: 'walk',
+            walkDiagnosticStage: stage,
+            walkDiagnosticIteration: i + 1,
+            physicalScrollTop: physicalAfterWheel?.top ?? null,
+            physicalScrollHeight: physicalAfterWheel?.scrollHeight ?? null,
+            force: true
+          }
+        );
+      };
+      await traceWalkStage('wheel-verified', 'физический шаг выполнен');
+      await traceWalkStage('expand-enter', 'проверяю раскрытие сообщений');
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      await traceWalkStage('expand-done', 'раскрытие завершено');
       const secondForwardStep = measuredAdjacentScroll(
         physicalBefore, sampleCaptureScroller(), downwardStep
       );
+      await traceWalkStage('collect-enter', 'читаю содержимое видимых реплик');
       const secondTouchedIds = collect(map, order, settings, boundary, {
         verifiedForwardStep: secondForwardStep
       });
+      await traceWalkStage('collect-done', 'чтение реплик завершено');
       if (hydrateImages) {
         await hydrateSequentialImages(
           secondTouchedIds.map(id => map.get(id)).filter(Boolean),
