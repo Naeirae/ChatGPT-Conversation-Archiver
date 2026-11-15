@@ -209,7 +209,8 @@ test('two independent chats run at once and publish without cross-job progress c
   const b = archive('arc2-q-' + second.jobId, chat(2), ['a','b','c']);
   f.archives.set(b.id, b);
   assert.equal((await f.controller.complete({ jobId: second.jobId, archiveId: b.id }, second.captureTabId)).ok, true);
-  assert.deepEqual(f.published.map(a => a.id), [a.id,b.id]);
+  assert.deepEqual(f.registrations, [a.id, b.id]);
+  assert.equal(f.published.length, 0);
 });
 
 test('one experimental split reserves both slots and publishes only a verified overlap', async () => {
@@ -287,7 +288,8 @@ test('one failed chat does not stop its sibling or replace the completed archive
     jobId: second.jobId, archiveId: completed.id
   }, second.captureTabId);
   assert.equal(result.ok, true);
-  assert.deepEqual(f.published.map(a => a.id), [completed.id]);
+  assert.deepEqual(f.registrations, [completed.id]);
+  assert.equal(f.published.length, 0);
 });
 
 test('a worker cannot publish a foreign or unverified archive', async () => {
