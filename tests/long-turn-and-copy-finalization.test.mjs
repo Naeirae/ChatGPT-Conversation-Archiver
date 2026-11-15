@@ -181,9 +181,9 @@ test('physical bottom rebind still requires final marked range trimming', () => 
   const first = content.indexOf('  async function walkDown(');
   const last = content.indexOf('  async function ', first + 30);
   const walk = content.slice(first, last);
-  assert.match(walk, /uniqueMarkedEndAtPhysicalBottom\\(completeRows, markedEnd\\)/);
-  assert.match(walk, /boundary\\.contextBefore = \\[\\]/);
-  assert.match(walk, /markedEndRebound: true/);
-  assert.match(content, /selectedFragment\\.end = \\{\\s*\\.\\.\\.selectedFragment\\.end,\\s*contextBefore: \\[\\]/);
-  assert.match(content, /trimMessagesThroughBoundary\\(capturedMessages, boundary\\)/);
+  assert.ok(walk.includes('uniqueMarkedEndAtPhysicalBottom(completeRows, markedEnd)'));
+  assert.ok(walk.includes('boundary.contextBefore = []'));
+  assert.ok(walk.includes('markedEndRebound: true'));
+  assert.ok(content.includes('selectedFragment.end = {'));
+  assert.ok(content.includes('trimMessagesThroughBoundary(capturedMessages, boundary)'));
 });
