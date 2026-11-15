@@ -102,3 +102,17 @@ test('downward capture retries a no-op physical wheel and reports measured posit
   assert.match(body, /проверка физического сдвига/);
   assert.match(body, /verifiedForwardStep: secondForwardStep/);
 });
+
+test('first marked walk steps emit ordered diagnostic stage boundaries', () => {
+  const start = content.indexOf('  async function walkDown(');
+  const end = content.indexOf('  async function ', start + 30);
+  assert.ok(start >= 0 && end > start);
+  const body = content.slice(start, end);
+  const stages = ['wheel-verified', 'expand-enter', 'expand-done', 'collect-enter', 'collect-done'];
+  let position = -1;
+  for (const stage of stages) {
+    const next = body.indexOf("traceWalkStage('" + stage + "'", position + 1);
+    assert.ok(next > position, 'missing or unordered stage: ' + stage);
+    position = next;
+  }
+});
