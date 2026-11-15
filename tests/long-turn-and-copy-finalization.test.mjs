@@ -187,3 +187,34 @@ test('physical bottom rebind still requires final marked range trimming', () => 
   assert.ok(content.includes('selectedFragment.end = {'));
   assert.ok(content.includes('trimMessagesThroughBoundary(capturedMessages, boundary)'));
 });
+
+test('unique weak identity remains canonical when only DOM neighbour context changes', () => {
+  const first = content.indexOf('  function unchangedWeakOccurrence(');
+  const last = content.indexOf('  function collect(', first);
+  assert.ok(first >= 0 && last > first);
+  const check = runInNewContext(content.slice(first,last) + '\nunchangedWeakOccurrence', {
+    normalizeMatchText: text => String(text || '').trim(),
+    messageTextSignature: item => item.role + ':' + item.text
+  });
+  const text = 'A substantial and unique assistant reply whose neighbour was virtualized away.';
+  const saved = { id: 'turn:virtual:assistant:hash', role: 'assistant', text,
+    identityStrong: false, identityContext: { previous: 'old' } };
+  const newMessage = { ...saved, identityContext: { previous: 'new' } };
+  const map = new Map([[saved.id,saved]]);
+  assert.equal(check(newMessage, [newMessage], map), true);
+  assert.equal(check(newMessage, [newMessage, {...newMessage,id:'repeat'}], map), false);
+  assert.equal(check(newMessage, [newMessage], new Map([[saved.id,saved],['other', {...saved,id:'other'}]])), false);
+  assert.equal(check({...newMessage,text:'short'}, [{...newMessage,text:'short'}],map), false);
+  assert.equal(check({...newMessage,identityStrong:true}, [newMessage],map), false);
+  assert.equal(check({...newMessage,id:'another-wrapper'},[newMessage],map), false);
+});
+
+test('weak identity context correction never mutates a saved map object', () => {
+  const begin = content.indexOf('  function collect(');
+  const end = content.indexOf('  function rebuildCaptureMap(',begin);
+  const block = content.slice(begin,end);
+  assert.ok(block.includes('message = { ...message, id: messageId,'));
+  assert.ok(block.includes('weakOriginalId: existing.id'));
+  assert.ok(block.includes('windowMessages[i] = { ...map.get(candidate.id) }'));
+  assert.doesNotMatch(block,/message\.id = messageId/);
+});
