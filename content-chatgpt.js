@@ -4928,6 +4928,22 @@
       if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
           const completeRows = order.map(id => map.get(id)).filter(Boolean);
+          // The full collected sequence may contain the original neighbour
+          // context even when the currently mounted viewport no longer does.
+          // This exact check also works for short marked messages.
+          const exactIndex = uniqueBoundaryIndex(completeRows, boundary);
+          if (exactIndex >= 0) {
+            await progress(
+              'Этап 2/3: отмеченный конец найден в сохранённой хронологии · ' +
+                'реплика ' + (exactIndex + 1) + ' из ' + completeRows.length,
+              map.size,
+              { phase: 'walk', boundaryReached: true,
+                boundaryRecoveredFromCollected: true, force: true }
+            );
+            await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+            return { boundaryReached: true, physicalEndReached: true,
+              boundaryRecoveredFromCollected: true, markedEndIndex: exactIndex };
+          }
           const reboundIndex = uniqueMarkedEndAtPhysicalBottom(completeRows, markedEnd);
           if (reboundIndex >= 0 && boundary.kind === 'signature' &&
               boundary.key === markedEnd.signature) {
