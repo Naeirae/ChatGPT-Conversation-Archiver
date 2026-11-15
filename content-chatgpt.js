@@ -2057,8 +2057,8 @@
       const context = turnIdentityContext(turn, knownTurns);
       if (!identityContextsCompatible(saved.identityContext, context)) return null;
     }
-    const images = turnImageNodes(turn, saved.role)
-      .map(imageSource).filter(Boolean);
+    const images = [...new Set(turnImageNodes(turn, saved.role)
+      .map(imageSource).filter(Boolean))];
     const previous = (saved.images || []).map(image => String(image.src || ''))
       .filter(Boolean);
     if (images.length !== previous.length ||
