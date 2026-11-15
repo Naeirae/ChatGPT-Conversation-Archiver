@@ -269,14 +269,22 @@
       // Wait for Resume and retry the step instead of aborting the capture.
       for (let attempt = 0; attempt < 8; attempt++) {
         await waitIfPaused();
-        result = await chrome.runtime.sendMessage({
-          type: 'ARCHIVER_PHYSICAL_SCROLL',
-          queueCapture: state.queueCapture,
-          jobId,
-          direction: normalizedDirection,
-          bursts,
-          wheelDelta
-        });
+        // A queued background scroll can lose its response after an MV3
+        // worker/debugger interruption. Never strand the marked-range walk
+        // indefinitely on a pending sendMessage promise: the outer capture
+        // catch preserves the latest chronological draft on timeout.
+        result = await withCaptureOperationTimeout(
+          chrome.runtime.sendMessage({
+            type: 'ARCHIVER_PHYSICAL_SCROLL',
+            queueCapture: state.queueCapture,
+            jobId,
+            direction: normalizedDirection,
+            bursts,
+            wheelDelta
+          }),
+          20000,
+          'Физическая прокрутка переписки'
+        );
         if (result?.ok) break;
         if (result?.paused === true && result?.error === 'CAPTURE_PAUSED') {
           await waitIfPaused();
