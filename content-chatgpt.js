@@ -4098,6 +4098,14 @@
 
   async function persistRecoveryCheckpoint(map, order, boundary, { force = false } = {}) {
     const jobId = state.jobId;
+    const readCheckpointKey = async key => {
+      const stored = await withCaptureOperationTimeout(
+        chrome.storage.local.get(key),
+        15000,
+        'Чтение контрольной точки (' + key.split(':')[0] + ')'
+      );
+      return stored[key];
+    };
     if (!jobId || !boundary?.kind || !boundary?.key || !order.length ||
         state.verificationPassActive) return;
 
@@ -4115,7 +4123,7 @@
     if (!checkpointDue(last, now, order.length, minInterval, minDelta, force)) return;
 
     const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
-    const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
+    const current = (await readCheckpointKey(activeKey)) || {};
     if (current.jobId !== jobId) return;
     // Image-only repair and resume navigation must not replace the canonical
     // chronological prefix with a transient, virtualized DOM window.
@@ -4129,12 +4137,12 @@
     const canonicalRecoveryDraftId =
       current.draftId || current.recoveryDraftId || '';
     const canonicalRecoveryDraft = canonicalRecoveryDraftId
-      ? (await chrome.storage.local.get('draft:' + canonicalRecoveryDraftId))['draft:' + canonicalRecoveryDraftId]
+      ? (await readCheckpointKey('draft:' + canonicalRecoveryDraftId))
       : null;
     // On a resumed downward pass, every checkpoint must include the already
     // saved prefix; otherwise a second failure exposes only the new tail.
     if (current.recoveryDraftId && current.phase !== 'top') {
-      const prior = (await chrome.storage.local.get('draft:' + current.recoveryDraftId))['draft:' + current.recoveryDraftId];
+      const prior = (await readCheckpointKey('draft:' + current.recoveryDraftId));
       if (prior?.messages?.length) {
         const used = new Set();
         const combined = prior.messages.map(previous => {
@@ -4153,7 +4161,7 @@
     // In the upward phase the next checkpoint is cumulative. The older saved
     // slice is retained even when Chrome virtualizes it out of the DOM.
     if (current.recoveryDraftId && current.phase === 'top') {
-      const preserved = (await chrome.storage.local.get('draft:' + current.recoveryDraftId))['draft:' + current.recoveryDraftId];
+      const preserved = (await readCheckpointKey('draft:' + current.recoveryDraftId));
       if (preserved?.capturePhase === 'top' && preserved.messages?.length) {
         const known = new Set(preserved.messages.map(item => item.id).filter(Boolean));
         messages = preserved.messages.concat(messages.filter(item => !item.id || !known.has(item.id)));
@@ -4199,7 +4207,7 @@
 
     // Never replace a longer verified saved prefix with a shorter transient
     // checkpoint. A resumed walk may only grow or enrich that prefix.
-    const storedBeforeWrite = (await chrome.storage.local.get('draft:' + draftId))['draft:' + draftId];
+    const storedBeforeWrite = (await readCheckpointKey('draft:' + draftId));
     if (['resume-draft', 'retry-walk'].includes(current.captureMode) &&
         storedBeforeWrite?.messages?.length) {
       const oldPrefix = storedBeforeWrite.messages;
