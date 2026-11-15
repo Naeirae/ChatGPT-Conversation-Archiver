@@ -2051,7 +2051,7 @@
   // A long logical message can stay mounted for hundreds of 220px steps.
   // The legacy reuse path still hashes all text and scans every image on
   // each step. A mutation-tracked unchanged DOM can reuse its saved capture.
-  const unchangedTurnCache = new WeakMap();
+  let unchangedTurnCache = new WeakMap();
   const unchangedTurnObservers = new Set();
   function rememberUnchangedTurn(turn, id) {
     if (!turn?.isConnected || !id || typeof MutationObserver === 'undefined') return;
@@ -2084,6 +2084,7 @@
   function resetUnchangedTurnCache() {
     for (const observer of unchangedTurnObservers) observer.disconnect();
     unchangedTurnObservers.clear();
+    unchangedTurnCache = new WeakMap();
   }
 
   function reusableVisibleCapture(turn, map, settings, knownTurns) {
