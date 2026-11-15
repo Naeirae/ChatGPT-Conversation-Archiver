@@ -145,3 +145,45 @@ test('unchanged mounted turn is reused, but changed content or images are recapt
   turn.images = [];
   assert.equal(getCapture(turn, map, { includeReasoning: true }, [turn]), null);
 });
+
+test('weak marked end rebinds only to a unique substantive matching turn', () => {
+  const first = content.indexOf('  function uniqueMarkedEndAtPhysicalBottom(');
+  const last = content.indexOf('  function trimMessagesThroughBoundary(', first);
+  assert.ok(first >= 0 && last > first);
+  const resolve = runInNewContext(
+    content.slice(first, last) + '\nuniqueMarkedEndAtPhysicalBottom',
+    {
+      isStrongMessageId: id => /^data-message-id:/.test(id || ''),
+      normalizeMatchText: value => String(value || '').trim(),
+      messageTextSignature: message => message.role + ':' + message.text
+    }
+  );
+  const long = 'This is a uniquely identifiable marked end message with enough text.';
+  const rows = [
+    { role: 'assistant', text: 'A different long message with its own identity.' },
+    { role: 'user', text: long },
+    { role: 'assistant', text: 'Another message after the marked end.' }
+  ];
+  const marker = { id: 'turn:virtual', role: 'user', signature: 'user:' + long,
+    contextBefore: ['previous-mounted-turn-that-is-no-longer-present'] };
+  assert.equal(resolve(rows, marker), 1);
+  assert.equal(resolve([...rows, { role: 'user', text: long }], marker), -1,
+    'repeated text is not a safe end marker');
+  assert.equal(resolve(rows, { ...marker, id: 'data-message-id:immutable' }), -1,
+    'do not override strong immutable identities');
+  assert.equal(resolve([{ role: 'user', text: 'short' }],
+    { ...marker, signature: 'user:short' }), -1);
+  assert.equal(resolve([{ role: 'assistant', text: long }], marker), -1,
+    'wrong role must never match');
+});
+
+test('physical bottom rebind still requires final marked range trimming', () => {
+  const first = content.indexOf('  async function walkDown(');
+  const last = content.indexOf('  async function ', first + 30);
+  const walk = content.slice(first, last);
+  assert.match(walk, /uniqueMarkedEndAtPhysicalBottom\\(completeRows, markedEnd\\)/);
+  assert.match(walk, /boundary\\.contextBefore = \\[\\]/);
+  assert.match(walk, /markedEndRebound: true/);
+  assert.match(content, /selectedFragment\\.end = \\{\\s*\\.\\.\\.selectedFragment\\.end,\\s*contextBefore: \\[\\]/);
+  assert.match(content, /trimMessagesThroughBoundary\\(capturedMessages, boundary\\)/);
+});
