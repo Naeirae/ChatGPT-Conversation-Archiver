@@ -2053,26 +2053,41 @@
   // each step. A mutation-tracked unchanged DOM can reuse its saved capture.
   let unchangedTurnCache = new WeakMap();
   const unchangedTurnObservers = new Set();
-  function rememberUnchangedTurn(turn, id) {
+  function rememberUnchangedTurn(turn, id, knownTurns = []) {
     if (!turn?.isConnected || !id || typeof MutationObserver === 'undefined') return;
     const previous = unchangedTurnCache.get(turn);
     if (previous) {
       previous.observer.disconnect();
       unchangedTurnObservers.delete(previous.observer);
     }
-    const entry = { id, dirty: false, parent: turn.parentElement, observer: null };
+    const index = knownTurns.indexOf(turn);
+    const strong = isStrongMessageId(id);
+    const previousTurn = !strong && index > 0 ? knownTurns[index - 1] : null;
+    const nextTurn = !strong && index >= 0 ? (knownTurns[index + 1] || null) : null;
+    const entry = { id, dirty: false, parent: turn.parentElement,
+      previousTurn, nextTurn, observer: null };
     const observer = new MutationObserver(() => { entry.dirty = true; });
-    observer.observe(turn, {
-      subtree: true, childList: true, characterData: true, attributes: true
-    });
+    const options = { subtree: true, childList: true,
+      characterData: true, attributes: true };
+    observer.observe(turn, options);
+    // Weak wrapper IDs additionally depend on neighbouring turn text.
+    // Observe those nodes too, or a changed neighbour could be mistaken for
+    // the same occurrence of repeated text.
+    if (previousTurn) observer.observe(previousTurn, options);
+    if (nextTurn) observer.observe(nextTurn, options);
     entry.observer = observer;
     unchangedTurnCache.set(turn, entry);
     unchangedTurnObservers.add(observer);
   }
-  function existingUnchangedTurn(turn, map, settings) {
+  function existingUnchangedTurn(turn, map, settings, knownTurns = []) {
     if (settings?.includeReasoning || !turn?.isConnected) return null;
     const entry = unchangedTurnCache.get(turn);
     if (!entry || entry.dirty || entry.parent !== turn.parentElement) return null;
+    if (!isStrongMessageId(entry.id)) {
+      const index = knownTurns.indexOf(turn);
+      if (index < 0 || (index > 0 ? knownTurns[index - 1] : null) !== entry.previousTurn ||
+          (knownTurns[index + 1] || null) !== entry.nextTurn) return null;
+    }
     const saved = map.get(entry.id);
     if (!saved || saved.role !== roleOf(turn)) return null;
     if (entry.observer.takeRecords().length) {
@@ -2167,7 +2182,7 @@
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
-      const message = existingUnchangedTurn(turn, map, settings) ||
+      const message = existingUnchangedTurn(turn, map, settings, mountedTurns) ||
         reusableVisibleCapture(turn, map, settings, mountedTurns) ||
         captureTurn(turn, ordinal, settings, mountedTurns);
       if (message) {
@@ -2185,7 +2200,7 @@
         }
         windowMessages.push(message);
         touchedIds.push(messageId);
-        rememberUnchangedTurn(turn, messageId);
+        rememberUnchangedTurn(turn, messageId, mountedTurns);
       }
       if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
           turnTrailingEdgeVisible(turn)) break;
