@@ -2124,6 +2124,28 @@
     return saved;
   }
 
+  // A weak virtual wrapper may keep its text identity while ChatGPT removes
+  // the preceding DOM turns. This does not create a new logical message.
+  // Only rebind when the same weak ID and substantial text appear exactly
+  // once in BOTH the saved prefix and current window. Different wrapper IDs
+  // and repeated text remain subject to ordinary chronology verification.
+  function unchangedWeakOccurrence(message, windowMessages, map) {
+    if (!message || message.identityStrong ||
+        normalizeMatchText(message.text || '').length < 48) return false;
+    const saved = map.get(message.id);
+    if (!saved || saved.identityStrong ||
+        saved.role !== message.role ||
+        saved.text !== message.text) return false;
+    const signature = messageTextSignature(message);
+    const occurrences = windowMessages.filter(item =>
+      item.role === message.role && messageTextSignature(item) === signature
+    );
+    const stored = [...map.values()].filter(item =>
+      item.role === message.role && messageTextSignature(item) === signature
+    );
+    return occurrences.length === 1 && stored.length === 1;
+  }
+
   function collect(map, order, settings, stopBoundary = null, { verifiedForwardStep = false } = {}) {
     // Mounted turns are not necessarily visible turns. In particular a stale
     // virtualized window or another ChatGPT panel must not enter the archive.
@@ -2182,7 +2204,7 @@
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
-      const message = existingUnchangedTurn(turn, map, settings, mountedTurns) ||
+      let message = existingUnchangedTurn(turn, map, settings, mountedTurns) ||
         reusableVisibleCapture(turn, map, settings, mountedTurns) ||
         captureTurn(turn, ordinal, settings, mountedTurns);
       if (message) {
@@ -2190,13 +2212,16 @@
         const existing = map.get(messageId);
         if (existing && !message.identityStrong &&
             !identityContextsCompatible(existing.identityContext, message.identityContext)) {
+          // Do not mutate a cached object that also lives in the canonical
+          // map. Check uniqueness after capturing the full visible window.
           const contextKey = hashText([
             message.identityContext?.previous || '',
             messageTextSignature(message),
             message.identityContext?.next || ''
           ].join('|'));
           messageId += ':ctx:' + contextKey;
-          message.id = messageId;
+          message = { ...message, id: messageId,
+            weakOriginalId: existing.id };
         }
         windowMessages.push(message);
         touchedIds.push(messageId);
@@ -2204,6 +2229,19 @@
       }
       if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
           turnTrailingEdgeVisible(turn)) break;
+    }
+
+    // Restore the canonical ID when the virtual wrapper's neighbour context
+    // was merely remounted. Do this only after the entire window is known, so
+    // an identical repeated turn remains distinguishable.
+    for (let i = 0; i < windowMessages.length; i++) {
+      const item = windowMessages[i];
+      if (!item.weakOriginalId) continue;
+      const candidate = { ...item, id: item.weakOriginalId };
+      if (!unchangedWeakOccurrence(candidate, windowMessages, map)) continue;
+      windowMessages[i] = { ...map.get(candidate.id) };
+      const touched = touchedIds.indexOf(item.id);
+      if (touched >= 0) touchedIds[touched] = candidate.id;
     }
 
     // A chronological pass must NEVER interpret discovery time as chronology.
