@@ -57,3 +57,14 @@ test('copied split lane can acknowledge after durable save without waiting for m
   assert.doesNotMatch(block, /await finalizeSplit\(worker\.itemId\)/);
   assert.match(block, /return \{ ok: true, status: 'done', archiveId: archive\.id \}/);
 });
+
+
+test('queued physical scroll has a bounded acknowledgement and preserves fail-closed handling', () => {
+  const start = content.indexOf('    async function physicalScroll({');
+  const end = content.indexOf('    return Object.freeze({', start);
+  assert.ok(start >= 0 && end > start);
+  const block = content.slice(start, end);
+  assert.match(block, /withCaptureOperationTimeout\\(\\s*chrome\\.runtime\\.sendMessage\\(/);
+  assert.match(block, /20000,\\s*'Физическая прокрутка переписки'/);
+  assert.match(block, /throw new Error\\(result\\?\\.error/);
+});
