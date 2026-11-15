@@ -2044,6 +2044,32 @@
     return clicks;
   }
 
+  // Repeated 220px scrolls can stay inside the same huge assistant turn.
+  // Avoid cloning and sanitizing its whole DOM again when text identity and
+  // attachments have not changed. We still check weak identity context so
+  // recycled virtual wrappers cannot silently merge different messages.
+  function reusableVisibleCapture(turn, map, settings, knownTurns) {
+    if (settings?.includeReasoning) return null;
+    const id = turnStableKey(turn);
+    const saved = id && map.get(id);
+    if (!saved || saved.role !== roleOf(turn)) return null;
+    if (!isStrongMessageId(id)) {
+      const context = turnIdentityContext(turn, knownTurns);
+      if (!identityContextsCompatible(saved.identityContext, context)) return null;
+    }
+    const images = turnImageNodes(turn, saved.role)
+      .map(imageSource).filter(Boolean);
+    const previous = (saved.images || []).map(image => String(image.src || ''))
+      .filter(Boolean);
+    if (images.length !== previous.length ||
+        images.some((src, index) => src !== previous[index])) return null;
+    // For strong IDs, the text can evolve while a response renders. Refresh
+    // the capture when that happens rather than reusing stale content.
+    const root = contentRoot(turn, saved.role);
+    if (messageTextWithParagraphs(root, saved.role) !== saved.text) return null;
+    return saved;
+  }
+
   function collect(map, order, settings, stopBoundary = null, { verifiedForwardStep = false } = {}) {
     // Mounted turns are not necessarily visible turns. In particular a stale
     // virtualized window or another ChatGPT panel must not enter the archive.
@@ -2102,7 +2128,8 @@
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
-      const message = captureTurn(turn, ordinal, settings, mountedTurns);
+      const message = reusableVisibleCapture(turn, map, settings, mountedTurns) ||
+        captureTurn(turn, ordinal, settings, mountedTurns);
       if (message) {
         let messageId = message.id;
         const existing = map.get(messageId);
