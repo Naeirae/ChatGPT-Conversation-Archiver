@@ -2048,6 +2048,44 @@
   // Avoid cloning and sanitizing its whole DOM again when text identity and
   // attachments have not changed. We still check weak identity context so
   // recycled virtual wrappers cannot silently merge different messages.
+  // A long logical message can stay mounted for hundreds of 220px steps.
+  // The legacy reuse path still hashes all text and scans every image on
+  // each step. A mutation-tracked unchanged DOM can reuse its saved capture.
+  const unchangedTurnCache = new WeakMap();
+  const unchangedTurnObservers = new Set();
+  function rememberUnchangedTurn(turn, id) {
+    if (!turn?.isConnected || !id || typeof MutationObserver === 'undefined') return;
+    const previous = unchangedTurnCache.get(turn);
+    if (previous) {
+      previous.observer.disconnect();
+      unchangedTurnObservers.delete(previous.observer);
+    }
+    const entry = { id, dirty: false, parent: turn.parentElement, observer: null };
+    const observer = new MutationObserver(() => { entry.dirty = true; });
+    observer.observe(turn, {
+      subtree: true, childList: true, characterData: true, attributes: true
+    });
+    entry.observer = observer;
+    unchangedTurnCache.set(turn, entry);
+    unchangedTurnObservers.add(observer);
+  }
+  function existingUnchangedTurn(turn, map, settings) {
+    if (settings?.includeReasoning || !turn?.isConnected) return null;
+    const entry = unchangedTurnCache.get(turn);
+    if (!entry || entry.dirty || entry.parent !== turn.parentElement) return null;
+    const saved = map.get(entry.id);
+    if (!saved || saved.role !== roleOf(turn)) return null;
+    if (entry.observer.takeRecords().length) {
+      entry.dirty = true;
+      return null;
+    }
+    return saved;
+  }
+  function resetUnchangedTurnCache() {
+    for (const observer of unchangedTurnObservers) observer.disconnect();
+    unchangedTurnObservers.clear();
+  }
+
   function reusableVisibleCapture(turn, map, settings, knownTurns) {
     if (settings?.includeReasoning) return null;
     const id = turnStableKey(turn);
@@ -2128,7 +2166,8 @@
     const touchedIds = [];
     for (let ordinal = 0; ordinal < turns.length; ordinal++) {
       const turn = turns[ordinal];
-      const message = reusableVisibleCapture(turn, map, settings, mountedTurns) ||
+      const message = existingUnchangedTurn(turn, map, settings) ||
+        reusableVisibleCapture(turn, map, settings, mountedTurns) ||
         captureTurn(turn, ordinal, settings, mountedTurns);
       if (message) {
         let messageId = message.id;
@@ -2145,6 +2184,7 @@
         }
         windowMessages.push(message);
         touchedIds.push(messageId);
+        rememberUnchangedTurn(turn, messageId);
       }
       if (stopBoundary && matchesBoundary(turn, stopBoundary) &&
           turnTrailingEdgeVisible(turn)) break;
@@ -5147,6 +5187,7 @@
       }).catch(() => {});
     } finally {
       state.running = false;
+      resetUnchangedTurnCache();
       state.paused = false;
       state.cancel = false;
       state.queueCapture = false;
@@ -6540,6 +6581,7 @@
       } catch (_) {}
     } finally {
       state.running = false;
+      resetUnchangedTurnCache();
       state.jobId = null;
       state.queueCapture = false;
       state.cancel = false;
