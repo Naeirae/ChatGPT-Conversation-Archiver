@@ -896,8 +896,9 @@
     const role = roleOf(turn) || 'unknown';
     const root = contentRoot(turn, role);
     if (!root) return '';
-    const copy = root.cloneNode(true);
-    copy.querySelectorAll('.archiver-fragment-buttons,[data-archiver-ui="true"]').forEach(node => node.remove());
+    // Never clone the full message DOM just to compute a signature. On long
+    // replies this was repeated during every settle poll after each wheel
+    // event, even though the clone was never read.
     // Read layout text from the live node: innerText on a detached clone falls
     // back to textContent and silently concatenates paragraph boundaries.
     return messageTextWithParagraphs(root, role);
@@ -4722,12 +4723,40 @@
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
       // and re-approach instead of silently accepting a possible gap.
-      const downwardStep = await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
-        settleTimeout: 1150,
-        quietWindow: 190,
-        wheelDelta: 220
-      });
+      // Physically attempt the movement and verify it using the SAME live
+      // scroller, not the message count (one reply can span many viewports).
+      // A no-op wheel gets a second attempt before the stall detector runs.
+      // Neither attempt is allowed to certify an unverified chronological seam.
+      let downwardStep = null;
+      let physicalAfterWheel = null;
+      for (let wheelAttempt = 0; wheelAttempt < 2; wheelAttempt++) {
+        const result = await physicalScroll('down', Math.max(1, Math.min(2, bursts)), {
+          settleTimeout: 1150,
+          quietWindow: 190,
+          wheelDelta: 220
+        });
+        downwardStep = result;
+        physicalAfterWheel = sampleCaptureScroller();
+        const actualDelta = physicalBefore?.element &&
+          physicalBefore.element === physicalAfterWheel?.element
+          ? Number(physicalAfterWheel.top) - Number(physicalBefore.top)
+          : NaN;
+        if ((Number.isFinite(actualDelta) && actualDelta >= 2) ||
+            result?.observedEdge || wheelAttempt === 1) break;
+      }
 
+      await progress(
+        'Этап 2/3: проверка физического сдвига · ' + map.size +
+          ' сообщений · позиция ' +
+          (physicalAfterWheel ? Math.round(physicalAfterWheel.top) + ' px' : 'не определена'),
+        map.size,
+        {
+          phase: 'walk',
+          physicalScrollTop: physicalAfterWheel?.top ?? null,
+          physicalScrollHeight: physicalAfterWheel?.scrollHeight ?? null,
+          force: true
+        }
+      );
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
       const secondForwardStep = measuredAdjacentScroll(
@@ -4753,7 +4782,7 @@
       const physicalDelta = physicalBefore?.element === physicalAfter?.element
         ? Number(physicalAfter.top) - Number(physicalBefore.top)
         : null;
-      if (physicalStepCount === 1 || physicalStepCount % 8 === 0) {
+      if (physicalStepCount === 1 || physicalStepCount % 4 === 0) {
         await progress(
           'Этап 2/3: движение вниз · ' + map.size + ' сообщений · ' +
             physicalStepCount + ' шагов · позиция ' +

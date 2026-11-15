@@ -81,3 +81,24 @@ test('checkpoint reads cannot silently block the marked-range walk', () => {
   assert.match(block, /readCheckpointKey\\('draft:' \\+ draftId\\)/);
   assert.doesNotMatch(block, /await chrome\\.storage\\.local\\.get\\(/);
 });
+
+test('text signature does not clone entire long turn for every scroll poll', () => {
+  const start = content.indexOf('  function turnMessageText(turn)');
+  const end = content.indexOf('  function turnTextSignature(', start);
+  assert.ok(start >= 0 && end > start);
+  const body = content.slice(start, end);
+  assert.doesNotMatch(body, /cloneNode\\(/);
+  assert.match(body, /messageTextWithParagraphs\\(root, role\\)/);
+});
+
+test('downward capture retries a no-op physical wheel and reports measured position', () => {
+  const start = content.indexOf('  async function walkDown(');
+  const end = content.indexOf('  async function ', start + 30);
+  assert.ok(start >= 0 && end > start);
+  const body = content.slice(start, end);
+  assert.match(body, /wheelAttempt < 2/);
+  assert.match(body, /physicalAfterWheel = sampleCaptureScroller\\(\\)/);
+  assert.match(body, /actualDelta >= 2/);
+  assert.match(body, /проверка физического сдвига/);
+  assert.match(body, /verifiedForwardStep: secondForwardStep/);
+});
