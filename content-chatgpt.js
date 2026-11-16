@@ -1886,7 +1886,17 @@
     }
   }
 
-  async function hydrateMessageImages(messages, { onlyMissing = false, reportProgress = true, quickAttempt = false } = {}) {
+  async function hydrateMessageImages(messages, {
+    onlyMissing = false,
+    reportProgress = true,
+    quickAttempt = false,
+    // A manually selected text archive must publish its verified chronology
+    // even when CDN images reject binary downloads (HTTP 403). Image recovery
+    // remains a separate explicit operation with its own larger budget.
+    timeBudgetMs = quickAttempt ? 30000 : 180000,
+    perImageFetchMs = quickAttempt ? 6000 : 45000,
+    perImageEncodeMs = quickAttempt ? 4000 : 15000
+  } = {}) {
     const unique = new Map();
     for (const message of messages || []) {
       for (const image of message.images || []) {
@@ -1903,7 +1913,7 @@
     const total = unique.size;
     // Do not hold an otherwise complete text archive hostage to hundreds of
     // slow/unavailable image URLs. Missing binaries stay recoverable later.
-    const deadline = Date.now() + (quickAttempt ? 30000 : 180000);
+    const deadline = Date.now() + Math.max(1000, Number(timeBudgetMs) || 1000);
 
     for (const [src, refs] of unique) {
       if (state.cancel) throw new Error('Сбор отменен.');
@@ -1915,12 +1925,12 @@
         }
         const blob = await withCaptureOperationTimeout(
           fetchImageBinary(refs[0]),
-          Math.min(quickAttempt ? 6000 : 45000, timeLeft()),
+          Math.min(Math.max(1000, Number(perImageFetchMs) || 1000), timeLeft()),
           'Получение изображения'
         );
         const dataUrl = await withCaptureOperationTimeout(
           blobToDataUrl(blob),
-          Math.max(1, Math.min(quickAttempt ? 4000 : 15000, timeLeft())),
+          Math.max(1, Math.min(Math.max(1000, Number(perImageEncodeMs) || 1000), timeLeft())),
           'Кодирование изображения'
         );
         for (const image of refs) {
@@ -6257,8 +6267,28 @@
           )
         : [];
 
+      // In fragment mode images must never hold an otherwise verified text
+      // range in finalization for minutes. Bounded failures retain src, HTML
+      // placement and binaryError for later independent image recovery.
+      const fragmentImageBudget = mode === 'fragment' ||
+        (mode === 'resume-draft' && resumedDraft?.captureMode === 'fragment');
+      if (fragmentImageBudget) {
+        await progress(
+          'Этап 3/3: сохраняю текст и ограниченно проверяю изображения…',
+          messages.length,
+          { phase: 'finalizing', imageBinaryTotal: binaryTargetMessages
+            .reduce((total, item) => total + (item.images?.length || 0), 0),
+            force: true }
+        );
+      }
       const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'full' || mode === 'fragment' || mode === 'images' || mode === 'images-draft' || mode === 'reconcile'
+        onlyMissing: mode === 'full' || mode === 'fragment' || mode === 'images' ||
+          mode === 'images-draft' || mode === 'reconcile' || fragmentImageBudget,
+        ...(fragmentImageBudget ? {
+          timeBudgetMs: 12000,
+          perImageFetchMs: 3500,
+          perImageEncodeMs: 2000
+        } : {})
       });
 
       if ((mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length) {
