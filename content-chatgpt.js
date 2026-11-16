@@ -1642,8 +1642,39 @@
     });
   }
 
+  // Text-first fragment capture: copy markup without deep-cloning live image
+  // elements or their large responsive/lazy-load attribute sets. Inserting a
+  // minimal img placeholder preserves exact inline position for later recovery.
+  // All other text and markup nodes are copied in DOM order.
+  function cloneWithImagePlaceholders(root) {
+    const clone = root.cloneNode(false);
+    const pending = [[root, clone]];
+    while (pending.length) {
+      const [source, destination] = pending.pop();
+      for (const node of source.childNodes) {
+        if (node.nodeType === 1 && node.localName === 'img') {
+          const placeholder = document.createElement('img');
+          const src = imageSource(node);
+          if (src) placeholder.setAttribute('src', src);
+          for (const attr of ['alt', 'width', 'height', 'title']) {
+            const value = node.getAttribute(attr);
+            if (value != null) placeholder.setAttribute(attr, value);
+          }
+          destination.appendChild(placeholder);
+          continue;
+        }
+        const copied = node.cloneNode(false);
+        destination.appendChild(copied);
+        if (node.childNodes?.length) pending.push([node, copied]);
+      }
+    }
+    return clone;
+  }
+
   function cleanClone(root) {
-    const clone = root.cloneNode(true);
+    const clone = state.fragmentTextFirst && root.querySelector?.('img')
+      ? cloneWithImagePlaceholders(root)
+      : root.cloneNode(true);
     clone.querySelectorAll('script, style, button, textarea, form, [role="button"], [aria-hidden="true"]')
       .forEach(node => node.remove());
     clone.querySelectorAll('*').forEach(node => {
