@@ -361,7 +361,7 @@ test('end marker waits for sibling attachment beneath text root', () => {
   const turn = { isConnected: true };
   const reachesEnd = new Function(
     'contentRoot', 'roleOf', 'turnImageNodes', 'findScrollContainer',
-    'rectIntersectsCaptureViewport', 'window', 'document',
+    'rectIntersectsCaptureViewport', 'window', 'document', 'state',
     extract('rectTrailingEdgeInsideCaptureViewport') +
     extract('turnTrailingEdgeVisible') +
     '; return turnTrailingEdgeVisible;'
@@ -372,7 +372,7 @@ test('end marker waits for sibling attachment beneath text root', () => {
     () => null,
     (rect, width, height) => rect.right > 0 && rect.left < width &&
       rect.bottom > 0 && rect.top < height,
-    fakeWindow, doc
+    fakeWindow, doc, { fragmentTextFirst: false }
   );
   assert.equal(reachesEnd(turn), false);
   imageBottom = 800;
