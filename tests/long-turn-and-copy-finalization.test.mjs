@@ -218,3 +218,14 @@ test('weak identity context correction never mutates a saved map object', () => 
   assert.ok(block.includes('windowMessages[i] = { ...map.get(candidate.id) }'));
   assert.doesNotMatch(block,/message\.id = messageId/);
 });
+
+test('fragment walk defers image binaries to finalization instead of blocking scroll on HTTP 403', () => {
+  const start = content.indexOf('      const walkResult = mode ===');
+  const end = content.indexOf('      if (mode === \'full\' &&', start);
+  assert.ok(start >= 0 && end > start, 'walk dispatch found');
+  const walk = content.slice(start, end);
+  assert.match(walk, /hydrateImages: !queueFragmentResume && mode !== 'fragment'/);
+  assert.match(walk, /hydrateVisibleImages: false/);
+  assert.match(content, /const binaryStats = await hydrateMessageImages\(binaryTargetMessages/);
+  assert.match(content, /binaryStatus: 'pending'/);
+});

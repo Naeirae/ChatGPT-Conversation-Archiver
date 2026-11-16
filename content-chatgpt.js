@@ -5724,9 +5724,14 @@
             bursts: 1,
             requireBoundary: mode === 'fragment' || queueFragmentResume,
             recoverLoadErrors: mode !== 'fragment' && !queueFragmentResume,
-            hydrateImages: queueFragmentResume || mode === 'fragment' ||
-              mode === 'reconcile' || mode === 'images' || mode === 'images-draft',
-            hydrateVisibleImages: queueFragmentResume || mode === 'fragment',
+            // A rejected CDN image (HTTP 403) must never hold the chronological
+            // wheel loop. Capture image metadata/placement now, and fetch
+            // image bytes only during the independently bounded final stage
+            // or an explicit image-recovery run. This is especially important
+            // for marked fragments with an image inside a long reply.
+            hydrateImages: !queueFragmentResume && mode !== 'fragment' &&
+              (mode === 'reconcile' || mode === 'images' || mode === 'images-draft'),
+            hydrateVisibleImages: false,
             attemptedImageSources: sequentialImageSources,
             markedEnd: mode === 'fragment' ? selectedFragment?.end
               : queueFragmentResume ? resumedDraft?.captureRange?.end : null
