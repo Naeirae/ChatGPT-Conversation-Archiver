@@ -6281,29 +6281,31 @@
           )
         : [];
 
-      // In fragment mode images must never hold an otherwise verified text
-      // range in finalization for minutes. Bounded failures retain src, HTML
-      // placement and binaryError for later independent image recovery.
-      const fragmentImageBudget = mode === 'fragment' ||
+      // A marked archive is text-first all the way through publication.
+      // Never fetch/decode/capture image bytes even during finalization:
+      // HTTP 403 and browser image decoders must not delay the text archive.
+      // Keep every image src/alt/placement with binaryStatus=pending for the
+      // existing explicit image-recovery action.
+      const fragmentImageDeferred = mode === 'fragment' ||
         (mode === 'resume-draft' && resumedDraft?.captureMode === 'fragment');
-      if (fragmentImageBudget) {
+      const deferredSources = fragmentImageDeferred
+        ? new Set(binaryTargetMessages.flatMap(item =>
+            (item.images || []).map(image => image?.src).filter(Boolean)))
+        : null;
+      if (fragmentImageDeferred) {
         await progress(
-          'Этап 3/3: сохраняю текст и ограниченно проверяю изображения…',
+          'Этап 3/3: изображения отложены · сохраняю архив с исходными ссылками…',
           messages.length,
-          { phase: 'finalizing', imageBinaryTotal: binaryTargetMessages
-            .reduce((total, item) => total + (item.images?.length || 0), 0),
+          { phase: 'finalizing', imageBinaryDeferred: deferredSources.size,
             force: true }
         );
       }
-      const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'full' || mode === 'fragment' || mode === 'images' ||
-          mode === 'images-draft' || mode === 'reconcile' || fragmentImageBudget,
-        ...(fragmentImageBudget ? {
-          timeBudgetMs: 12000,
-          perImageFetchMs: 3500,
-          perImageEncodeMs: 2000
-        } : {})
-      });
+      const binaryStats = fragmentImageDeferred
+        ? { embedded: 0, failed: 0, unique: deferredSources.size }
+        : await hydrateMessageImages(binaryTargetMessages, {
+            onlyMissing: mode === 'full' || mode === 'images' ||
+              mode === 'images-draft' || mode === 'reconcile'
+          });
 
       if ((mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length) {
         const knownRecovered = new Set(recoveredImageRefs.map(ref =>
