@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   sameStoredTurn,
   sameDraftCaptureScope,
+  sameDraftOverlapConversation,
   verifiedChronologicalOverlap,
   mergeVerifiedTurns,
   mergeNewestCapturedTurn,
@@ -292,4 +293,32 @@ test('merges unique long weak-ID sequence', () => {
   const alignment = verifiedChronologicalOverlap(left, right);
   assert.equal(alignment?.offset, 1);
   assert.equal(mergeVerifiedTurns(left, right, alignment).messages.length, 5);
+});
+
+test('shifted manual markers do not block a truly verified same-chat overlap', () => {
+  const url = 'https://chatgpt.com/c/one-chat';
+  const first = { ...scope(url), id: 'first-range', messages: seq('a', 'b', 'c', 'd') };
+  const second = { ...scope(url), id: 'shifted-range',
+    captureRange: { start: { id: 'different-start' }, end: { id: 'different-end' } },
+    messages: seq('c', 'd', 'e', 'f') };
+  assert.equal(sameDraftCaptureScope(first, second), false);
+  assert.equal(sameDraftOverlapConversation(first, second), true);
+  const groups = groupVerifiedDraftComponents([first, second]);
+  assert.equal(groups.length, 1);
+  assert.deepEqual(groups[0].messages.map(item => item.id),
+    seq('a','b','c','d','e','f').map(item => item.id));
+  assert.deepEqual(first.messages.map(item => item.id), seq('a','b','c','d').map(item => item.id));
+  assert.deepEqual(second.messages.map(item => item.id), seq('c','d','e','f').map(item => item.id));
+});
+
+test('shifted manual markers alone do not merge disconnected or conflicting drafts', () => {
+  const url = 'https://chatgpt.com/c/one-chat';
+  const base = { ...scope(url), id: 'a', messages: seq('a', 'b', 'c') };
+  const shifted = { ...scope(url), id: 'b',
+    captureRange: { start: { id: 'moved' }, end: { id: 'moved2' } },
+    messages: seq('f', 'g', 'h') };
+  assert.equal(groupVerifiedDraftComponents([base, shifted]).length, 2);
+  assert.equal(groupVerifiedDraftComponents([base,
+    { ...shifted, sourceUrl: 'https://chatgpt.com/c/another-chat', messages: seq('b','c','d') }
+  ]).length, 2);
 });

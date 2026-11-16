@@ -36,6 +36,7 @@ import {
 import {
   sameStoredTurn,
   sameDraftCaptureScope,
+  sameDraftOverlapConversation,
   verifiedChronologicalOverlap,
   mergeVerifiedTurns,
   mergeNewestCapturedTurn,
@@ -310,7 +311,7 @@ async function reconcileUnfinishedPrefix(draft) {
     item?.id !== draft.id &&
     ['walk', 'finalizing'].includes(item.capturePhase || '') &&
     item.messages?.length &&
-    sameDraftCaptureScope(draft, item)
+    sameDraftOverlapConversation(draft, item)
   );
 
   // Tag revisions in memory only. A later verified checkpoint with the
