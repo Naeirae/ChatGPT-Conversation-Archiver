@@ -219,48 +219,97 @@ test('weak identity context correction never mutates a saved map object', () => 
   assert.doesNotMatch(block,/message\.id = messageId/);
 });
 
-test('fragment walk defers image binaries to finalization instead of blocking scroll on HTTP 403', () => {
+
+test('marked fragment never downloads image bytes in walk or finalization', () => {
   const start = content.indexOf('      const walkResult = mode ===');
-  const end = content.indexOf('      if (mode === \'full\' &&', start);
-  assert.ok(start >= 0 && end > start, 'walk dispatch found');
+  const end = content.indexOf("      if (mode === 'full' &&", start);
   const walk = content.slice(start, end);
-  assert.match(walk, /hydrateImages: !queueFragmentResume && mode !== 'fragment'/);
-  assert.match(walk, /hydrateVisibleImages: false/);
-  assert.match(content, /const binaryStats = await hydrateMessageImages\(binaryTargetMessages/);
-  assert.match(content, /binaryStatus: 'pending'/);
+  assert.ok(walk.includes("mode !== 'fragment'"));
+  assert.ok(walk.includes('hydrateVisibleImages: false'));
+  assert.ok(content.includes("const fragmentImageDeferred = mode === 'fragment'"));
+  assert.ok(content.includes('const binaryStats = fragmentImageDeferred'));
+  assert.ok(content.includes('? { embedded: 0, failed: 0, unique: deferredSources.size }'));
+  assert.ok(content.includes(': await hydrateMessageImages(binaryTargetMessages'));
+  assert.ok(content.includes("binaryStatus: 'pending'"));
+  assert.ok(content.includes('imageBinaryDeferred: deferredSources.size'));
 });
 
-test('HTTP 403 marks the image failed without throwing away captured text or src', async () => {
+test('metadata-only image size does not force image layout or natural size', () => {
+  const start = content.indexOf('  function imageSize(');
+  const end = content.indexOf('  function isLikelyContentImage(', start);
+  assert.ok(start > 0 && end > start);
+  const size = runInNewContext(content.slice(start,end) + '\nimageSize', {
+    state: { fragmentTextFirst: true }, Math, Number
+  });
+  const img = {
+    naturalWidth: 1000, naturalHeight: 900,
+    getAttribute: name => ({ width: '240', height: '160' })[name],
+    getBoundingClientRect: () => { throw new Error('Image layout accessed'); }
+  };
+  assert.equal(size(img).width, 240);
+  assert.equal(size(img).height, 160);
+});
+
+test('marked end uses logical wrapper bounds without inspecting image geometry', () => {
+  const start = content.indexOf('  function turnTrailingEdgeVisible(');
+  const end = content.indexOf('  function boundaryIsVisible(', start);
+  const source = content.slice(start, end);
+  assert.ok(source.includes('const logical = state.fragmentTextFirst'));
+  assert.ok(source.includes('state.fragmentTextFirst ? (textFirstRect || rootRect)'));
+});
+
+test('fragment clone keeps text and inline image position without cloning original img', () => {
+  const start = content.indexOf('  function cloneWithImagePlaceholders(');
+  const end = content.indexOf('  function cleanClone(', start);
+  assert.ok(start > 0 && end > start);
+  class FakeNode {
+    constructor(localName, content = '', childNodes = [], attrs = {}) {
+      this.nodeType = localName === '#text' ? 3 : 1;
+      this.localName = localName;
+      this.content = content;
+      this.childNodes = childNodes;
+      this.attrs = attrs;
+    }
+    cloneNode(deep) {
+      if (this.localName === 'img') throw Error('Cloned original image');
+      return new FakeNode(this.localName, this.content,
+        deep ? this.childNodes.slice() : [], { ...this.attrs });
+    }
+    appendChild(node) { this.childNodes.push(node); }
+    getAttribute(name) { return this.attrs[name] ?? null; }
+    setAttribute(name, value) { this.attrs[name] = value; }
+  }
+  const input = new FakeNode('div', '', [
+    new FakeNode('#text', 'Before'),
+    new FakeNode('img', '', [], { src: 'https://example.org/private.png', alt: 'Photo' }),
+    new FakeNode('p', '', [new FakeNode('#text', 'After')])
+  ]);
+  const cloned = runInNewContext(content.slice(start,end) + '\ncloneWithImagePlaceholders', {
+    document: { createElement: name => new FakeNode(name) },
+    imageSource: node => node.getAttribute('src')
+  })(input);
+  assert.deepEqual(cloned.childNodes.map(node => node.localName), ['#text','img','p']);
+  assert.equal(cloned.childNodes[0].content, 'Before');
+  assert.equal(cloned.childNodes[1].getAttribute('src'), 'https://example.org/private.png');
+  assert.equal(cloned.childNodes[2].childNodes[0].content, 'After');
+});
+
+test('explicit image recovery still records HTTP 403 and preserves text', async () => {
   const begin = content.indexOf('  async function hydrateMessageImages(');
   const end = content.indexOf('  function physicallyVisibleImageSources(', begin);
-  assert.ok(begin > 0 && end > begin);
-  const hydration = runInNewContext(content.slice(begin, end) + '\nhydrateMessageImages', {
-    Map,
-    Date,
-    Number,
-    Math,
-    String,
+  const hydrate = runInNewContext(content.slice(begin, end) + '\nhydrateMessageImages', {
+    Map, Date, Number, Math, String,
     state: { cancel: false },
     fetchImageBinary: async () => { throw new Error('HTTP 403'); },
     withCaptureOperationTimeout: async operation => operation,
     blobToDataUrl: async () => '',
     progress: async () => {}
   });
-  const image = { src: 'https://example.com/private.png', binaryStatus: 'pending', dataUrl: '' };
-  const message = { role: 'assistant', text: 'Retain all words and image placement', images: [image] };
-  const result = await hydration([message], {
-    onlyMissing: true, timeBudgetMs: 12000,
-    perImageFetchMs: 3500, perImageEncodeMs: 2000
-  });
+  const image = { src:'https://example.org/private.png', binaryStatus:'pending', dataUrl:'' };
+  const message = { text:'Original text', images:[image] };
+  const result = await hydrate([message], { onlyMissing:true, timeBudgetMs:12000 });
   assert.equal(result.failed, 1);
   assert.equal(image.binaryStatus, 'failed');
-  assert.match(image.binaryError, /HTTP 403/);
-  assert.equal(image.src, 'https://example.com/private.png');
-  assert.equal(message.text, 'Retain all words and image placement');
-});
-
-test('marked fragment finalization has a finite 12s image budget and independent recovery', () => {
-  assert.match(content, /fragmentImageBudget \? \{\s*timeBudgetMs: 12000,\s*perImageFetchMs: 3500,\s*perImageEncodeMs: 2000/);
-  assert.match(content, /hydrateImages: !queueFragmentResume && mode !== 'fragment'/);
-  assert.match(content, /const binaryStats = await hydrateMessageImages\(binaryTargetMessages/);
+  assert.equal(image.src, 'https://example.org/private.png');
+  assert.equal(message.text, 'Original text');
 });
