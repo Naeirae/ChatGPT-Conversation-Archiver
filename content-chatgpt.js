@@ -1549,8 +1549,8 @@
     // In a marked text-first pass do not inspect the image's rendered
     // resource state. The DOM attributes carry the source reference.
     const direct = state.fragmentTextFirst
-      ? (img.getAttribute('src') || img.getAttribute('data-src') ||
-        img.getAttribute('data-original') || img.currentSrc || '')
+      ? (img.getAttribute('data-archiver-src') || img.getAttribute('src') ||
+        img.getAttribute('data-src') || img.getAttribute('data-original') || '')
       : (img.currentSrc || img.getAttribute('src') ||
         img.getAttribute('data-src') || img.getAttribute('data-original') || '');
     if (direct) return absUrl(direct);
@@ -1655,7 +1655,9 @@
         if (node.nodeType === 1 && node.localName === 'img') {
           const placeholder = document.createElement('img');
           const src = imageSource(node);
-          if (src) placeholder.setAttribute('src', src);
+          // Keep the detached DOM inert: assigning an image src can start a
+          // protected CDN request even without appending the clone to the page.
+          if (src) placeholder.setAttribute('data-archiver-src', src);
           for (const attr of ['alt', 'width', 'height', 'title']) {
             const value = node.getAttribute(attr);
             if (value != null) placeholder.setAttribute(attr, value);
@@ -1683,7 +1685,10 @@
     clone.querySelectorAll('a[href]').forEach(a => a.setAttribute('href', absUrl(a.getAttribute('href'))));
     clone.querySelectorAll('img').forEach((img, index) => {
       const src = imageSource(img);
-      if (src) img.setAttribute('src', src);
+      if (src) {
+        if (state.fragmentTextFirst) img.setAttribute('data-archiver-src', src);
+        else img.setAttribute('src', src);
+      }
       img.setAttribute('data-archiver-image-index', String(index));
       img.removeAttribute('loading');
       img.removeAttribute('srcset');
@@ -1767,13 +1772,18 @@
 
     const stableId = turnStableKey(turn);
     const identityContext = turnIdentityContext(turn, knownTurns);
+    // Restore real image src only in serialized HTML. No DOM image load is
+    // triggered during text-first traversal; the archive keeps exact placement.
+    const serializedHtml = state.fragmentTextFirst
+      ? clone.innerHTML.replace(/\sdata-archiver-src="([^"]*)"/g, ' src="$1"')
+      : clone.innerHTML;
     return {
       id: stableId || ((turn.getAttribute('data-testid') || role) + ':' + ordinal + ':' + hashText(text)),
       identityStrong: isStrongMessageId(stableId),
       identityContext,
       role,
       text,
-      html: extraBefore.join('') + clone.innerHTML + extraAfter.join(''),
+      html: extraBefore.join('') + serializedHtml + extraAfter.join(''),
       images,
       reasoningHtml: reasoning.html,
       reasoningText: reasoning.text,
