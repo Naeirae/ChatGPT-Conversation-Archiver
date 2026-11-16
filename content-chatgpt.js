@@ -37,7 +37,8 @@
     queueCapture: false,
     pauseSnapshotWriter: null,
     captureStartProof: null,
-    strictChronology: false
+    strictChronology: false,
+    fragmentTextFirst: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -1096,9 +1097,15 @@
     const role = roleOf(turn);
     const root = contentRoot(turn, role) || turn;
     const rootRect = root.getBoundingClientRect();
+    // In a text-first fragment, use the logical turn/wrapper bounds instead
+    // of forcing each image's layout. The wrapper includes sibling attachments
+    // that may extend beyond the first markdown root.
+    const logical = state.fragmentTextFirst
+      ? (turn.closest?.('[data-turn-key]') || turn) : null;
+    const textFirstRect = logical?.getBoundingClientRect?.();
     // An attachment may be rendered beside the text root, under the logical
     // message wrapper. Its lower edge is still part of the marked message.
-    const rect = turnImageNodes(turn, role).reduce((area, image) => {
+    const rect = state.fragmentTextFirst ? (textFirstRect || rootRect) : turnImageNodes(turn, role).reduce((area, image) => {
       const next = image.getBoundingClientRect();
       if (next.width < 2 || next.height < 2) return area;
       return {
@@ -1539,12 +1546,13 @@
 
   function imageSource(img) {
     if (!(img instanceof HTMLImageElement)) return '';
-    const direct =
-      img.currentSrc ||
-      img.getAttribute('src') ||
-      img.getAttribute('data-src') ||
-      img.getAttribute('data-original') ||
-      '';
+    // In a marked text-first pass do not inspect the image's rendered
+    // resource state. The DOM attributes carry the source reference.
+    const direct = state.fragmentTextFirst
+      ? (img.getAttribute('src') || img.getAttribute('data-src') ||
+        img.getAttribute('data-original') || img.currentSrc || '')
+      : (img.currentSrc || img.getAttribute('src') ||
+        img.getAttribute('data-src') || img.getAttribute('data-original') || '');
     if (direct) return absUrl(direct);
 
     const srcset = String(img.getAttribute('srcset') || '').trim();
@@ -1556,16 +1564,21 @@
   }
 
   function imageSize(img) {
-    const rect = img.getBoundingClientRect?.() || { width: 0, height: 0 };
+    // Reading image geometry forces layout at precisely the point where
+    // ChatGPT may still be decoding/rendering a large or protected image.
+    // Fragment capture needs metadata, not image layout or pixel dimensions.
+    const rect = state.fragmentTextFirst
+      ? { width: 0, height: 0 }
+      : (img.getBoundingClientRect?.() || { width: 0, height: 0 });
     return {
       width: Math.round(
-        Number(img.naturalWidth) ||
+        (state.fragmentTextFirst ? 0 : Number(img.naturalWidth)) ||
         Number(img.getAttribute?.('width')) ||
         Number(rect.width) ||
         0
       ),
       height: Math.round(
-        Number(img.naturalHeight) ||
+        (state.fragmentTextFirst ? 0 : Number(img.naturalHeight)) ||
         Number(img.getAttribute?.('height')) ||
         Number(rect.height) ||
         0
@@ -5356,6 +5369,7 @@
         resumedDraft?.captureMode === 'fragment' &&
         resumedDraft?.captureRange?.start && resumedDraft?.captureRange?.end
       );
+      state.fragmentTextFirst = manuallyBounded;
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
       const selectedFragment = (mode === 'fragment')
         ? (options.captureRange ||
@@ -6683,6 +6697,7 @@
       state.manualTopConfirmed = false;
       state.boundarySearchActive = false;
       state.strictChronology = false;
+      state.fragmentTextFirst = false;
     }
   }
 
