@@ -229,3 +229,38 @@ test('fragment walk defers image binaries to finalization instead of blocking sc
   assert.match(content, /const binaryStats = await hydrateMessageImages\(binaryTargetMessages/);
   assert.match(content, /binaryStatus: 'pending'/);
 });
+
+test('HTTP 403 marks the image failed without throwing away captured text or src', async () => {
+  const begin = content.indexOf('  async function hydrateMessageImages(');
+  const end = content.indexOf('  function physicallyVisibleImageSources(', begin);
+  assert.ok(begin > 0 && end > begin);
+  const hydration = runInNewContext(content.slice(begin, end) + '\nhydrateMessageImages', {
+    Map,
+    Date,
+    Number,
+    Math,
+    String,
+    state: { cancel: false },
+    fetchImageBinary: async () => { throw new Error('HTTP 403'); },
+    withCaptureOperationTimeout: async operation => operation,
+    blobToDataUrl: async () => '',
+    progress: async () => {}
+  });
+  const image = { src: 'https://example.com/private.png', binaryStatus: 'pending', dataUrl: '' };
+  const message = { role: 'assistant', text: 'Retain all words and image placement', images: [image] };
+  const result = await hydration([message], {
+    onlyMissing: true, timeBudgetMs: 12000,
+    perImageFetchMs: 3500, perImageEncodeMs: 2000
+  });
+  assert.equal(result.failed, 1);
+  assert.equal(image.binaryStatus, 'failed');
+  assert.match(image.binaryError, /HTTP 403/);
+  assert.equal(image.src, 'https://example.com/private.png');
+  assert.equal(message.text, 'Retain all words and image placement');
+});
+
+test('marked fragment finalization has a finite 12s image budget and independent recovery', () => {
+  assert.match(content, /fragmentImageBudget \? \{\s*timeBudgetMs: 12000,\s*perImageFetchMs: 3500,\s*perImageEncodeMs: 2000/);
+  assert.match(content, /hydrateImages: !queueFragmentResume && mode !== 'fragment'/);
+  assert.match(content, /const binaryStats = await hydrateMessageImages\(binaryTargetMessages/);
+});
