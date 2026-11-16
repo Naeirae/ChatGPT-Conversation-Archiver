@@ -37,7 +37,8 @@
     queueCapture: false,
     pauseSnapshotWriter: null,
     captureStartProof: null,
-    strictChronology: false
+    strictChronology: false,
+    fragmentTextFirst: false
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -1096,9 +1097,15 @@
     const role = roleOf(turn);
     const root = contentRoot(turn, role) || turn;
     const rootRect = root.getBoundingClientRect();
+    // In a text-first fragment, use the logical turn/wrapper bounds instead
+    // of forcing each image's layout. The wrapper includes sibling attachments
+    // that may extend beyond the first markdown root.
+    const logical = state.fragmentTextFirst
+      ? (turn.closest?.('[data-turn-key]') || turn) : null;
+    const textFirstRect = logical?.getBoundingClientRect?.();
     // An attachment may be rendered beside the text root, under the logical
     // message wrapper. Its lower edge is still part of the marked message.
-    const rect = turnImageNodes(turn, role).reduce((area, image) => {
+    const rect = state.fragmentTextFirst ? (textFirstRect || rootRect) : turnImageNodes(turn, role).reduce((area, image) => {
       const next = image.getBoundingClientRect();
       if (next.width < 2 || next.height < 2) return area;
       return {
@@ -1539,12 +1546,13 @@
 
   function imageSource(img) {
     if (!(img instanceof HTMLImageElement)) return '';
-    const direct =
-      img.currentSrc ||
-      img.getAttribute('src') ||
-      img.getAttribute('data-src') ||
-      img.getAttribute('data-original') ||
-      '';
+    // In a marked text-first pass do not inspect the image's rendered
+    // resource state. The DOM attributes carry the source reference.
+    const direct = state.fragmentTextFirst
+      ? (img.getAttribute('src') || img.getAttribute('data-src') ||
+        img.getAttribute('data-original') || img.currentSrc || '')
+      : (img.currentSrc || img.getAttribute('src') ||
+        img.getAttribute('data-src') || img.getAttribute('data-original') || '');
     if (direct) return absUrl(direct);
 
     const srcset = String(img.getAttribute('srcset') || '').trim();
@@ -1556,16 +1564,21 @@
   }
 
   function imageSize(img) {
-    const rect = img.getBoundingClientRect?.() || { width: 0, height: 0 };
+    // Reading image geometry forces layout at precisely the point where
+    // ChatGPT may still be decoding/rendering a large or protected image.
+    // Fragment capture needs metadata, not image layout or pixel dimensions.
+    const rect = state.fragmentTextFirst
+      ? { width: 0, height: 0 }
+      : (img.getBoundingClientRect?.() || { width: 0, height: 0 });
     return {
       width: Math.round(
-        Number(img.naturalWidth) ||
+        (state.fragmentTextFirst ? 0 : Number(img.naturalWidth)) ||
         Number(img.getAttribute?.('width')) ||
         Number(rect.width) ||
         0
       ),
       height: Math.round(
-        Number(img.naturalHeight) ||
+        (state.fragmentTextFirst ? 0 : Number(img.naturalHeight)) ||
         Number(img.getAttribute?.('height')) ||
         Number(rect.height) ||
         0
@@ -1629,8 +1642,39 @@
     });
   }
 
+  // Text-first fragment capture: copy markup without deep-cloning live image
+  // elements or their large responsive/lazy-load attribute sets. Inserting a
+  // minimal img placeholder preserves exact inline position for later recovery.
+  // All other text and markup nodes are copied in DOM order.
+  function cloneWithImagePlaceholders(root) {
+    const clone = root.cloneNode(false);
+    const pending = [[root, clone]];
+    while (pending.length) {
+      const [source, destination] = pending.pop();
+      for (const node of source.childNodes) {
+        if (node.nodeType === 1 && node.localName === 'img') {
+          const placeholder = document.createElement('img');
+          const src = imageSource(node);
+          if (src) placeholder.setAttribute('src', src);
+          for (const attr of ['alt', 'width', 'height', 'title']) {
+            const value = node.getAttribute(attr);
+            if (value != null) placeholder.setAttribute(attr, value);
+          }
+          destination.appendChild(placeholder);
+          continue;
+        }
+        const copied = node.cloneNode(false);
+        destination.appendChild(copied);
+        if (node.childNodes?.length) pending.push([node, copied]);
+      }
+    }
+    return clone;
+  }
+
   function cleanClone(root) {
-    const clone = root.cloneNode(true);
+    const clone = state.fragmentTextFirst && root.querySelector?.('img')
+      ? cloneWithImagePlaceholders(root)
+      : root.cloneNode(true);
     clone.querySelectorAll('script, style, button, textarea, form, [role="button"], [aria-hidden="true"]')
       .forEach(node => node.remove());
     clone.querySelectorAll('*').forEach(node => {
@@ -5356,6 +5400,7 @@
         resumedDraft?.captureMode === 'fragment' &&
         resumedDraft?.captureRange?.start && resumedDraft?.captureRange?.end
       );
+      state.fragmentTextFirst = manuallyBounded;
       const resumeNavigation = Boolean(options.resumeNavigation && existingDraftId);
       const selectedFragment = (mode === 'fragment')
         ? (options.captureRange ||
@@ -6267,29 +6312,31 @@
           )
         : [];
 
-      // In fragment mode images must never hold an otherwise verified text
-      // range in finalization for minutes. Bounded failures retain src, HTML
-      // placement and binaryError for later independent image recovery.
-      const fragmentImageBudget = mode === 'fragment' ||
+      // A marked archive is text-first all the way through publication.
+      // Never fetch/decode/capture image bytes even during finalization:
+      // HTTP 403 and browser image decoders must not delay the text archive.
+      // Keep every image src/alt/placement with binaryStatus=pending for the
+      // existing explicit image-recovery action.
+      const fragmentImageDeferred = mode === 'fragment' ||
         (mode === 'resume-draft' && resumedDraft?.captureMode === 'fragment');
-      if (fragmentImageBudget) {
+      const deferredSources = fragmentImageDeferred
+        ? new Set(binaryTargetMessages.flatMap(item =>
+            (item.images || []).map(image => image?.src).filter(Boolean)))
+        : null;
+      if (fragmentImageDeferred) {
         await progress(
-          'Этап 3/3: сохраняю текст и ограниченно проверяю изображения…',
+          'Этап 3/3: изображения отложены · сохраняю архив с исходными ссылками…',
           messages.length,
-          { phase: 'finalizing', imageBinaryTotal: binaryTargetMessages
-            .reduce((total, item) => total + (item.images?.length || 0), 0),
+          { phase: 'finalizing', imageBinaryDeferred: deferredSources.size,
             force: true }
         );
       }
-      const binaryStats = await hydrateMessageImages(binaryTargetMessages, {
-        onlyMissing: mode === 'full' || mode === 'fragment' || mode === 'images' ||
-          mode === 'images-draft' || mode === 'reconcile' || fragmentImageBudget,
-        ...(fragmentImageBudget ? {
-          timeBudgetMs: 12000,
-          perImageFetchMs: 3500,
-          perImageEncodeMs: 2000
-        } : {})
-      });
+      const binaryStats = fragmentImageDeferred
+        ? { embedded: 0, failed: 0, unique: deferredSources.size }
+        : await hydrateMessageImages(binaryTargetMessages, {
+            onlyMissing: mode === 'full' || mode === 'images' ||
+              mode === 'images-draft' || mode === 'reconcile'
+          });
 
       if ((mode === 'images' || mode === 'reconcile') && unresolvedBeforeHydration.length) {
         const knownRecovered = new Set(recoveredImageRefs.map(ref =>
@@ -6683,6 +6730,7 @@
       state.manualTopConfirmed = false;
       state.boundarySearchActive = false;
       state.strictChronology = false;
+      state.fragmentTextFirst = false;
     }
   }
 
