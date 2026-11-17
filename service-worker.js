@@ -4926,17 +4926,27 @@ async function chatScrollMetrics(tabId, direction = 'down') {
         scroller?.scrollHeight || document.documentElement.scrollHeight || 0
       );
       const threshold = Math.max(24, Math.round(clientHeight * 0.04));
+      // Scroll validation needs DOM identities and physical metrics, not
+      // layout-forcing innerText of giant image-bearing turns. Reading that
+      // text on every wheel can stall the page before the next scroll event.
       const viewportToken = visibleTurns.slice(0, 2).concat(visibleTurns.slice(-2))
         .map(turn => String(
           turn.getAttribute('data-message-id') ||
           turn.getAttribute('data-turn-id') ||
-          turn.innerText || turn.textContent || ''
-        ).slice(0, 180)).join('|');
+          turn.getAttribute('data-turn-key') ||
+          turn.closest?.('[data-turn-key]')?.getAttribute('data-turn-key') ||
+          turn.getAttribute('data-testid') || ''
+        )).join('|');
+      const scrollport = scroller?.getBoundingClientRect?.() || null;
       return {
         top,
         clientHeight,
         scrollHeight,
         viewportToken,
+        scrollportLeft: scrollport?.left ?? 0,
+        scrollportRight: scrollport?.right ?? innerWidth,
+        scrollportTop: scrollport?.top ?? 0,
+        scrollportBottom: scrollport?.bottom ?? innerHeight,
         atStart: top <= threshold,
         atEnd: top + clientHeight >= scrollHeight - threshold
       };
@@ -5052,8 +5062,20 @@ async function physicalScrollTab(tabId, direction = 'down', bursts = 7, wheelDel
     const viewport = viewportResult?.result?.value || {};
     const width = Math.max(640, Number(viewport.width) || 1280);
     const height = Math.max(480, Number(viewport.height) || 720);
-    const x = Math.round(width * 0.68);
-    const y = Math.round(height * 0.48);
+    // Send the wheel near the chat scrollport's right gutter, away from
+    // images/media overlays that can consume pointer wheel events.
+    const right = Number(beforeMetrics?.scrollportRight);
+    const left = Number(beforeMetrics?.scrollportLeft);
+    const top = Number(beforeMetrics?.scrollportTop);
+    const bottom = Number(beforeMetrics?.scrollportBottom);
+    const validGutter = Number.isFinite(left) && Number.isFinite(right) &&
+      right - left > 80;
+    const x = Math.round(validGutter
+      ? Math.max(12, Math.min(width - 12, right - 24))
+      : width * 0.68);
+    const y = Math.round(Number.isFinite(top) && Number.isFinite(bottom) && bottom > top
+      ? Math.max(12, Math.min(height - 12, (top + bottom) / 2))
+      : height * 0.48);
 
     await cdp(tabId, 'Input.dispatchMouseEvent', {
       type: 'mouseMoved',
