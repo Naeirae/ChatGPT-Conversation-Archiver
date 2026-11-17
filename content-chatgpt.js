@@ -38,7 +38,10 @@
     pauseSnapshotWriter: null,
     captureStartProof: null,
     strictChronology: false,
-    fragmentTextFirst: false
+    fragmentTextFirst: false,
+    // Messages with insufficient chronology evidence stay out of the
+    // published order until an additional visible anchor confirms placement.
+    pendingChronology: new Map()
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -2316,6 +2319,46 @@
     return occurrences.length === 1 && stored.length === 1;
   }
 
+  function unresolvedChronologyMessages() {
+    return [...state.pendingChronology.values()].map(entry => entry.message);
+  }
+
+  // Resolve deferred messages only between two ordered, observed anchors,
+  // or at the genuine edge. Never infer a position from discovery order alone.
+  function reconcilePendingChronology(map, order, visibleWindow = []) {
+    if (!state.pendingChronology.size) return;
+    const ids = visibleWindow.map(item => item.id);
+    for (let index = 0; index < ids.length; index++) {
+      const id = ids[index];
+      const pending = state.pendingChronology.get(id);
+      if (!pending) continue;
+      let beforeId = '';
+      let afterId = '';
+      for (let j = index - 1; j >= 0; j--) {
+        if (map.has(ids[j])) { beforeId = ids[j]; break; }
+      }
+      for (let j = index + 1; j < ids.length; j++) {
+        if (map.has(ids[j])) { afterId = ids[j]; break; }
+      }
+      // Keep earlier witnesses when virtualized away; never invent one.
+      beforeId ||= pending.beforeId;
+      afterId ||= pending.afterId;
+      const before = beforeId ? order.indexOf(beforeId) : -1;
+      const after = afterId ? order.indexOf(afterId) : -1;
+      if (before >= 0 && after >= 0 && before < after &&
+          after === before + 1) {
+        const item = visibleWindow[index] || pending.message;
+        order.splice(after, 0, id);
+        map.set(id, item);
+        state.pendingChronology.delete(id);
+      } else {
+        state.pendingChronology.set(id, {
+          message: visibleWindow[index] || pending.message, beforeId, afterId
+        });
+      }
+    }
+  }
+
   function collect(map, order, settings, stopBoundary = null, { verifiedForwardStep = false } = {}) {
     // Mounted turns are not necessarily visible turns. In particular a stale
     // virtualized window or another ChatGPT panel must not enter the archive.
@@ -2443,6 +2486,16 @@
         map.set(id, mergeRicherCapture(message, map.get(id)));
         continue;
       }
+      // A message deferred by a prior virtualized window can now have new
+      // witnesses, but must not be placed by the order it was discovered.
+      const earlierPending = state.pendingChronology.get(id);
+      if (earlierPending) {
+        state.pendingChronology.set(id, {
+          ...earlierPending,
+          message: mergeRicherCapture(message, earlierPending.message)
+        });
+        continue;
+      }
       // Position the new turn by its actually observed DOM neighbours, never
       // simply at the end of a global map when earlier turns are remounted.
       let beforeId = '';
@@ -2470,13 +2523,18 @@
         // previously saved turns which are currently virtualized away.
         if ((before >= 0 && after < 0 && before !== order.length - 1) ||
             (after >= 0 && before < 0 && after !== 0)) {
-          throw new Error('Односторонняя привязка внутри архива неоднозначна. Черновик сохранён без перестановок.');
+          // This is an incomplete observation, not a contradiction.
+          // Keep the message and its proven neighbour outside canonical
+          // chronology and continue scanning until another anchor appears.
+          state.pendingChronology.set(id, { message, beforeId, afterId });
+          continue;
         }
       }
       const insertAt = after >= 0 ? after : before >= 0 ? before + 1 : order.length;
       order.splice(insertAt, 0, id);
       map.set(id, message);
     }
+    reconcilePendingChronology(map, order, windowMessages);
     return [...new Set(touchedIds)];
   }
 
