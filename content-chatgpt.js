@@ -6751,7 +6751,24 @@
         capturedCount: map.size, occurredAt: Date.now()
       } }).catch(() => {});
       const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
-      const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
+      const current = (await withCaptureOperationTimeout(
+        chrome.storage.local.get(activeKey), 5000, 'Чтение состояния после ошибки'
+      ).catch(() => ({})))[activeKey] || {};
+
+      // Report the primary error BEFORE potentially slow draft enrichment.
+      // The worker already has the last recoverable checkpoint; do not leave
+      // the popup claiming 'running' for minutes when the collector exited.
+      const existingCheckpointId = current.draftId || current.recoveryDraftId ||
+        ('draft-' + jobId);
+      await withCaptureOperationTimeout(chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_FAILED',
+        queueCapture: state.queueCapture,
+        jobId,
+        error: message,
+        draftId: existingCheckpointId,
+        draftCount: Number(current.draftCount || 0),
+        status
+      }), 5000, 'Сообщение об ошибке фоновой службе').catch(() => {});
 
       let draftId = '';
       let draftCount = 0;
