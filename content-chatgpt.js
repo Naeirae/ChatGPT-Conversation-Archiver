@@ -6011,6 +6011,18 @@
       order.length = 0;
       state.strictChronology = true;
       state.pendingChronology.clear();
+      // Resume must retain the exact unsorted evidence from the prior draft.
+      // It cannot be silently discarded when the virtualized viewport changes.
+      if (resumedDraft?.pendingChronology?.length) {
+        for (const entry of resumedDraft.pendingChronology) {
+          if (!entry?.message?.id) continue;
+          state.pendingChronology.set(entry.message.id, {
+            message: entry.message,
+            beforeId: String(entry.beforeId || ''),
+            afterId: String(entry.afterId || '')
+          });
+        }
+      }
       chronologicalStarted = true;
 
       const resumedQueueMode = state.queueCapture && mode === 'resume-draft'
