@@ -2069,6 +2069,27 @@
   // even though Chrome has the decoded pixels. Screenshot the *whole visible
   // image* through the existing CDP capture transport. Never fetch a protected
   // URL or wait indefinitely before the next chronological wheel step.
+  // A screenshot may hang or fail; the wheel must not wait for it.
+  // At most one screenshot request per run may compete with physical movement.
+  let pendingRenderedImageCapture = null;
+  function queueRenderedImageCapture(map, touchedIds, attempts, walkStep = 0) {
+    if (pendingRenderedImageCapture || !state.fragmentTextFirst) return;
+    if (!(touchedIds || []).some(id =>
+      (map.get(id)?.images || []).some(image =>
+        image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
+      ))) return;
+    const task = captureVisibleRenderedImages(map, touchedIds, attempts, walkStep)
+      .catch(() => ({ ready: 0, pending: 0 }));
+    pendingRenderedImageCapture = task;
+    void task.finally(() => {
+      if (pendingRenderedImageCapture === task) pendingRenderedImageCapture = null;
+    });
+  }
+  async function finishPendingRenderedImageCapture() {
+    const task = pendingRenderedImageCapture;
+    if (task) await withCaptureOperationTimeout(task, 4000,
+      'Завершение снимка картинки').catch(() => {});
+  }
   async function captureVisibleRenderedImages(map, touchedIds, attempts, walkStep = 0) {
     if (!state.fragmentTextFirst || !map?.size) return { ready: 0, pending: 0 };
     const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
@@ -4989,7 +5010,7 @@
         );
       }
       if (state.fragmentTextFirst) {
-        await captureVisibleRenderedImages(map, firstTouchedIds, renderedImageAttempts, i * 2);
+        queueRenderedImageCapture(map, firstTouchedIds, renderedImageAttempts, i * 2);
       }
       const beforeRefs = visibleNavigationRefsLightweight();
 
@@ -5103,7 +5124,7 @@
         );
       }
       if (state.fragmentTextFirst) {
-        await captureVisibleRenderedImages(map, secondTouchedIds, renderedImageAttempts, i * 2 + 1);
+        queueRenderedImageCapture(map, secondTouchedIds, renderedImageAttempts, i * 2 + 1);
       }
 
       const afterRefs = visibleNavigationRefsLightweight();
@@ -5422,6 +5443,7 @@
       }).catch(() => {});
     } finally {
       state.running = false;
+      pendingRenderedImageCapture = null;
       resetUnchangedTurnCache();
       state.paused = false;
       state.cancel = false;
@@ -5918,6 +5940,11 @@
             markedEnd: mode === 'fragment' ? selectedFragment?.end
               : queueFragmentResume ? resumedDraft?.captureRange?.end : null
           });
+
+      // Flush only after the physical walk, never between its 220px steps.
+      if (mode === 'fragment' || queueFragmentResume) {
+        await finishPendingRenderedImageCapture();
+      }
 
       if (walkResult?.markedEndRebound && mode === 'fragment') {
         selectedFragment.end = {
@@ -6844,6 +6871,7 @@
       } catch (_) {}
     } finally {
       state.running = false;
+      pendingRenderedImageCapture = null;
       resetUnchangedTurnCache();
       state.jobId = null;
       state.queueCapture = false;
