@@ -4501,6 +4501,7 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
+    const unplacedMessages = unresolvedChronologyMessages();
 
     const canonicalRecoveryDraftId =
       current.draftId || current.recoveryDraftId || '';
@@ -4554,6 +4555,8 @@
         (current.phase === 'walk' ? 'down' : 'up'),
       resumeWindowSignatures: currentResumeWindowSignatures(6),
       messages,
+      unplacedMessages,
+      pendingChronology: [...state.pendingChronology.values()],
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       imageBinaryReady: messages.reduce((sum, item) =>
         sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
@@ -6007,6 +6010,7 @@
       map.clear();
       order.length = 0;
       state.strictChronology = true;
+      state.pendingChronology.clear();
       chronologicalStarted = true;
 
       const resumedQueueMode = state.queueCapture && mode === 'resume-draft'
@@ -6031,6 +6035,12 @@
               : queueFragmentResume ? resumedDraft?.captureRange?.end : null
           });
 
+      if (state.pendingChronology.size) {
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        throw new Error('Собраны сообщения с неподтверждённой позицией: ' +
+          state.pendingChronology.size + '. Они сохранены отдельно в черновике, ' +
+          'но хронология не объявлена завершённой.');
+      }
       if (walkResult?.markedEndRebound && mode === 'fragment') {
         selectedFragment.end = {
           ...selectedFragment.end,
@@ -6805,6 +6815,7 @@
           (map.size > 0 ||
             (['resume-draft', 'retry-walk'].includes(mode) && Boolean(existingDraftId)))) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
+        const unplacedMessages = unresolvedChronologyMessages();
 
         let existingRecoveryDraft = null;
         if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
@@ -6896,6 +6907,8 @@
               (recoveryCapturePhase === 'walk' ? 'down' : 'up'),
             resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
+            unplacedMessages,
+            pendingChronology: [...state.pendingChronology.values()],
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
             imageBinaryReady: draftMessages.reduce((sum, item) =>
               sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
@@ -6970,6 +6983,7 @@
       state.boundarySearchActive = false;
       state.strictChronology = false;
       state.fragmentTextFirst = false;
+      state.pendingChronology.clear();
     }
   }
 
