@@ -832,6 +832,15 @@
 
   function turnStableKey(turn) {
     if (!turn) return '';
+    // Retain precedence of previously supported native message IDs so an
+    // upgraded extension does not change identity on pages exposing both.
+    const roleNode = turn.matches?.(ROLE_SELECTOR) ? turn : turn.querySelector?.(ROLE_SELECTOR);
+    for (const attribute of ['data-message-id', 'data-turn-id']) {
+      for (const node of [turn, roleNode]) {
+        const id = String(node?.getAttribute?.(attribute) || '').trim();
+        if (id) return attribute + ':' + id;
+      }
+    }
     const actualMessageId = chatgptSearchMessageId(turn);
     if (actualMessageId) return actualMessageId;
 
