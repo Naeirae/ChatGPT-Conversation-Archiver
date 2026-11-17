@@ -809,8 +809,40 @@
     return null;
   }
 
+  // ChatGPT's virtualized shell can contain BOTH user and assistant turns.
+  // In the saved live DOM, each logical search unit has its own immutable
+  // data-chatgpt-search-message-ids UUID. Prefer this message-level identity
+  // to hashing giant rendered text or borrowing the shared shell's UUID.
+  // Assistant units sometimes list the SAME UUID twice; two DIFFERENT UUIDs
+  // mean the node is not a single unambiguous logical message.
+  function chatgptSearchMessageId(turn) {
+    if (!turn) return '';
+    const role = roleOf(turn);
+    const searchUnit = turn.matches?.('[data-chatgpt-search-unit-key]')
+      ? turn
+      : turn.closest?.('[data-chatgpt-search-unit-key$=":' + role + '"]');
+    const node = searchUnit || turn;
+    const value = String(node.getAttribute?.('data-chatgpt-search-message-ids') || '').trim();
+    if (!value) return '';
+    const ids = value.split(/\s+/).map(id => id.toLowerCase());
+    if (ids.some(id => !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id))) return '';
+    const unique = [...new Set(ids)];
+    return unique.length === 1 ? 'data-chatgpt-search-message-ids:' + unique[0] : '';
+  }
+
   function turnStableKey(turn) {
     if (!turn) return '';
+    // Retain precedence of previously supported native message IDs so an
+    // upgraded extension does not change identity on pages exposing both.
+    const roleNode = turn.matches?.(ROLE_SELECTOR) ? turn : turn.querySelector?.(ROLE_SELECTOR);
+    for (const attribute of ['data-message-id', 'data-turn-id']) {
+      for (const node of [turn, roleNode]) {
+        const id = String(node?.getAttribute?.(attribute) || '').trim();
+        if (id) return attribute + ':' + id;
+      }
+    }
+    const actualMessageId = chatgptSearchMessageId(turn);
+    if (actualMessageId) return actualMessageId;
 
     // Repeated settle/signature polls must not force layout of an unchanged
     // many-screen message (especially when an image is being rendered).
@@ -867,10 +899,13 @@
   }
 
   function isStrongMessageId(id = '') {
-    return /^(?:data-message-id|data-turn-id):/.test(String(id || ''));
+    return /^(?:data-message-id|data-turn-id|data-chatgpt-search-message-ids):/.test(String(id || ''));
   }
 
   function turnIdentityContext(turn, knownTurns = null) {
+    // A canonical message UUID is sufficient proof of identity. Its changing
+    // virtualized neighbours must not trigger repeated full-text hashing.
+    if (isStrongMessageId(turnStableKey(turn))) return { previous: '', next: '' };
     // Collection already knows the ordered DOM window. Re-enumerating and
     // sorting the complete list for every turn is quadratic on long chats.
     const turns = knownTurns || orderedTurns();
@@ -4520,7 +4555,8 @@
         return {
           id,
           strongId: isStrongMessageId(id) ? id : '',
-          signature: String(turnTextSignature(turn) || '')
+          // Strong message UUIDs do not need a second expensive text hash.
+          signature: isStrongMessageId(id) ? '' : String(turnTextSignature(turn) || '')
         };
       })
       .filter(ref => ref.strongId || ref.signature);

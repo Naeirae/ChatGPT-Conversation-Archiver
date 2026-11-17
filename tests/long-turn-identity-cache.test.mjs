@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 
 const source = readFileSync(new URL('../content-chatgpt.js', import.meta.url), 'utf8');
-const start = source.indexOf('  function turnStableKey(');
+const start = source.indexOf('  function chatgptSearchMessageId(');
 const end = source.indexOf('  function isStrongMessageId(', start);
 assert.ok(start > 0 && end > start);
 const wrapper = { getAttribute: attr => attr === 'data-turn-key' ? 'virtual-wrapper' : '' };
