@@ -4961,7 +4961,7 @@
     const stability = scrollRuntime().createStabilityState();
     const watchdog = createContinuityWatchdog();
     let physicalStepCount = 0;
-    const renderedImageAttempts = new Map();
+
     // Preserve independently measured physical continuity across the next
     // loop's first collect. Previously only the immediate post-wheel collect
     // received this proof, and the next iteration could reject that SAME
@@ -5009,9 +5009,11 @@
           { visibleOnly: false, walkStep: i }
         );
       }
-      if (state.fragmentTextFirst) {
-        queueRenderedImageCapture(map, firstTouchedIds, renderedImageAttempts, i * 2);
-      }
+      // Do not start any screenshot/CDP image task while the physical wheel
+      // owns the debugger. Even a fire-and-forget screenshot shares the same
+      // backgroundFocus debugger lock and can stall a later scroll step.
+      // Image URLs, placement and pending status were captured by collect().
+
       const beforeRefs = visibleNavigationRefsLightweight();
 
       if (boundaryIsVisible(boundary)) {
@@ -5123,9 +5125,7 @@
           { visibleOnly: false, walkStep: i }
         );
       }
-      if (state.fragmentTextFirst) {
-        queueRenderedImageCapture(map, secondTouchedIds, renderedImageAttempts, i * 2 + 1);
-      }
+
 
       const afterRefs = visibleNavigationRefsLightweight();
       const physicalAfter = sampleCaptureScroller();
@@ -5940,11 +5940,6 @@
             markedEnd: mode === 'fragment' ? selectedFragment?.end
               : queueFragmentResume ? resumedDraft?.captureRange?.end : null
           });
-
-      // Flush only after the physical walk, never between its 220px steps.
-      if (mode === 'fragment' || queueFragmentResume) {
-        await finishPendingRenderedImageCapture();
-      }
 
       if (walkResult?.markedEndRebound && mode === 'fragment') {
         selectedFragment.end = {
