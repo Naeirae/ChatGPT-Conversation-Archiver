@@ -1835,13 +1835,19 @@
 
   function renderedImageNode(src = '') {
     const expected = String(src || '');
-    const nodes = [...document.querySelectorAll('img')];
-    return nodes.find(img => {
-      const candidate = imageSource(img);
-      if (!candidate || candidate !== expected) return false;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    // A remounted chat may have several DOM copies of the same attachment.
+    // The first matching element can be an offscreen prefetched image; choose
+    // the one fully on screen for an accurate screenshot instead.
+    for (const img of document.querySelectorAll('img')) {
+      if (imageSource(img) !== expected) continue;
       const rect = img.getBoundingClientRect();
-      return rect.width >= 2 && rect.height >= 2;
-    }) || null;
+      if (rect.width >= 2 && rect.height >= 2 &&
+          rect.left >= 0 && rect.top >= 0 &&
+          rect.right <= viewportWidth && rect.bottom <= viewportHeight) return img;
+    }
+    return null;
   }
 
   async function captureRenderedImageBlob(src = '') {
