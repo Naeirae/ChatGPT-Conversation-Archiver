@@ -2064,109 +2064,9 @@
     return result;
   }
 
-  // Image data must be captured while the browser actually displays it.
-  // A signed CDN URL may return HTTP 403 to both page fetch and the worker,
-  // even though Chrome has the decoded pixels. Screenshot the *whole visible
-  // image* through the existing CDP capture transport. Never fetch a protected
-  // URL or wait indefinitely before the next chronological wheel step.
-  // A screenshot may hang or fail; the wheel must not wait for it.
-  // At most one screenshot request per run may compete with physical movement.
-  let pendingRenderedImageCapture = null;
-  function queueRenderedImageCapture(map, touchedIds, attempts, walkStep = 0) {
-    if (pendingRenderedImageCapture || !state.fragmentTextFirst) return;
-    if (!(touchedIds || []).some(id =>
-      (map.get(id)?.images || []).some(image =>
-        image?.src && !(image.binaryStatus === 'ready' && image.dataUrl)
-      ))) return;
-    const task = captureVisibleRenderedImages(map, touchedIds, attempts, walkStep)
-      .catch(() => ({ ready: 0, pending: 0 }));
-    pendingRenderedImageCapture = task;
-    void task.finally(() => {
-      if (pendingRenderedImageCapture === task) pendingRenderedImageCapture = null;
-    });
-  }
-  async function finishPendingRenderedImageCapture() {
-    const task = pendingRenderedImageCapture;
-    if (task) await withCaptureOperationTimeout(task, 4000,
-      'Завершение снимка картинки').catch(() => {});
-  }
-  async function captureVisibleRenderedImages(map, touchedIds, attempts, walkStep = 0) {
-    if (!state.fragmentTextFirst || !map?.size) return { ready: 0, pending: 0 };
-    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-    let ready = 0;
-    let pending = 0;
-    const encountered = new Set();
-    // The viewport may contain an image in an already-known long message.
-    // Do not depend on the message count advancing to notice that image.
-    const candidateIds = new Set(touchedIds || []);
-    for (const id of candidateIds) {
-      const message = map.get(id);
-      if (!message) continue;
-      for (const image of message.images || []) {
-        const src = String(image?.src || '');
-        if (!src || encountered.has(src) || (image.binaryStatus === 'ready' && image.dataUrl)) continue;
-        encountered.add(src);
-        const attempt = attempts.get(src);
-        if (attempt?.ready || (attempt && (attempt.count >= 2 ||
-            walkStep - attempt.lastStep < 6))) continue;
-        // A snapshot of a clipped image would silently corrupt the archive.
-        // Only a fully displayed image can be marked binary-ready.
-        const node = renderedImageNode(src);
-        const rect = node?.getBoundingClientRect?.();
-        if (!rect || rect.width < 2 || rect.height < 2 ||
-            rect.left < 0 || rect.top < 0 ||
-            rect.right > viewportWidth || rect.bottom > viewportHeight ||
-            !node.complete || !node.naturalWidth) {
-          pending++;
-          continue;
-        }
-        let successful = false;
-        try {
-          const response = await withCaptureOperationTimeout(
-            chrome.runtime.sendMessage({
-              type: 'ARCHIVER_CAPTURE_RENDERED_IMAGE',
-              queueCapture: state.queueCapture,
-              jobId: state.jobId,
-              src,
-              rect: { left: rect.left, top: rect.top,
-                width: rect.width, height: rect.height },
-              viewport: { width: viewportWidth, height: viewportHeight }
-            }),
-            3500,
-            'Снимок видимого изображения'
-          );
-          if (response?.ok && /^data:image\//i.test(String(response.dataUrl || '')) &&
-              Number(response.byteSize || 0) > 0 &&
-              Number(response.byteSize) <= 12 * 1024 * 1024) {
-            for (const saved of map.values()) {
-              for (const target of saved.images || []) {
-                if (String(target.src || '') !== src) continue;
-                target.dataUrl = response.dataUrl;
-                target.mimeType = response.mimeType || 'image/png';
-                target.byteSize = response.byteSize;
-                target.binaryStatus = 'ready';
-                target.binaryError = '';
-              }
-            }
-            successful = true;
-            ready++;
-          }
-        } catch (_) {
-          // Keep the source and its original position for explicit recovery.
-        }
-        attempts.set(src, {
-          ready: successful,
-          count: (attempt?.count || 0) + 1,
-          lastStep: walkStep
-        });
-        if (!successful) pending++;
-        // Never hold the current viewport for multiple screenshot requests.
-        return { ready, pending };
-      }
-    }
-    return { ready, pending };
-  }
+  // Image binaries are handled by explicit images/images-draft recovery, after
+  // the message walk has released physical scrolling and the debugger.
+  // The fragment collector keeps img references and exact HTML placement.
 
   async function hydrateSequentialImages(messages, attemptState, { visibleOnly = false, walkStep = 0 } = {}) {
     // Failed sources must not re-block every 120px movement through a long
@@ -5443,7 +5343,6 @@
       }).catch(() => {});
     } finally {
       state.running = false;
-      pendingRenderedImageCapture = null;
       resetUnchangedTurnCache();
       state.paused = false;
       state.cancel = false;
@@ -6866,7 +6765,6 @@
       } catch (_) {}
     } finally {
       state.running = false;
-      pendingRenderedImageCapture = null;
       resetUnchangedTurnCache();
       state.jobId = null;
       state.queueCapture = false;
