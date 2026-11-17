@@ -38,7 +38,10 @@
     pauseSnapshotWriter: null,
     captureStartProof: null,
     strictChronology: false,
-    fragmentTextFirst: false
+    fragmentTextFirst: false,
+    // Messages with insufficient chronology evidence stay out of the
+    // published order until an additional visible anchor confirms placement.
+    pendingChronology: new Map()
   };
   let lastProgressAt = 0;
   const SETTINGS_KEY = 'archiverSettings';
@@ -2316,6 +2319,46 @@
     return occurrences.length === 1 && stored.length === 1;
   }
 
+  function unresolvedChronologyMessages() {
+    return [...state.pendingChronology.values()].map(entry => entry.message);
+  }
+
+  // Resolve deferred messages only between two ordered, observed anchors,
+  // or at the genuine edge. Never infer a position from discovery order alone.
+  function reconcilePendingChronology(map, order, visibleWindow = []) {
+    if (!state.pendingChronology.size) return;
+    const ids = visibleWindow.map(item => item.id);
+    for (let index = 0; index < ids.length; index++) {
+      const id = ids[index];
+      const pending = state.pendingChronology.get(id);
+      if (!pending) continue;
+      let beforeId = '';
+      let afterId = '';
+      for (let j = index - 1; j >= 0; j--) {
+        if (map.has(ids[j])) { beforeId = ids[j]; break; }
+      }
+      for (let j = index + 1; j < ids.length; j++) {
+        if (map.has(ids[j])) { afterId = ids[j]; break; }
+      }
+      // Keep earlier witnesses when virtualized away; never invent one.
+      beforeId ||= pending.beforeId;
+      afterId ||= pending.afterId;
+      const before = beforeId ? order.indexOf(beforeId) : -1;
+      const after = afterId ? order.indexOf(afterId) : -1;
+      if (before >= 0 && after >= 0 && before < after &&
+          after === before + 1) {
+        const item = visibleWindow[index] || pending.message;
+        order.splice(after, 0, id);
+        map.set(id, item);
+        state.pendingChronology.delete(id);
+      } else {
+        state.pendingChronology.set(id, {
+          message: visibleWindow[index] || pending.message, beforeId, afterId
+        });
+      }
+    }
+  }
+
   function collect(map, order, settings, stopBoundary = null, { verifiedForwardStep = false } = {}) {
     // Mounted turns are not necessarily visible turns. In particular a stale
     // virtualized window or another ChatGPT panel must not enter the archive.
@@ -2443,6 +2486,16 @@
         map.set(id, mergeRicherCapture(message, map.get(id)));
         continue;
       }
+      // A message deferred by a prior virtualized window can now have new
+      // witnesses, but must not be placed by the order it was discovered.
+      const earlierPending = state.pendingChronology.get(id);
+      if (earlierPending) {
+        state.pendingChronology.set(id, {
+          ...earlierPending,
+          message: mergeRicherCapture(message, earlierPending.message)
+        });
+        continue;
+      }
       // Position the new turn by its actually observed DOM neighbours, never
       // simply at the end of a global map when earlier turns are remounted.
       let beforeId = '';
@@ -2470,13 +2523,18 @@
         // previously saved turns which are currently virtualized away.
         if ((before >= 0 && after < 0 && before !== order.length - 1) ||
             (after >= 0 && before < 0 && after !== 0)) {
-          throw new Error('Односторонняя привязка внутри архива неоднозначна. Черновик сохранён без перестановок.');
+          // This is an incomplete observation, not a contradiction.
+          // Keep the message and its proven neighbour outside canonical
+          // chronology and continue scanning until another anchor appears.
+          state.pendingChronology.set(id, { message, beforeId, afterId });
+          continue;
         }
       }
       const insertAt = after >= 0 ? after : before >= 0 ? before + 1 : order.length;
       order.splice(insertAt, 0, id);
       map.set(id, message);
     }
+    reconcilePendingChronology(map, order, windowMessages);
     return [...new Set(touchedIds)];
   }
 
@@ -4443,6 +4501,7 @@
 
     let messages = order.map(id => map.get(id)).filter(Boolean);
     if (!messages.length) return;
+    const unplacedMessages = unresolvedChronologyMessages();
 
     const canonicalRecoveryDraftId =
       current.draftId || current.recoveryDraftId || '';
@@ -4496,6 +4555,8 @@
         (current.phase === 'walk' ? 'down' : 'up'),
       resumeWindowSignatures: currentResumeWindowSignatures(6),
       messages,
+      unplacedMessages,
+      pendingChronology: [...state.pendingChronology.values()],
       imageCount: messages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
       imageBinaryReady: messages.reduce((sum, item) =>
         sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
@@ -5949,6 +6010,19 @@
       map.clear();
       order.length = 0;
       state.strictChronology = true;
+      state.pendingChronology.clear();
+      // Resume must retain the exact unsorted evidence from the prior draft.
+      // It cannot be silently discarded when the virtualized viewport changes.
+      if (resumedDraft?.pendingChronology?.length) {
+        for (const entry of resumedDraft.pendingChronology) {
+          if (!entry?.message?.id) continue;
+          state.pendingChronology.set(entry.message.id, {
+            message: entry.message,
+            beforeId: String(entry.beforeId || ''),
+            afterId: String(entry.afterId || '')
+          });
+        }
+      }
       chronologicalStarted = true;
 
       const resumedQueueMode = state.queueCapture && mode === 'resume-draft'
@@ -5973,6 +6047,12 @@
               : queueFragmentResume ? resumedDraft?.captureRange?.end : null
           });
 
+      if (state.pendingChronology.size) {
+        await saveRecoveryCheckpoint(map, order, boundary, { force: true });
+        throw new Error('Собраны сообщения с неподтверждённой позицией: ' +
+          state.pendingChronology.size + '. Они сохранены отдельно в черновике, ' +
+          'но хронология не объявлена завершённой.');
+      }
       if (walkResult?.markedEndRebound && mode === 'fragment') {
         selectedFragment.end = {
           ...selectedFragment.end,
@@ -6683,7 +6763,24 @@
         capturedCount: map.size, occurredAt: Date.now()
       } }).catch(() => {});
       const activeKey = state.queueCapture ? 'archiverQueueJob:' + jobId : 'activeCaptureJob';
-      const current = (await chrome.storage.local.get(activeKey))[activeKey] || {};
+      const current = (await withCaptureOperationTimeout(
+        chrome.storage.local.get(activeKey), 5000, 'Чтение состояния после ошибки'
+      ).catch(() => ({})))[activeKey] || {};
+
+      // Report the primary error BEFORE potentially slow draft enrichment.
+      // The worker already has the last recoverable checkpoint; do not leave
+      // the popup claiming 'running' for minutes when the collector exited.
+      const existingCheckpointId = current.draftId || current.recoveryDraftId ||
+        ('draft-' + jobId);
+      await withCaptureOperationTimeout(chrome.runtime.sendMessage({
+        type: 'ARCHIVER_CAPTURE_FAILED',
+        queueCapture: state.queueCapture,
+        jobId,
+        error: message,
+        draftId: existingCheckpointId,
+        draftCount: Number(current.draftCount || 0),
+        status
+      }), 5000, 'Сообщение об ошибке фоновой службе').catch(() => {});
 
       let draftId = '';
       let draftCount = 0;
@@ -6747,6 +6844,7 @@
           (map.size > 0 ||
             (['resume-draft', 'retry-walk'].includes(mode) && Boolean(existingDraftId)))) {
         let draftMessages = order.map(id => map.get(id)).filter(Boolean);
+        const unplacedMessages = unresolvedChronologyMessages();
 
         let existingRecoveryDraft = null;
         if ((mode === 'resume-draft' || mode === 'retry-walk') && existingDraftId) {
@@ -6838,6 +6936,8 @@
               (recoveryCapturePhase === 'walk' ? 'down' : 'up'),
             resumeWindowSignatures: currentResumeWindowSignatures(6),
             messages: draftMessages,
+            unplacedMessages,
+            pendingChronology: [...state.pendingChronology.values()],
             imageCount: draftMessages.reduce((sum, item) => sum + (item.images ? item.images.length : 0), 0),
             imageBinaryReady: draftMessages.reduce((sum, item) =>
               sum + (item.images || []).filter(image => image?.binaryStatus === 'ready' && image.dataUrl).length, 0),
@@ -6912,6 +7012,7 @@
       state.boundarySearchActive = false;
       state.strictChronology = false;
       state.fragmentTextFirst = false;
+      state.pendingChronology.clear();
     }
   }
 

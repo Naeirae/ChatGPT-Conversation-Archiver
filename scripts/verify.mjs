@@ -1303,6 +1303,7 @@ const tests = spawnSync(process.execPath, [
   'tests/capture-evidence.test.mjs',
   'tests/capture-viewport.test.mjs',
   'tests/capture-traversal.test.mjs',
+  'tests/deferred-chronology.test.mjs',
   'tests/actual-chatgpt-message-ids.test.mjs',
   'tests/capture-image-retry.test.mjs',
   'tests/capture-queue.test.mjs',
