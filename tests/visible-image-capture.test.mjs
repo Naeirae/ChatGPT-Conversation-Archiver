@@ -98,3 +98,19 @@ test('rendered image lookup ignores offscreen duplicate with matching source URL
   });
   assert.equal(resolve('https://cdn.example.org/protected.png'), images[1]);
 });
+
+test('background scroll probe does not read layout-forcing innerText of image turns', () => {
+  const worker = readFileSync(new URL('../service-worker.js', import.meta.url), 'utf8');
+  const begin = worker.indexOf('async function chatScrollMetrics(');
+  const end = worker.indexOf('async function scriptedScrollChatTab(', begin);
+  const probe = worker.slice(begin, end);
+  assert.ok(begin >= 0 && end > begin);
+  assert.doesNotMatch(probe, /turn\.innerText|turn\.textContent/);
+  assert.match(probe, /scrollportRight/);
+  const wheelBegin = worker.indexOf('async function physicalScrollTab(');
+  const wheelEnd = worker.indexOf('async function withChatDebugger(', wheelBegin);
+  const wheel = worker.slice(wheelBegin, wheelEnd);
+  assert.match(wheel, /beforeMetrics\?\.scrollportRight/);
+  assert.match(wheel, /scriptedScrollChatTab\(/);
+  assert.match(wheel, /fallbackMoved \|\| fallbackAtEdge/);
+});
