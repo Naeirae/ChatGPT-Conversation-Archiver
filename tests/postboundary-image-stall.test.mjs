@@ -17,12 +17,12 @@ test('every prewheel operation is traced after image-bearing 19th message',()=>{
   ])assert.ok(walk.includes("'"+stage+"'"),stage);
   assert.match(walk,/map\.size >= 16/);
 });
-test('same viewport is reused only with unmutated observer-backed captures',()=>{
+test('same viewport is never synchronously collected twice before the next wheel',()=>{
   assert.match(walk,/const previousWindowStillMounted = i > 0/);
+  assert.match(walk,/Array\.isArray\(lastCollectedWindowIds\)/);
   assert.match(walk,/currentPosition\?\.top === lastCollectedPosition\?\.top/);
-  assert.match(walk,/cached\.observer\.takeRecords\(\)\.length === 0/);
-  assert.match(walk,/map\.has\(cached\.id\)/);
   assert.match(walk,/\? lastCollectedWindowIds\s*: collect\(/);
+  assert.doesNotMatch(walk,/mountedNow\.every\(turn =>/);
 });
 test('all physically moved post-scroll windows are still captured',()=>{
   assert.match(walk,/const secondTouchedIds = collect\(map, order, settings, boundary/);
