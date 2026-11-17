@@ -2,6 +2,21 @@ const $ = id => document.getElementById(id);
 let pollTimer = null;
 let state = null;
 
+// A stalled MV3 worker must not hold the popup's initial UI indefinitely.
+// This is read-only: timeout never resets or deletes archived data.
+function popupStateRequest(type, timeoutMs = 7000) {
+  let timeoutId;
+  return Promise.race([
+    chrome.runtime.sendMessage({ type }),
+    new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Error(
+        'Фоновая служба архиватора не ответила за ' +
+        Math.round(timeoutMs / 1000) + ' с (' + type + '). Архивы и черновики не изменены.'
+      )), timeoutMs);
+    })
+  ]).finally(() => clearTimeout(timeoutId));
+}
+
 const DEFAULT_INTERFACE_APPEARANCE = {
   palette: 'ocean',
   fontPreset: 'segoe',
@@ -546,13 +561,13 @@ function withDetailedArchiveCounts(rows = []) {
 }
 
 async function loadFastArchiveLibrary() {
-  const response = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_SAVED_ARCHIVES_FAST' });
+  const response = await popupStateRequest('ARCHIVER_GET_SAVED_ARCHIVES_FAST');
   if (!response?.ok) throw new Error(response?.error || 'Не удалось загрузить библиотеку архивов.');
   renderSavedArchives(response.savedArchives || []);
 }
 
 async function hydrateSavedArchiveDetails() {
-  const response = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_SAVED_ARCHIVES_DETAILS' });
+  const response = await popupStateRequest('ARCHIVER_GET_SAVED_ARCHIVES_DETAILS');
   if (!response?.ok) throw new Error(response?.error || 'Не удалось получить статистику архивов.');
   detailedSavedArchives = response.savedArchives || [];
   // Include legacy rows whose IDs existed in index/destinations but were
@@ -1652,7 +1667,7 @@ $('unfinishedSearch').addEventListener('input', () => {
 $('loadUnfinishedPasses').onclick = () => { void loadUnfinishedGroups(); };
 
 async function getState() {
-  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_STATE' });
+  const result = await popupStateRequest('ARCHIVER_GET_STATE');
   if (!result?.ok) throw new Error(result?.error || 'Не удалось получить состояние.');
   if (cachedUnfinishedGroups) {
     result.unfinishedPasses = cachedUnfinishedGroups;
@@ -1698,7 +1713,7 @@ function mergeLiveUnfinished(rows = [], live = null) {
 }
 
 async function getLiveState() {
-  const result = await chrome.runtime.sendMessage({ type: 'ARCHIVER_GET_LIVE_STATE' });
+  const result = await popupStateRequest('ARCHIVER_GET_LIVE_STATE');
   if (!result?.ok) throw new Error(result?.error || 'Не удалось получить состояние сбора.');
 
   const previousStatus = state?.job?.status || '';
