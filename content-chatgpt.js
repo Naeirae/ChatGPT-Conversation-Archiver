@@ -2141,9 +2141,35 @@
   // each step. A mutation-tracked unchanged DOM can reuse its saved capture.
   let unchangedTurnCache = new WeakMap();
   const unchangedTurnObservers = new Set();
+  // Image loaders can repeatedly mutate class/style/loading attributes
+  // inside an otherwise completed turn. MutationObserver marks the entire
+  // capture dirty, which previously forced clone + innerText + image layout
+  // again on every 220px step. A raw textContent + source check is cheap,
+  // does not force layout, and only reuses a previously verified capture.
+  function unchangedImageBearingCapture(turn, entry, saved) {
+    if (!state.fragmentTextFirst || !saved?.images?.length ||
+        !entry || !entry.imageSnapshot) return false;
+    const root = contentRoot(turn, saved.role);
+    if (!root || String(root.textContent || '') !== entry.imageSnapshot.text) return false;
+    const currentImages = turnImageNodes(turn, saved.role)
+      .map(img => [imageSource(img), img.getAttribute('alt') || '']);
+    const previousImages = entry.imageSnapshot.images;
+    if (currentImages.length !== previousImages.length) return false;
+    for (let i = 0; i < currentImages.length; i++) {
+      if (currentImages[i][0] !== previousImages[i][0] ||
+          currentImages[i][1] !== previousImages[i][1]) return false;
+    }
+    return true;
+  }
+
   function rememberUnchangedTurn(turn, id, knownTurns = []) {
     if (!turn?.isConnected || !id || typeof MutationObserver === 'undefined') return;
     const previous = unchangedTurnCache.get(turn);
+    if (previous && previous.id === id && !previous.dirty &&
+        previous.parent === turn.parentElement && previous.observer &&
+        !previous.observer.takeRecords().length) {
+      return; // Do not tear down and reinstall an unchanged observer each wheel.
+    }
     if (previous) {
       previous.observer.disconnect();
       unchangedTurnObservers.delete(previous.observer);
@@ -2154,9 +2180,21 @@
     const nextTurn = !strong && index >= 0 ? (knownTurns[index + 1] || null) : null;
     const wrapper = turn.closest?.('[data-turn-key]') ||
       turn.querySelector?.('[data-turn-key]');
+    const role = roleOf(turn);
+    const savedRoot = state.fragmentTextFirst ? contentRoot(turn, role) : null;
+    const imgNodes = savedRoot?.querySelector?.('img') ||
+      (state.fragmentTextFirst && turn.querySelector?.('img'));
+    // Compute the inexpensive snapshot only for image-bearing turns. Do not
+    // clone them or inspect loaded pixels. A future src/alt/text change will
+    // force regular recapture to preserve new content.
+    const imageSnapshot = imgNodes ? {
+      text: String(savedRoot?.textContent || ''),
+      images: turnImageNodes(turn, role).map(img =>
+        [imageSource(img), img.getAttribute('alt') || ''])
+    } : null;
     const entry = { id, dirty: false, parent: turn.parentElement,
-      role: roleOf(turn), wrapperKey: String(wrapper?.getAttribute?.('data-turn-key') || ''),
-      previousTurn, nextTurn, observer: null };
+      role, wrapperKey: String(wrapper?.getAttribute?.('data-turn-key') || ''),
+      previousTurn, nextTurn, imageSnapshot, observer: null };
     const observer = new MutationObserver(() => { entry.dirty = true; });
     const options = { subtree: true, childList: true,
       characterData: true, attributes: true };
@@ -2173,7 +2211,7 @@
   function existingUnchangedTurn(turn, map, settings, knownTurns = []) {
     if (settings?.includeReasoning || !turn?.isConnected) return null;
     const entry = unchangedTurnCache.get(turn);
-    if (!entry || entry.dirty || entry.parent !== turn.parentElement) return null;
+    if (!entry || entry.parent !== turn.parentElement) return null;
     if (!isStrongMessageId(entry.id)) {
       const index = knownTurns.indexOf(turn);
       if (index < 0 || (index > 0 ? knownTurns[index - 1] : null) !== entry.previousTurn ||
@@ -2181,9 +2219,13 @@
     }
     const saved = map.get(entry.id);
     if (!saved || saved.role !== roleOf(turn)) return null;
-    if (entry.observer.takeRecords().length) {
-      entry.dirty = true;
-      return null;
+    if (entry.observer.takeRecords().length) entry.dirty = true;
+    if (entry.dirty) {
+      // Ignore purely visual image-loader mutations only if both text and
+      // exact image metadata still match the canonical captured turn.
+      // Changing image src, alt or actual message text triggers a full parse.
+      if (!unchangedImageBearingCapture(turn, entry, saved)) return null;
+      entry.dirty = false;
     }
     return saved;
   }
