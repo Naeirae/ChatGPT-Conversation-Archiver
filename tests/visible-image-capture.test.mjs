@@ -77,8 +77,8 @@ test('fragment walk visits rendered-image acquisition during unchanged long mess
   const start = source.indexOf('  async function walkDown(');
   const end = source.indexOf('  async function ', start + 30);
   const walk = source.slice(start, end);
-  assert.match(walk, /captureVisibleRenderedImages\(map, firstTouchedIds, renderedImageAttempts, i \* 2\)/);
-  assert.match(walk, /captureVisibleRenderedImages\(map, secondTouchedIds, renderedImageAttempts, i \* 2 \+ 1\)/);
+  assert.match(walk, /queueRenderedImageCapture\(map, firstTouchedIds, renderedImageAttempts, i \* 2\)/);
+  assert.match(walk, /queueRenderedImageCapture\(map, secondTouchedIds, renderedImageAttempts, i \* 2 \+ 1\)/);
   assert.match(source, /const fragmentImageDeferred = mode === 'fragment'/);
 });
 
@@ -113,4 +113,31 @@ test('background scroll probe does not read layout-forcing innerText of image tu
   assert.match(wheel, /beforeMetrics\?\.scrollportRight/);
   assert.match(wheel, /scriptedScrollChatTab\(/);
   assert.match(wheel, /fallbackMoved \|\| fallbackAtEdge/);
+});
+
+test('pending screenshot never blocks a subsequent physical scroll step', async () => {
+  const begin = source.indexOf('  // A screenshot may hang or fail; the wheel must not wait for it.');
+  const end = source.indexOf('  async function captureVisibleRenderedImages(', begin);
+  assert.ok(begin > 0 && end > begin);
+  const prefix = source.slice(begin, end);
+  let unblock;
+  const pending = new Promise(resolve => { unblock = resolve; });
+  let calls = 0;
+  const funcs = new Function('state', 'captureVisibleRenderedImages', 'withCaptureOperationTimeout',
+    prefix + '\nreturn { queueRenderedImageCapture, finishPendingRenderedImageCapture };')(
+    { fragmentTextFirst: true },
+    () => { calls++; return pending; },
+    async operation => operation
+  );
+  const image = { src: 'https://example.org/image.png', binaryStatus: 'pending' };
+  const map = new Map([['m1', { images: [image] }]]);
+  funcs.queueRenderedImageCapture(map, ['m1'], new Map(), 42);
+  funcs.queueRenderedImageCapture(map, ['m1'], new Map(), 43);
+  assert.equal(calls, 1, 'one request only while the screenshot is pending');
+  const start = source.indexOf('  async function walkDown(');
+  const endWalk = source.indexOf('  async function ', start + 30);
+  assert.doesNotMatch(source.slice(start, endWalk),
+    /await captureVisibleRenderedImages|await queueRenderedImageCapture/);
+  unblock({ ready: 0, pending: 1 });
+  await funcs.finishPendingRenderedImageCapture();
 });
