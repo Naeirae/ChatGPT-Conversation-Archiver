@@ -4867,24 +4867,61 @@
     // received this proof, and the next iteration could reject that SAME
     // virtualized window before moving again.
     let previousVerifiedForwardStep = false;
+    let lastCollectedWindowIds = null;
+    let lastCollectedPosition = null;
+    // Persist the first uncompleted stage before potentially expensive DOM
+    // work so a repeatable image hang identifies the exact blocking call.
+    const traceIterationStage = async (stage, i) => {
+      if (i < 3 || i % 10 === 0 || map.size >= 16) {
+        await progress('Этап 2/3: ' + stage + ' · ' + map.size +
+          ' сообщений', map.size, {
+            phase: 'walk', walkDiagnosticStage: stage,
+            walkDiagnosticIteration: i + 1, force: true
+          });
+      }
+    };
     const startedAt = Date.now();
     const timeoutMs = 4 * 60 * 60 * 1000;
 
     for (let i = 0; Date.now() - startedAt < timeoutMs; i++) {
+      await traceIterationStage('iteration-enter', i);
       await waitIfPaused();
 
       if (recoverLoadErrors && await recoverVisibleLoadError('walk', map.size)) {
         scrollRuntime().resetStabilityState(stability);
       }
 
+      await traceIterationStage('prescroll-expand-enter', i);
       await expandVisible();
       if (settings.includeReasoning) await expandReasoningVisible();
+      await traceIterationStage('prescroll-expand-done', i);
 
       // Always capture the current viewport before moving. This is especially
       // important for the very first viewport at the real top of the chat.
-      const firstTouchedIds = collect(map, order, settings, boundary, {
-        verifiedForwardStep: previousVerifiedForwardStep
-      });
+      await traceIterationStage('prescroll-collect-enter', i);
+      // The preceding post-scroll collection already captured this very
+      // viewport. When its physical position is unchanged, don't reparse its
+      // image-bearing DOM before every next wheel step.
+      const currentPosition = sampleCaptureScroller();
+      // A same-position DOM can still change while images resolve. Reuse only
+      // when every mounted turn is covered by its mutation-aware capture cache.
+      const mountedNow = orderedTurns();
+      const previousWindowStillMounted = i > 0 && lastCollectedWindowIds &&
+        currentPosition?.element === lastCollectedPosition?.element &&
+        currentPosition?.top === lastCollectedPosition?.top &&
+        mountedNow.every(turn => {
+          const cached = unchangedTurnCache.get(turn);
+          return cached && !cached.dirty && cached.observer &&
+            cached.parent === turn.parentElement &&
+            cached.observer.takeRecords().length === 0 &&
+            map.has(cached.id);
+        });
+      const firstTouchedIds = previousWindowStillMounted
+        ? lastCollectedWindowIds
+        : collect(map, order, settings, boundary, {
+            verifiedForwardStep: previousVerifiedForwardStep
+          });
+      await traceIterationStage('prescroll-collect-done', i);
       // Marked-range capture is a single downward collecting pass. Scrolling
       // past hundreds of messages with an empty map is never a valid mode.
       if (i === 0 && requireBoundary && map.size === 0) {
@@ -4914,7 +4951,9 @@
       // backgroundFocus debugger lock and can stall a later scroll step.
       // Image URLs, placement and pending status were captured by collect().
 
+      await traceIterationStage('prescroll-refs-enter', i);
       const beforeRefs = visibleNavigationRefsLightweight();
+      await traceIterationStage('prescroll-refs-done', i);
 
       if (boundaryIsVisible(boundary)) {
         const boundaryImageStats = capturedImageStats([...map.values()]);
@@ -4938,8 +4977,10 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
+      await traceIterationStage('prescroll-observation-enter', i);
       const physicalBefore = sampleCaptureScroller();
       const before = scrollObservation(map.size);
+      await traceIterationStage('prescroll-observation-done', i);
       const walkImageStats = capturedImageStats([...map.values()]);
       await progress(
         'Этап 2/3: физически прохожу вниз · ' +
@@ -4955,7 +4996,9 @@
           imageBinaryFailed: walkImageStats.failed
         }
       );
+      await traceIterationStage('prescroll-checkpoint-enter', i);
       await saveRecoveryCheckpoint(map, order, boundary);
+      await traceIterationStage('prescroll-checkpoint-done', i);
 
       // Downward capture stays granular. If either virtualization or a manual
       // jump moves farther than one overlapping message window, recover upward
@@ -5017,6 +5060,8 @@
       const secondTouchedIds = collect(map, order, settings, boundary, {
         verifiedForwardStep: secondForwardStep
       });
+      lastCollectedWindowIds = secondTouchedIds;
+      lastCollectedPosition = sampleCaptureScroller();
       await traceWalkStage('collect-done', 'чтение реплик завершено');
       if (hydrateImages) {
         await hydrateSequentialImages(
@@ -5106,7 +5151,9 @@
       }
 
       await traceWalkStage('postcollect-boundary-done', 'нижняя метка проверена');
+      await traceIterationStage('postcollect-checkpoint-enter', i);
       await saveRecoveryCheckpoint(map, order, boundary);
+      await traceIterationStage('postcollect-checkpoint-done', i);
       // No new message text is expected while crossing a 20-screen turn.
       // Only a non-moving viewport contributes to the stall counter.
       // Keep two different notions of motion: a strong *continuity proof*
