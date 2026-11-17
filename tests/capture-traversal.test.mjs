@@ -95,7 +95,8 @@ test('navigation overlap only uses physically visible turns', () => {
   const first = refs();
   current = after;
   const second = refs();
-  assert.deepEqual(second.map(ref => ref.signature), ['ten', 'eleven']);
+  assert.deepEqual(second.map(ref => ref.strongId), ['data-message-id:ten', 'data-message-id:eleven']);
+  assert.deepEqual(second.map(ref => ref.signature), ['', ''], 'strong identity does not need full text hashing');
   assert.equal(overlap(first, second), false);
 });
 
