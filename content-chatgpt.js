@@ -4903,19 +4903,15 @@
       // viewport. When its physical position is unchanged, don't reparse its
       // image-bearing DOM before every next wheel step.
       const currentPosition = sampleCaptureScroller();
-      // A same-position DOM can still change while images resolve. Reuse only
-      // when every mounted turn is covered by its mutation-aware capture cache.
-      const mountedNow = orderedTurns();
-      const previousWindowStillMounted = i > 0 && lastCollectedWindowIds &&
+      // Every noninitial iteration starts on the EXACT viewport that the
+      // previous iteration has already captured immediately after its wheel.
+      // Do not re-enter synchronous collect() here because image DOM mutation
+      // can invalidate all observer caches and cause a blocking full reparse.
+      // A newly mounted viewport is still collected after the very next 220px
+      // wheel, with the same overlapping visibility window.
+      const previousWindowStillMounted = i > 0 && Array.isArray(lastCollectedWindowIds) &&
         currentPosition?.element === lastCollectedPosition?.element &&
-        currentPosition?.top === lastCollectedPosition?.top &&
-        mountedNow.every(turn => {
-          const cached = unchangedTurnCache.get(turn);
-          return cached && !cached.dirty && cached.observer &&
-            cached.parent === turn.parentElement &&
-            cached.observer.takeRecords().length === 0 &&
-            map.has(cached.id);
-        });
+        currentPosition?.top === lastCollectedPosition?.top;
       const firstTouchedIds = previousWindowStillMounted
         ? lastCollectedWindowIds
         : collect(map, order, settings, boundary, {
