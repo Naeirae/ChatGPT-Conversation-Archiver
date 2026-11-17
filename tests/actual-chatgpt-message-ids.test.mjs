@@ -75,6 +75,6 @@ test('hundreds of image-bearing identity checks need no DOM text reads',()=>{
 });
 
 test('new search UUID support is wired into strong-ID based navigation',()=>{
- assert.match(source,/data-chatgpt-search-message-ids\\):/);
- assert.match(source,/signature: isStrongMessageId\\(id\\) \\? '' : String\\(turnTextSignature/);
+ assert.ok(source.includes('data-chatgpt-search-message-ids):'));
+ assert.ok(source.includes("signature: isStrongMessageId(id) ? '' : String(turnTextSignature"));
 });
