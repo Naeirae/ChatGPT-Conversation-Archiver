@@ -812,6 +812,20 @@
   function turnStableKey(turn) {
     if (!turn) return '';
 
+    // Repeated settle/signature polls must not force layout of an unchanged
+    // many-screen message (especially when an image is being rendered).
+    // MutationObserver invalidation is installed by collect() after capture.
+    const cached = unchangedTurnCache?.get(turn);
+    if (cached && !cached.dirty && turn.isConnected &&
+        cached.parent === turn.parentElement &&
+        !cached.observer.takeRecords().length) {
+      const wrapper = turn.closest?.('[data-turn-key]') ||
+        turn.querySelector?.('[data-turn-key]');
+      if (String(wrapper?.getAttribute?.('data-turn-key') || '') === cached.wrapperKey &&
+          roleOf(turn) === cached.role) return cached.id;
+    }
+    if (cached) cached.dirty = true;
+
     const role = roleOf(turn) || 'unknown';
     const nodes = [
       turn,
@@ -2217,7 +2231,10 @@
     const strong = isStrongMessageId(id);
     const previousTurn = !strong && index > 0 ? knownTurns[index - 1] : null;
     const nextTurn = !strong && index >= 0 ? (knownTurns[index + 1] || null) : null;
+    const wrapper = turn.closest?.('[data-turn-key]') ||
+      turn.querySelector?.('[data-turn-key]');
     const entry = { id, dirty: false, parent: turn.parentElement,
+      role: roleOf(turn), wrapperKey: String(wrapper?.getAttribute?.('data-turn-key') || ''),
       previousTurn, nextTurn, observer: null };
     const observer = new MutationObserver(() => { entry.dirty = true; });
     const options = { subtree: true, childList: true,
@@ -5046,7 +5063,11 @@
       // synchronous DOM-processing stall. These are progress records, not
       // claims of message coverage or boundary verification.
       const traceWalkStage = async (stage, label) => {
-        if (i >= 3) return;
+        // Image-bearing turns often appear much later than the first three
+        // steps. Keep diagnostics every tenth step and whenever an attachment
+        // is in the saved window, rather than going blind after 660px.
+        const imageInWindow = [...map.values()].some(item => (item.images || []).length);
+        if (i >= 3 && i % 10 !== 0 && !imageInWindow) return;
         await progress(
           'Этап 2/3: ' + label + ' · ' + map.size + ' сообщений · позиция ' +
             (physicalAfterWheel ? Math.round(physicalAfterWheel.top) + ' px' : 'не определена'),
