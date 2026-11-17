@@ -5126,13 +5126,12 @@
       // joining disconnected messages or declaring chronological overlap.
       if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability);
       // Only a stationary/ambiguous wheel needs a DOM text signature.
+      const after = physicallyAdvanced ? null : scrollObservation(map.size);
       const stall = physicallyAdvanced
         ? { stable: 0 }
-        : scrollRuntime().updateStabilityState(
-            stability, before, scrollObservation(map.size)
-          );
+        : scrollRuntime().updateStabilityState(stability, before, after);
 
-      if (stall.stable >= 3 && after.atEnd) {
+      if (stall.stable >= 3 && after?.atEnd) {
         if (requireBoundary) {
           const completeRows = order.map(id => map.get(id)).filter(Boolean);
           // The full collected sequence may contain the original neighbour
