@@ -56,6 +56,25 @@ test('ambiguous search units with two different UUIDs are not certified as one m
 
 test('strong UUID never recomputes context from virtualized neighbouring messages',()=>{
  const assistant=turn('assistant',assistantId+' '+assistantId);
- assert.equal(identity.turnIdentityContext(assistant),JSON.parse(JSON.stringify({previous:'',next:''})).previous!==undefined
-  ? undefined:undefined);
+ assert.deepEqual(JSON.parse(JSON.stringify(identity.turnIdentityContext(assistant))),
+   {previous:'',next:''});
+ assert.equal(textReads,0);
+});
+
+test('native data-message-id keeps precedence on clients exposing both formats',()=>{
+ const user=turn('user',userId,{'data-message-id':'legacy-stable-123'});
+ assert.equal(identity.turnStableKey(user),'data-message-id:legacy-stable-123');
+});
+
+test('hundreds of image-bearing identity checks need no DOM text reads',()=>{
+ const assistant=turn('assistant',assistantId+' '+assistantId);
+ for(let i=0;i<250;i++){
+   assert.equal(identity.turnStableKey(assistant),'data-chatgpt-search-message-ids:'+assistantId);
+ }
+ assert.equal(textReads,0);
+});
+
+test('new search UUID support is wired into strong-ID based navigation',()=>{
+ assert.match(source,/data-chatgpt-search-message-ids\\):/);
+ assert.match(source,/signature: isStrongMessageId\\(id\\) \\? '' : String\\(turnTextSignature/);
 });
