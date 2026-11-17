@@ -5027,8 +5027,9 @@
       }
 
 
-      const afterRefs = visibleNavigationRefsLightweight();
+      await traceWalkStage('postcollect-enter', 'проверяю движение после чтения');
       const physicalAfter = sampleCaptureScroller();
+      await traceWalkStage('postcollect-physical-done', 'физическое движение проверено');
       previousVerifiedForwardStep = measuredAdjacentScroll(
         physicalBefore, physicalAfter, downwardStep
       );
@@ -5063,8 +5064,14 @@
         Number(physicalAfter?.top) > Number(physicalBefore?.top) + 2
       );
       if (!physicalMovedForward &&
-          !navigationWindowsOverlap(beforeRefs, afterRefs) &&
           !measuredAdjacentScroll(physicalBefore, physicalAfter, downwardStep)) {
+        // Only perform expensive text-based continuity when there is no
+        // verified forward scroll. Re-reading all image-bearing turns after
+        // every 220px movement can lock up a huge DOM.
+        await traceWalkStage('postcollect-overlap-enter', 'сверяю сообщения');
+        const afterRefs = visibleNavigationRefsLightweight();
+        await traceWalkStage('postcollect-overlap-done', 'сверка сообщений завершена');
+        if (!navigationWindowsOverlap(beforeRefs, afterRefs)) {
         await waitForTurnSettle(2400, 450);
         await expandVisible();
         if (settings.includeReasoning) await expandReasoningVisible();
@@ -5072,8 +5079,10 @@
           verifiedForwardStep: measuredAdjacentScroll(physicalBefore, sampleCaptureScroller(), downwardStep)
         });
         await saveRecoveryCheckpoint(map, order, boundary);
+        }
       }
 
+      await traceWalkStage('postcollect-boundary-enter', 'проверяю нижнюю метку');
       if (boundaryIsVisible(boundary)) {
         const boundaryImageStats = capturedImageStats([...map.values()]);
         await progress(
@@ -5096,9 +5105,8 @@
         return { boundaryReached: true, physicalEndReached: false };
       }
 
-            await saveRecoveryCheckpoint(map, order, boundary);
-
-      const after = scrollObservation(map.size);
+      await traceWalkStage('postcollect-boundary-done', 'нижняя метка проверена');
+      await saveRecoveryCheckpoint(map, order, boundary);
       // No new message text is expected while crossing a 20-screen turn.
       // Only a non-moving viewport contributes to the stall counter.
       // Keep two different notions of motion: a strong *continuity proof*
@@ -5117,9 +5125,12 @@
       // Moderate progress resets the STALL timer only; it never authorizes
       // joining disconnected messages or declaring chronological overlap.
       if (physicallyAdvanced) scrollRuntime().resetStabilityState(stability);
+      // Only a stationary/ambiguous wheel needs a DOM text signature.
       const stall = physicallyAdvanced
         ? { stable: 0 }
-        : scrollRuntime().updateStabilityState(stability, before, after);
+        : scrollRuntime().updateStabilityState(
+            stability, before, scrollObservation(map.size)
+          );
 
       if (stall.stable >= 3 && after.atEnd) {
         if (requireBoundary) {
