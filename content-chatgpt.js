@@ -6871,6 +6871,7 @@
       } catch (_) {}
     } finally {
       state.running = false;
+      pendingRenderedImageCapture = null;
       resetUnchangedTurnCache();
       state.jobId = null;
       state.queueCapture = false;
