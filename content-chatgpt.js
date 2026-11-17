@@ -2147,7 +2147,7 @@
   // again on every 220px step. A raw textContent + source check is cheap,
   // does not force layout, and only reuses a previously verified capture.
   function unchangedImageBearingCapture(turn, entry, saved) {
-    if (!state.fragmentTextFirst || !saved?.images?.length ||
+    if (typeof state === 'undefined' || !state.fragmentTextFirst || !saved?.images?.length ||
         !entry || !entry.imageSnapshot) return false;
     const root = contentRoot(turn, saved.role);
     if (!root || String(root.textContent || '') !== entry.imageSnapshot.text) return false;
@@ -2181,9 +2181,11 @@
     const wrapper = turn.closest?.('[data-turn-key]') ||
       turn.querySelector?.('[data-turn-key]');
     const role = roleOf(turn);
-    const savedRoot = state.fragmentTextFirst ? contentRoot(turn, role) : null;
-    const imgNodes = savedRoot?.querySelector?.('img') ||
-      (state.fragmentTextFirst && turn.querySelector?.('img'));
+    const textFirst = typeof state !== 'undefined' && state.fragmentTextFirst;
+    const savedRoot = textFirst ? contentRoot(turn, role) : null;
+    const imgNodes = textFirst && (savedRoot?.querySelector?.('img') ||
+      turn.querySelector?.('img') ||
+      turn.closest?.('[data-turn-key]')?.querySelector?.('img'));
     // Compute the inexpensive snapshot only for image-bearing turns. Do not
     // clone them or inspect loaded pixels. A future src/alt/text change will
     // force regular recapture to preserve new content.
