@@ -21,7 +21,7 @@ test('one-sided orphan remains out of canonical order until both anchors are vis
   state.pendingChronology.set(orphan.id, {message:orphan,beforeId:'b',afterId:''});
   reconcilePendingChronology(map,order,[{id:'b'},orphan]);
   assert.deepEqual(order,['a','b','c']);
-  assert.deepEqual(unresolvedChronologyMessages().map(x=>x.id),['orphan']);
+  assert.deepEqual(Array.from(unresolvedChronologyMessages(),x=>x.id),['orphan']);
   assert.equal(map.has('orphan'),false);
 });
 
